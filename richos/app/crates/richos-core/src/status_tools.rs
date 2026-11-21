@@ -137,7 +137,7 @@ pub fn tools() -> Value {
 }
 
 /// Scoped work facts, including the real identifiers used by independent Stu.
-fn row(item: &Assignment) -> Value {
+fn row(item: &Assignment, state: Option<AssignmentState>) -> Value {
     let notices: Vec<Value> = item
         .notices
         .iter()
@@ -160,22 +160,22 @@ fn row(item: &Assignment) -> Value {
         // screen and deliberately does not rewrite this — the record keeps the estimate,
         // which is the only thing that can be compared against what actually happened.
         "kind": item.kind.as_str(),
-        "state": item.reported_state().unwrap_or(AssignmentState::Interrupted).as_str(),
+        "state": state.unwrap_or(AssignmentState::Interrupted).as_str(),
         "detail": item.detail,
         "asked_for_at_ms": item.registered_at_ms,
         "last_moved_at_ms": item.updated_at_ms,
         "user_stop_requested_at_ms": item.user_stop_requested_at_ms,
         "notices": notices,
     });
-    if item.reported_state().is_none() {
+    if state.is_none() || state == Some(AssignmentState::Unknown) {
         facts.as_object_mut().unwrap().remove("detail");
         facts["previous_record"]=json!({"state":item.state,"detail":item.detail});
     }
     facts
 }
 
-fn section(rows: &[&Assignment]) -> (Vec<Value>, usize) {
-    (rows.iter().take(MAX_ROWS).map(|item| row(item)).collect(), rows.len().saturating_sub(MAX_ROWS))
+fn section(rows: &[(&Assignment, Option<AssignmentState>)]) -> (Vec<Value>, usize) {
+    (rows.iter().take(MAX_ROWS).map(|&(item, state)| row(item, state)).collect(), rows.len().saturating_sub(MAX_ROWS))
 }
 
 /// The answer, shared by the protocol adapter and the tests.
@@ -209,29 +209,30 @@ pub fn call(
     let scope = read_scope(scope_path)?;
     let items = assignment::read_all(&scope.state_root, &scope.entity_id, &scope.thread_id)
         .map_err(|e| format!("The background work record could not be read ({e})."))?;
-    let mut starting: Vec<&Assignment> = Vec::new();
-    let mut running: Vec<&Assignment> = Vec::new();
-    let mut waiting: Vec<&Assignment> = Vec::new();
-    let mut waiting_for_screen: Vec<&Assignment> = Vec::new();
-    let mut waiting_for_quota: Vec<&Assignment> = Vec::new();
-    let mut finished: Vec<&Assignment> = Vec::new();
-    let mut unreported:Vec<&Assignment>=Vec::new();
-    for item in &items {
-        let Some(reported)=item.reported_state() else {finished.push(item);continue};
-        match reported {
-            AssignmentState::WaitingForScreen=>waiting_for_screen.push(item),
-            AssignmentState::WaitingForQuota=>waiting_for_quota.push(item),
-            AssignmentState::Blocked=>waiting.push(item),
-            AssignmentState::Unknown=>unreported.push(item),
-            AssignmentState::Registered|AssignmentState::Preparing=>starting.push(item),
-            AssignmentState::Running=>running.push(item),
-            AssignmentState::Settled|AssignmentState::Failed|AssignmentState::Interrupted=>finished.push(item),
-        }
+    let activity = crate::assignment_activity::read(&scope, &items);
+    let mut starting = Vec::new();
+    let mut running = Vec::new();
+    let mut waiting = Vec::new();
+    let mut waiting_for_screen = Vec::new();
+    let mut waiting_for_quota = Vec::new();
+    let mut finished = Vec::new();
+    let mut unreported = Vec::new();
+    for (item, display) in items.iter().zip(activity) {
+        let state = display.state;
+        let section = match state {
+            Some(AssignmentState::WaitingForScreen) => &mut waiting_for_screen,
+            Some(AssignmentState::WaitingForQuota) => &mut waiting_for_quota,
+            Some(AssignmentState::Blocked) => &mut waiting,
+            Some(AssignmentState::Unknown) => &mut unreported,
+            Some(AssignmentState::Registered | AssignmentState::Preparing) => &mut starting,
+            Some(AssignmentState::Running) => &mut running,
+            _ => &mut finished,
+        };
+        section.push((item, state));
     }
-    // Newest movement first in every section: the thing that just changed is the thing he
-    // is most likely asking about.
+    // Newest movement first in every section.
     for list in [&mut starting, &mut running, &mut waiting, &mut waiting_for_screen, &mut waiting_for_quota, &mut finished, &mut unreported] {
-        list.sort_by(|a, b| b.updated_at_ms.cmp(&a.updated_at_ms));
+        list.sort_by(|(a, _), (b, _)| b.updated_at_ms.cmp(&a.updated_at_ms));
     }
     let (starting_rows, starting_omitted) = section(&starting);
     let (running_rows, running_omitted) = section(&running);
@@ -510,6 +511,14 @@ mod tests {
         .id
     }
 
+    fn show_live(scope: &Path, id: &str) {
+        let scope = read_scope(scope).unwrap();
+        crate::assignment_activity::publish(&scope, &[crate::assignment_activity::Turn {
+            session: "test-provider".into(), started_at: 42,
+            cause: crate::assignment_activity::Cause::Input(id.into()),
+        }]).unwrap();
+    }
+
     /// The whole of finding 6, in one assertion: the front desk can answer "what is
     /// running", "what is waiting for me" and "what finished" without calling anything
     /// that acts.
@@ -524,6 +533,11 @@ mod tests {
         assignment::advance(&state, "depot", "thread-one", &waiting, AssignmentState::Blocked, "it is ready for you to approve the change to your repository").unwrap();
         assignment::advance(&state, "depot", "thread-one", &done, AssignmentState::Settled, "it finished").unwrap();
 
+        let stale = call(&scope, &UnknownScreen, LOOK_TOOL_NAME, json!({})).unwrap();
+        assert!(stale["running"].as_array().unwrap().is_empty(), "{stale}");
+        assert_eq!(stale["unreported"][0]["state"], "unknown");
+        assert_eq!(stale["unreported"][0]["previous_record"]["state"], "running");
+        show_live(&scope, &running);
         let answer = call(&scope, &UnknownScreen, LOOK_TOOL_NAME, json!({})).unwrap();
         let running_rows = answer["running"].as_array().unwrap();
         assert_eq!(running_rows.len(), 1);
@@ -571,6 +585,7 @@ mod tests {
         assignment::advance(&state, "depot", "thread-one", &running, AssignmentState::Running, "the back end took it")
             .unwrap();
 
+        show_live(&scope, &running);
         let answer = call(&scope, &UnknownScreen, LOOK_TOOL_NAME, json!({})).unwrap();
 
         let screen_rows = answer["waiting_for_the_screen"].as_array().unwrap();
@@ -656,22 +671,19 @@ mod tests {
         // The screen source the landed §56 slice added: this test is about the kind on the
         // row and says nothing about the screen, so the honest source is the one that
         // establishes nothing.
+        for (id, what, kind) in [
+            (&quick, "whether the pricing review landed", "check"),
+            (&deep, "why the nightly is red", "investigate"),
+            (&task, "landing the three branches", "task"),
+        ] {
+            show_live(&scope, id);
+            let answer = call(&scope, &UnknownScreen, LOOK_TOOL_NAME, json!({})).unwrap();
+            let running = answer["running"].as_array().unwrap();
+            assert_eq!(running.len(), 1);
+            assert_eq!(running[0]["what"], what);
+            assert_eq!(running[0]["kind"], kind);
+        }
         let answer = call(&scope, &UnknownScreen, LOOK_TOOL_NAME, json!({})).unwrap();
-        let running = answer["running"].as_array().unwrap();
-        assert_eq!(running.len(), 3);
-        let kind_of = |what: &str| -> String {
-            running
-                .iter()
-                .find(|r| r["what"] == what)
-                .unwrap_or_else(|| panic!("{what} is missing from the read"))["kind"]
-                .as_str()
-                .unwrap()
-                .to_string()
-        };
-        assert_eq!(kind_of("whether the pricing review landed"), "check");
-        assert_eq!(kind_of("why the nightly is red"), "investigate");
-        // Positive control: work is still work.
-        assert_eq!(kind_of("landing the three branches"), "task");
         // The model is TOLD what the kind means, in the payload it reads rather than in a
         // tool description it may have summarized — the same rule §55's `say_nothing_else`
         // follows.
@@ -704,13 +716,13 @@ mod tests {
         // wrong. The other two are advanced.
         assignment::advance(&state, "depot", "thread-one", &opening, AssignmentState::Preparing, "Opening the work connection.").unwrap();
         assignment::advance(&state, "depot", "thread-one", &truly, AssignmentState::Running, "The back end has started on it.").unwrap();
+        show_live(&scope, &truly);
 
         let answer = call(&scope, &UnknownScreen, LOOK_TOOL_NAME, json!({})).unwrap();
         let starting: Vec<&str> =
             answer["starting"].as_array().unwrap().iter().map(|r| r["what"].as_str().unwrap()).collect();
-        assert_eq!(starting.len(), 2, "{starting:?}");
-        assert!(starting.contains(&"landing the three branches"));
-        assert!(starting.contains(&"the pricing review"));
+        assert_eq!(starting, ["landing the three branches"]);
+        assert_eq!(answer["unreported"][0]["what"], "the pricing review");
         // Positive control: the one job the back end has actually taken up.
         let running = answer["running"].as_array().unwrap();
         assert_eq!(running.len(), 1, "{running:?}");
