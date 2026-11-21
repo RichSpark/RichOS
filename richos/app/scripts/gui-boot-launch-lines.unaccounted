@@ -173,6 +173,8 @@
 [richos] Stu's model could not be updated: {}
 [richos] Stu's record {} could not be read: {}
 [richos] SwearMeter historical sources unavailable: {}
+[richos] SwearMeter provider cache could not be saved: {}
+[richos] SwearMeter provider refresh incomplete; keeping saved counts
 [richos] THE SKILLS DID NOT LOAD. `{}` was accepted and `{}` is not in this session's plugin list, so every skill RichOS ships is absent from this lease. The files passed preflight, so this is the binary declining them — check `claude --version` against the last release gate.
 [richos] Tailscale would not issue a certificate for this Mac, so the phone channel cannot start: {}
 [richos] a RichOS Connect connection ended with an error: {} (sampled)
