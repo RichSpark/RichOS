@@ -1148,7 +1148,7 @@ def inspect(payload):
             request["codex_handoff"] = {
                 "destination": str(handoff.path),
                 "source": ("Bash tool input. Inspect the entry that the command would write to the destination."
-                           if handoff.shell else "Markdown entry sent to Codex."),
+                           if handoff.shell else "Saved task sent to Codex."),
                 "brief_files": handoff_briefs(handoff, project),
             }
         if authority:

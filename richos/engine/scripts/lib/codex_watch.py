@@ -61,7 +61,9 @@ tests), CODEX_WATCH_STATE_DIR, CODEX_WATCH_POLL_SECONDS (tests only).
 
 import argparse
 import contextlib
+import json
 import os
+from pathlib import Path
 import shutil
 import signal
 import sys
@@ -109,8 +111,8 @@ def configured_folders(config):
 def channels(config=""):
     """The to-rich.md files watched: CODEX_WATCH_CHANNELS when set (files), else `to-rich.md`
     in each folder of the user's CODEX_CHANNELS, else in each conventional folder."""
-    raw = (os.environ.get("CODEX_WATCH_CHANNELS") or "").strip()
-    if raw:
+    raw = os.environ.get("CODEX_WATCH_CHANNELS")
+    if raw is not None:
         paths = [p for p in raw.split(":") if p]
     else:
         folders = configured_folders(config) if config else None
@@ -214,15 +216,44 @@ def session_dir(sid):
     return d
 
 
-def tick(sd, now=None, out=None, json_lines=False, config=""):
+def tick(sd, now=None, out=None, json_lines=False, config="", sid=""):
     """One look: prints each due entry as its own block (as one JSON line with
     json_lines). Returns blocks printed."""
     # Association and the last old-reader pass are ordered by the same OS lock.
     # The pipe remains ordered: native keeps any already emitted legacy lines
     # before accepting the following framed import events. No post-cutover raw
     # parsing or new spool writer survives that pass.
-    with _one_whole_look(), codex_channels.locked(codex_channels.root() / "coordinator.lock"):
-        return _legacy_tick(sd, now, out, json_lines, config)
+    with _one_whole_look():
+        with codex_channels.locked(codex_channels.root() / "coordinator.lock"):
+            printed = _legacy_tick(sd, now, out, json_lines, config)
+        if not json_lines:
+            for owner in codex_channels.terminal_scopes(Path(config).parent if config else None, sid):
+                lock = Path(state_root()) / "terminal" / (codex_channels.component(owner) + ".lock")
+                with codex_channels.locked(lock):
+                    printed += _terminal_tick(owner, out or sys.stdout)
+        return printed
+
+
+def _terminal_tick(sid, out):
+    """Only the owning terminal session receives these framed replies."""
+    printed = 0
+    for locator, endpoint in codex_channels.terminal_connections(sid):
+        source = locator / "to-rich.jsonl"
+        pos = Path(state_root()) / "terminal" / (endpoint["connection_id"] + ".json")
+        try:
+            try:
+                saved = codex_channels.load(pos)
+            except (FileNotFoundError, ValueError):
+                saved = {}
+            for _, end, record in codex_channels.records(source, codex_channels.position(source, saved)):
+                if record.get("kind", "message") != "task_context":
+                    out.write(f"CODEX-WATCH: Reply on {locator} (message ID {record['message_id']})\n{record['text']}\n")
+                    out.flush()
+                    printed += 1
+                codex_channels.save(pos, dict(source_identity=codex_channels.identity(source), through=end))
+        except (OSError, ValueError) as error:
+            codex_channels.diagnostic(source, error)
+    return printed
 
 
 # What ends a watcher: the app's quit (SIGTERM, richos-core owned_process.rs), a terminal
@@ -257,7 +288,8 @@ def _legacy_tick(sd, now=None, out=None, json_lines=False, config=""):
     told = stall_watch._read_json(told_path)
     printed = 0
     for ch in channels(config):
-        if codex_channels.legacy_associated(os.path.dirname(ch)):
+        folder = os.path.dirname(ch)
+        if codex_channels.legacy_associated(folder) and not codex_channels.legacy_live(folder):
             continue
         blocks, new, told_to = look_one(ch, state.get(ch), told, now)
         for b in blocks:
@@ -283,6 +315,8 @@ def prune_state(keep):
         return
     now = time.time()
     for n in names:
+        if n == "terminal":
+            continue
         d = os.path.join(root, n)
         if d == keep or not os.path.isdir(d) or stall_watch.lock_held(os.path.join(d, "monitor.lock")):
             continue
@@ -294,13 +328,18 @@ def prune_state(keep):
             shutil.rmtree(d, ignore_errors=True)
 
 
-def session(engine_root):
-    """(session id, claude pid) of the session this runs in, or ('', None)."""
+def session(engine_root, with_project=False):
+    """Return the current session ID and its PID, or its launch cwd if requested."""
     ws = stall_watch._load("codex_watch_workspaces", os.path.join(engine_root, "mega-lander", "workspaces.py"))
     if ws is None:
         return "", None
     try:
         sid = ws.current_session() or ""
+        if with_project:
+            # A Bash tool can cd away. The platform record captures the lead's
+            # original cwd and the lifecycle registry provides the older-host fallback.
+            platform = ws.platform_session(sid) or {}
+            return sid, platform.get("cwd") or (ws.load_session(sid) or {}).get("cwd")
         pid = ws.session_pid(sid) if sid else ws.session_pid()
     except Exception:  # noqa: BLE001: no session is "watch with no end", never a crash
         return "", None
@@ -318,28 +357,40 @@ def run_loop(engine_root, config):
     poll = stall_watch._env_float("CODEX_WATCH_POLL_SECONDS", POLL_SECONDS)
     try:
         while alive is None or alive():
-            tick(sd, config=config)
+            tick(sd, config=config, sid=sid)
             stall_watch._nap(poll, alive)
     finally:
         os.close(fd)
     return 0
 
 
-def legacy_setup_pending(state):
-    """The migration notice is for existing input, never a new install."""
-    if (codex_channels.root() / "coordinator.json").exists():
+def legacy_folders(state):
+    """Unassociated legacy sources, including a spool with no remaining raw file."""
+    folders = [Path(path).parent for path in channels()]
+    pending = [folder for folder in folders
+               if any((folder / name).is_file() for name in ("to-rich.md", "to-codex.md"))
+               and not codex_channels.legacy_associated(folder)]
+    if not pending and not any((codex_channels.root() / "connections").glob("*/*/legacy-*/connection.json")):
+        spool = Path(state) / "codex-watch" / "pending.jsonl"
+        folder = (folders or [codex_channels.root() / "rich-codex"])[0]
+        if spool.is_file() and spool.stat().st_size and not codex_channels.legacy_associated(folder):
+            pending.append(folder)
+    return pending
+
+
+def prepare_app_connections(state):
+    pending = legacy_folders(state)
+    waiting = codex_channels.automatic_waiting()
+    if not (pending or waiting):
         return False
-    if any(os.path.isfile(path) and not codex_channels.legacy_associated(os.path.dirname(path))
-           for path in channels()):
+    target = codex_channels.automatic_target()
+    if not target:
         return True
-    spool = os.path.join(state, "codex-watch", "pending.jsonl")
-    try:
-        return os.path.getsize(spool) > 0
-    except FileNotFoundError:
-        return False
-    except OSError as error:
-        codex_channels.diagnostic(spool, error)
-        return False
+    if waiting:
+        codex_channels.bind_automatic(target)
+    if pending:
+        codex_channels.associate_legacy(dict(target, state_root=state), pending)
+    return False
 
 
 def run_host_loop():
@@ -361,23 +412,46 @@ def run_host_loop():
         if receiver is None:
             os.close(fd)
             return 0
+    codex_home = os.environ.get("CODEX_HOME") if state else None
     prune_state(sd)
     poll = stall_watch._env_float("CODEX_WATCH_POLL_SECONDS", POLL_SECONDS)
     reported = set()
+    previous_health = None
     try:
         while alive():
+            if codex_home:
+                try:
+                    codex_channels.install_codex_instructions(codex_home)
+                    codex_home = None
+                except (OSError, ValueError) as error:
+                    codex_channels.diagnostic(codex_home, error)
             tick(sd, json_lines=True)
             if state:
-                events, errors = codex_channels.scan(state)
+                errors = []
+                waiting = False
+                try:
+                    waiting = prepare_app_connections(state)
+                    if waiting:
+                        sys.stdout.write(json.dumps({"type": "automatic"}) + "\n")
+                except (OSError, ValueError, KeyError) as error:
+                    errors.append(str(error))
+                events, scan_errors = codex_channels.scan(state)
+                errors.extend(scan_errors)
                 for event in events:
-                    sys.stdout.write(__import__("json").dumps(event, ensure_ascii=False) + "\n")
-                if legacy_setup_pending(state):
-                    sys.stdout.write(__import__("json").dumps({"type":"setup"}) + "\n")
+                    sys.stdout.write(json.dumps(event, ensure_ascii=False) + "\n")
                 sys.stdout.flush()
                 for error in errors:
                     if error not in reported:
                         print("Codex channel held: " + error, file=sys.stderr)
                 reported = set(errors)
+                health = dict(waiting=waiting, held=len(reported))
+                if health != previous_health:
+                    path = Path(state) / "codex-watch/health.json"
+                    try:
+                        codex_channels.save(path, dict(health, at_ms=time.time_ns() // 1_000_000))
+                        previous_health = health
+                    except (OSError, ValueError) as error:
+                        codex_channels.diagnostic(path, error)
             stall_watch._nap(poll, alive)
     finally:
         if receiver is not None:
@@ -403,7 +477,7 @@ def main(argv):
     engine_root = a.engine_root or os.path.dirname(os.path.dirname(HERE))
     if a.tick:
         sid, _pid = session(engine_root)
-        tick(session_dir(sid), config=a.config)
+        tick(session_dir(sid), config=a.config, sid=sid)
         return 0
     return run_loop(engine_root, a.config)
 

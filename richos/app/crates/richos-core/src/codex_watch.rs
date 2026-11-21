@@ -3,8 +3,8 @@
 //! The shared engine discovers and decodes dedicated journals. Native acceptance
 //! resolves their immutable ledger binding and syncs the existing Stu inbox before
 //! saving an advisory position. Visibility and titles never route task contents.
-//! Before explicit association, old Markdown observations are retained in the old
-//! spool. The framed reader imports that saved spool once after designation; raw
+//! Until automatic association, old Markdown observations are retained in the old
+//! spool. The framed reader imports that saved spool after association; raw
 //! tails remain preserved migration input. The child is fenced by the root's OS
 //! receiver lock and reaped through the app's existing owned-process supervisor.
 use std::io::{self, BufRead, BufReader};
@@ -175,8 +175,11 @@ impl CodexWatch {
             for line in BufReader::new(output).lines() {
                 let result=line.map_err(|e|e.to_string()).and_then(|line| {
                     let value:serde_json::Value=serde_json::from_str(&line).map_err(|e|e.to_string())?;
-                    if matches!(value["type"].as_str(),Some("channel"|"setup")) {
-                        let key=value["locator"].as_str().unwrap_or("setup").to_string();
+                    if value["type"] == "setup" {
+                        return Ok(()); // Older verified engine during an upgrade.
+                    }
+                    if matches!(value["type"].as_str(),Some("channel"|"automatic")) {
+                        let key=value["locator"].as_str().unwrap_or("automatic").to_string();
                         match sink(&line) {
                             Ok(())=>{said.remove(&key);},
                             Err(error)=>{if said.get(&key)!=Some(&error) {eprintln!("[richos] channel {key} waits: {error}");said.insert(key,error);}}
@@ -236,23 +239,20 @@ static RUNNING: Mutex<Option<CodexWatch>> = Mutex::new(None);
 
 /// **Start the watcher unless it already runs on these channels** (the shell calls it at launch
 /// and again when a session opens, which covers an engine set up after launch and a changed
-/// setting). One running on other channels is stopped and started on these; with no channel
-/// (the user set the setting empty) none runs. Its pid, or `None` when none runs.
-pub fn ensure(launch: &Launch) -> io::Result<Option<u32>> {
+/// setting). One running on other legacy folders is restarted. Dedicated connections
+/// are always watched, including when the old folder list is empty.
+pub fn ensure(launch: &Launch) -> io::Result<u32> {
     let mut running = RUNNING.lock().unwrap();
     if let Some(existing) = running.as_ref() {
         if existing.channels == launch.channels && existing.running() {
-            return Ok(Some(existing.pid));
+            return Ok(existing.pid);
         }
     }
     drop(running.take());
-    if launch.channels.is_empty() {
-        return Ok(None);
-    }
     let started = CodexWatch::start(launch)?;
     let pid = started.pid;
     *running = Some(started);
-    Ok(Some(pid))
+    Ok(pid)
 }
 
 /// The quit path: the watcher stopped and reaped, its record removed. The pid that was stopped.
@@ -318,7 +318,7 @@ mod tests {
         let launch=Launch {python:python(),engine:engine(),state:state.clone(),environment:watcher_environment(&root),
             channels:vec![channel.clone()],sink:Arc::new(|line| {
                 let event:serde_json::Value=serde_json::from_str(line).unwrap();
-                assert_eq!(event["type"],"setup","unframed task reached a visible chat");Ok(())
+                assert_eq!(event["type"],"automatic","unframed task reached a visible chat");Ok(())
             })};
         ensure(&launch).unwrap();
         let offsets=state_dir(&state).join("watch/app-host/offsets.json");
@@ -389,13 +389,13 @@ mod tests {
         let (out,heard)=mpsc::channel();let out=Mutex::new(out);
         let (sink_state,sink_coord,sink_bindings)=(state.clone(),coord.clone(),bindings.clone());
         let launch=Launch {python:python(),engine:engine(),state:state.clone(),environment:watcher_environment(&root),
-            channels:vec![root.join("unused-legacy")],sink:Arc::new(move |line| {
+            channels:vec![],sink:Arc::new(move |line| {
                 let e:serde_json::Value=serde_json::from_str(line).map_err(|e|e.to_string())?;
                 let binding=sink_bindings.iter().find(|b|Some(b.thread_id())==e["connection"]["thread_id"].as_str()).ok_or("missing ledger destination")?;
                 crate::codex_bridge::accept(&sink_state,binding,&e,&sink_coord)?;
                 out.lock().unwrap().send(()).unwrap();Ok(())
             })};
-        let pid=ensure(&launch).unwrap().unwrap();assert_eq!(ensure(&launch).unwrap(),Some(pid));
+        let pid=ensure(&launch).unwrap();assert_eq!(ensure(&launch).unwrap(),pid);
         for _ in 0..3 {heard.recv_timeout(Duration::from_secs(60)).expect("channel did not reach its owning inbox");}
         stop_all();
         for (binding,count) in [(&bindings[0],2),(&bindings[1],1)] {
