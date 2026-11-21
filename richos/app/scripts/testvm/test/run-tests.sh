@@ -2300,6 +2300,19 @@ t "walk failures: required guest steps, captures and theme presses cannot pass (
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/walk-failures.test.py" >"$TMP/walk-failures.log" 2>&1; ok $? "$(cat "$TMP/walk-failures.log")"
 t_done
 
+t "fill-first fake: a usage file with fable answers get_usage with a model_scoped Fable row; without it there is none"
+  mkdir -p "$TMP/ff-fable"
+  ask='{"type":"control_request","request_id":"1","request":{"subtype":"get_usage"}}'
+  printf '%s' '{"five":20,"weekly":40,"fable":96}' > "$TMP/ff-fable/usage-1.json"
+  out="$(printf '%s\n' "$ask" | RICHOS_FILL_FIRST_DIR="$TMP/ff-fable" CLAUDE_CONFIG_DIR='' perl "$TESTVM_DIR/fake-claude-fill-first.pl" --print 2>&1)"; ok $? "$out"
+  has "$out" '"model_scoped":[{"display_name":"Fable"'
+  has "$out" '"utilization":96'
+  printf '%s' '{"five":20,"weekly":40}' > "$TMP/ff-fable/usage-1.json"
+  out="$(printf '%s\n' "$ask" | RICHOS_FILL_FIRST_DIR="$TMP/ff-fable" CLAUDE_CONFIG_DIR='' perl "$TESTVM_DIR/fake-claude-fill-first.pl" --print 2>&1)"; ok $? "$out"
+  hasnt "$out" 'model_scoped'
+  has "$out" '"seven_day":{'
+t_done
+
 # ===========================================================================
 echo
 if [ "$FAIL" -eq 0 ]; then
