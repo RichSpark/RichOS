@@ -21,6 +21,7 @@ extern "C" {
         sound: *const c_char,
         phase: extern "C" fn(i32, f64),
         metrics: extern "C" fn(u64, u64, u64),
+        audio_outcome: extern "C" fn(i32),
     ) -> *mut c_void;
     fn richos_splash_discard_prepared(player: *mut c_void);
     fn richos_splash_attach(window: *mut c_void, player: *mut c_void) -> bool;
@@ -87,6 +88,18 @@ extern "C" fn on_metrics(total: u64, dropped: u64, corrupted: u64) {
     );
 }
 
+extern "C" fn on_audio_outcome(code: i32) {
+    let outcome = match code {
+        0 => "audio cue disabled",
+        1 => "audio cue scheduled",
+        2 => "audio cue preparation failed",
+        3 => "audio cue deadline missed",
+        4 => "audio cue scheduling refused",
+        _ => return,
+    };
+    crate::launch_timing::note_native_splash_outcome(outcome);
+}
+
 fn fail(reason: &'static str) {
     let elapsed_ms = phase().borrow().elapsed_ms();
     crate::launch_timing::note_native_splash_outcome(
@@ -147,6 +160,7 @@ pub fn prepare(pack: Pack) -> Option<JoinHandle<Option<Prepared>>> {
                 sound.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
                 on_phase,
                 on_metrics,
+                on_audio_outcome,
             )
         };
         NonNull::new(player).map(Prepared)

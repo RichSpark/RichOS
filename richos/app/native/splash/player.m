@@ -14,6 +14,14 @@ static const int VideoPlaying = 1;
 static const int VideoEnded = 2;
 typedef void (*RichSplashPhase)(int, double);
 typedef void (*RichSplashMetrics)(uint64_t, uint64_t, uint64_t);
+typedef void (*RichSplashAudio)(int);
+typedef enum {
+    SoundDisabled,
+    SoundScheduled,
+    SoundPrepareFailed,
+    SoundDeadlineMissed,
+    SoundScheduleRefused,
+} SoundOutcome;
 
 @interface RichSplashCover : NSView
 @property(nonatomic, copy) dispatch_block_t lostWindow;
@@ -52,6 +60,7 @@ static NSRect contentOnScreen(NSView *view) {
 
 @interface RichSplashPlayer : NSObject {
     atomic_int _status;
+    atomic_bool _soundCancelled;
     AVAssetReader *_reader;
     AVAssetReaderTrackOutput *_frames;
     CMSampleBufferRef _preroll[PrerollFrames];
@@ -72,11 +81,13 @@ static NSRect contentOnScreen(NSView *view) {
 @property(nonatomic, strong) id<AVQueuedSampleBufferRendering> renderer;
 @property(nonatomic, strong) dispatch_queue_t timeline;
 @property(nonatomic, strong) AVSampleBufferRenderSynchronizer *clock;
-@property(nonatomic, strong) AVAudioPlayer *sound;
+@property(nonatomic, strong) dispatch_queue_t soundQueue;
+@property(nonatomic, strong) AVAudioPlayer *sound; // sound queue
 @property(nonatomic, copy) NSString *soundPath;
 @property(nonatomic) double anchorMs;
 @property(nonatomic) RichSplashPhase phase;
 @property(nonatomic) RichSplashMetrics metrics;
+@property(nonatomic) RichSplashAudio audioOutcome;
 - (instancetype)initWithPack:(NSString *)path frames:(int)count;
 - (BOOL)prepare;
 - (void)attach:(NSView *)view;
@@ -108,6 +119,9 @@ static NSRect contentOnScreen(NSView *view) {
     if (![_reader startReading]) return nil;
     _frameCount = count;
     atomic_init(&_status, VideoPreroll);
+    atomic_init(&_soundCancelled, false);
+    _soundQueue = dispatch_queue_create("com.richos.splash.sound",
+        dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0));
     return self;
 }
 
@@ -163,6 +177,44 @@ static NSRect contentOnScreen(NSView *view) {
     }
 }
 
+- (void)scheduleSoundFrom:(CMTime)anchor {
+    dispatch_async(self.soundQueue, ^{
+        if (atomic_load(&self->_soundCancelled) || self.status != VideoPlaying) return;
+        SoundOutcome outcome = SoundDisabled;
+        if (self.soundPath) {
+            AVAudioPlayer *audio = [[AVAudioPlayer alloc]
+                initWithContentsOfURL:[NSURL fileURLWithPath:self.soundPath] error:nil];
+            BOOL prepared = [audio prepareToPlay];
+            if (atomic_load(&self->_soundCancelled) || self.status != VideoPlaying) return;
+            if (!prepared) {
+                outcome = SoundPrepareFailed;
+            } else {
+                // Start the cue 130 ms before the bar lands, 800 ms from the end.
+                NSTimeInterval deviceTime = audio.deviceCurrentTime;
+                double elapsed = CMTimeGetSeconds(CMTimeSubtract(CMClockGetTime(CMClockGetHostTimeClock()), anchor));
+                double lead = (double)self->_frameCount / FPS - 0.930 - elapsed;
+                if (lead <= 0) {
+                    outcome = SoundDeadlineMissed;
+                } else if ([audio playAtTime:deviceTime + lead]) {
+                    self.sound = audio;
+                    outcome = SoundScheduled;
+                } else {
+                    outcome = SoundScheduleRefused;
+                }
+            }
+        }
+        if (self.audioOutcome) self.audioOutcome(outcome);
+    });
+}
+
+- (void)cancelSound {
+    if (atomic_exchange(&_soundCancelled, true) || !self.soundPath) return;
+    dispatch_async(self.soundQueue, ^{
+        [self.sound stop];
+        self.sound = nil;
+    });
+}
+
 // Called on the timeline queue.
 - (void)fail:(int)reason {
     int status = self.status;
@@ -170,7 +222,7 @@ static NSRect contentOnScreen(NSView *view) {
     atomic_store(&_status, VideoFailed);
     [self.renderer stopRequestingMediaData];
     [self.clock setRate:0 time:self.clock.currentTime];
-    [self.sound stop];
+    [self cancelSound];
     self.phase(reason, self.anchorMs);
 }
 
@@ -194,8 +246,8 @@ static NSRect contentOnScreen(NSView *view) {
     }];
 }
 
-// Everything that advances playback runs on the timeline queue. The initial
-// window layout must reach AppKit before this clock consumes any frames.
+// The window must reach AppKit before the clock consumes video frames. Audio
+// takes the same clock anchor, with its own queue so the video feed cannot delay it.
 - (void)start {
     if (!_visible || !_ready || self.status != VideoPreroll) return;
     CMTime time = CMClockGetTime(CMClockGetHostTimeClock());
@@ -227,6 +279,7 @@ static NSRect contentOnScreen(NSView *view) {
     }];
     atomic_store(&_status, VideoPlaying);
     [self.clock setRate:1 time:kCMTimeZero atHostTime:time];
+    [self scheduleSoundFrom:time];
     self.phase(VideoPlaying, self.anchorMs);
     [self feed];
 
@@ -237,26 +290,6 @@ static NSRect contentOnScreen(NSView *view) {
         RichSplashPlayer *player = weak;
         if (player && !player->_removing) [player removeAnimated:NO completion:^{}];
     });
-
-    // Prepare the existing WAV cue after the first frames. It uses the same clock as the
-    // authored bar landing, 800 ms before the end with the sound starting 130 ms earlier.
-    if (self.soundPath) {
-        NSString *path = self.soundPath;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(NSEC_PER_SEC / 2)),
-                       dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            AVAudioPlayer *audio = [[AVAudioPlayer alloc] initWithContentsOfURL:[NSURL fileURLWithPath:path] error:nil];
-            if (![audio prepareToPlay]) return;
-            RichSplashPlayer *owner = weak;
-            if (!owner) return;
-            dispatch_async(owner.timeline, ^{
-                RichSplashPlayer *player = weak;
-                if (!player || player.status != VideoPlaying) return;
-                double left = CMTimeGetSeconds(CMTimeSubtract(time, CMClockGetTime(CMClockGetHostTimeClock())))
-                    + (double)player->_frameCount / FPS - 0.930;
-                if (left > 0 && [audio playAtTime:audio.deviceCurrentTime + left]) player.sound = audio;
-            });
-        });
-    }
 }
 
 - (void)rendererReady {
@@ -386,6 +419,7 @@ static NSRect contentOnScreen(NSView *view) {
         return;
     }
     _removing = YES;
+    if (self.status != VideoEnded) [self cancelSound];
     self.cover.lostWindow = nil;
     [self unwatch];
     dispatch_async(self.timeline, ^{
@@ -420,12 +454,13 @@ bool richos_splash_reduce_motion(void) {
 
 // Read the first video samples while the main thread builds the window.
 void *richos_splash_prepare(const char *file, int frames, const char *sound,
-                            RichSplashPhase phase, RichSplashMetrics metrics) {
+                            RichSplashPhase phase, RichSplashMetrics metrics, RichSplashAudio audioOutcome) {
     @autoreleasepool {
         NSString *path = [NSFileManager.defaultManager stringWithFileSystemRepresentation:file length:strlen(file)];
         RichSplashPlayer *player = [[RichSplashPlayer alloc] initWithPack:path frames:frames];
         player.phase = phase;
         player.metrics = metrics;
+        player.audioOutcome = audioOutcome;
         if (sound) player.soundPath = [NSFileManager.defaultManager stringWithFileSystemRepresentation:sound length:strlen(sound)];
         if (![player prepare]) return NULL;
         return (__bridge_retained void *)player;
