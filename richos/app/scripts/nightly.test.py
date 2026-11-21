@@ -193,7 +193,7 @@ class GitFixture(unittest.TestCase):
                 member.size = len(body)
                 tar.addfile(member, io.BytesIO(body))
 
-    def fake_verify_asset(self, url, path):
+    def fake_verify_asset(self, url, path, *, max_time=600):
         tag, name = url.split("/releases/download/", 1)[1].split("/", 1)
         if self.asset_bytes.get((tag, name)) != Path(path).read_bytes():
             raise ValueError("published asset differs from the candidate")
@@ -954,11 +954,26 @@ class GitTests(GitFixture):
     def test_served_proof_requires_the_channel_to_be_read_back(self):
         info = self.reserve()
         manifest = self.manifest(info)
-        with self.assertRaisesRegex(ValueError, "published asset differs"):
+        with patch.object(n.time, "sleep") as sleep, self.assertRaisesRegex(ValueError, "published asset differs"):
             n.record_served_nightly(info, manifest)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [2, 4, 8, 16])
         self.assertNotIn((info["tag"], "published.json"), self.asset_bytes)
         n.promote(info, manifest)
         n.record_served_nightly(info, manifest)
+        self.assertEqual(self.asset_bytes[info["tag"], "published.json"],
+                         self.asset_bytes[n.CHANNEL_TAG, "latest.json"])
+
+    def test_served_proof_waits_for_the_public_download_to_catch_up(self):
+        info = self.reserve()
+        manifest = self.manifest(info)
+        n.promote(info, manifest)
+        read_back = [ValueError("published asset differs from the candidate"), None]
+        with patch.object(n, "verify_served_asset", side_effect=read_back) as verify, \
+                patch.object(n.time, "sleep") as sleep:
+            n.record_served_nightly(info, manifest)
+        sleep.assert_called_once_with(2)
+        self.assertEqual([(call.args[0], call.kwargs) for call in verify.call_args_list],
+                         [(n.ENDPOINT, {"max_time": 5})] * 2)
         self.assertEqual(self.asset_bytes[info["tag"], "published.json"],
                          self.asset_bytes[n.CHANNEL_TAG, "latest.json"])
 
