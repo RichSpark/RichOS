@@ -40,6 +40,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
     private let refreshPermission: (_ session: CaptureController, _ originPID: pid_t?) -> Void
     private let finish: (_ copied: String?, _ display: CGRect?, _ retained: UUID?) -> Void
     private let store: ScreenshotStore
+    private let preferredAction: ScreenshotStore.Action?
     private let openEditor: (ScreenshotDocument) -> Void
     private weak var previousWindow: NSWindow?
     private let previousApp: NSRunningApplication?
@@ -73,12 +74,13 @@ final class CaptureController: NSObject, NSWindowDelegate {
     private var keyLoss: Task<Void, Never>?
 
     init(previousWindow: NSWindow?, previousApp: NSRunningApplication?, store: ScreenshotStore,
-         openEditor: @escaping (ScreenshotDocument) -> Void,
+         preferredAction: ScreenshotStore.Action? = nil, openEditor: @escaping (ScreenshotDocument) -> Void,
          refreshPermission: @escaping (_ session: CaptureController, _ originPID: pid_t?) -> Void,
          finish: @escaping (_ copied: String?, _ display: CGRect?, _ retained: UUID?) -> Void) {
         self.previousWindow = previousWindow
         self.previousApp = previousApp
         self.store = store
+        self.preferredAction = preferredAction
         self.openEditor = openEditor
         self.refreshPermission = refreshPermission
         self.finish = finish
@@ -99,7 +101,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
         sourceCursor = NSCursor.currentSystem ?? .arrow
         delay = store.delay
         includesPointer = store.includesPointer
-        action = store.action
+        action = preferredAction ?? store.action
         guard let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }) ?? NSScreen.main,
               let display = Display(screen) else {
             stop(.unavailable, operation: .glanceCaptureFrame)
@@ -567,6 +569,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
         let kind: ScreenshotKind
         let crop: CGRect?
         let pointerOrigin: CGPoint
+        var name: String?
         switch shot {
         case .region(let display, let box, let frozen):
             kind = .region
@@ -584,6 +587,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
             pointerOrigin = CGPoint(x: display.frame.minX, y: display.frame.maxY)
         case .window(let target, let display):
             kind = .window
+            name = target.name
             (source, scale) = try await CaptureFrame.read(windowID: target.id, scale: display.scale, pointer: fresh && includesPointer)
             crop = nil
             pointerOrigin = CGPoint(x: target.frame.minX, y: primaryTop - target.frame.minY)
@@ -597,7 +601,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
                   cropped.height == Int(crop.height) else { throw CaptureFrame.Failure.displayUnavailable }
             return ScreenshotDocument(original: cropped, scale: scale, kind: kind)
         }
-        return ScreenshotDocument(original: image, scale: scale, kind: kind)
+        return ScreenshotDocument(original: image, scale: scale, kind: kind, name: name)
     }
 
     private func drawPointer(on image: CGImage, at point: CGPoint, scale: CGFloat) -> CGImage {
