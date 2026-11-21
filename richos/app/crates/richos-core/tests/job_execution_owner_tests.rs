@@ -123,23 +123,41 @@ fn ordinary_quit_and_restart_preserve_stus_reports_and_input_receipts() {
         .filter_map(|row| row["state"].as_str())
         .map(str::to_string)
         .collect();
-        let unverified = matches!(
-            state,
-            AssignmentState::Interrupted | AssignmentState::Unknown
-        );
-        if unverified {
-            assert_eq!(view["finished"].as_array().unwrap().len(),1,"old stopped records must remain finished history");
-            assert_eq!(view["finished"][0]["previous_record"]["state"],state.as_str());
-            assert_eq!(view["finished"][0]["state"],"interrupted");
-            assert_eq!(states,vec!["interrupted"],"historical stopped work is not live work");
-            let job =
-                assignment::read(&scope.state_root, "company", "thread", &receipt.id).unwrap();
-            assert!(job.reported_state().is_none());
-            assert!(
-                job.accepts_input(),
-                "an old host label revoked user authority"
-            );
-        }
+        let expected_display_state = match state {
+            AssignmentState::Running => {
+                // Recovery preserves the handoff for Stu. This fixture has no provider or
+                // worker running it, so the status tool can only show the last saved report.
+                assert!(view["running"].as_array().unwrap().is_empty());
+                let unreported = view["unreported"].as_array().unwrap();
+                assert_eq!(unreported.len(), 1);
+                assert_eq!(unreported[0]["assignment_id"], receipt.id);
+                assert_eq!(unreported[0]["previous_record"]["state"], "running");
+                assert_eq!(unreported[0]["previous_record"]["detail"], "Stu's saved report");
+                let (pending, through) = session_tools::pending(&scope, "stu")
+                    .unwrap()
+                    .expect("the unfinished handoff must be available after restart");
+                assert!(pending.handoff);
+                assert_eq!(pending.text, message.text);
+                assert_eq!(pending.work.unwrap().assignment_id, receipt.id);
+                assert_eq!(through, line.len() as u64);
+                "unknown"
+            }
+            AssignmentState::Interrupted | AssignmentState::Unknown => {
+                assert_eq!(
+                    view["finished"].as_array().unwrap().len(),
+                    1,
+                    "old stopped records must remain finished history"
+                );
+                assert_eq!(view["finished"][0]["previous_record"]["state"], state.as_str());
+                assert_eq!(view["finished"][0]["state"], "interrupted");
+                let job =
+                    assignment::read(&scope.state_root, "company", "thread", &receipt.id).unwrap();
+                assert!(job.reported_state().is_none());
+                assert!(job.accepts_input(), "an old host label revoked user authority");
+                "interrupted"
+            }
+            _ => state.as_str(),
+        };
         std::fs::remove_dir_all(&root).unwrap();
         assert_eq!(after, before, "Quit rewrote Stu's {state:?} report");
         assert_eq!(
@@ -151,7 +169,11 @@ fn ordinary_quit_and_restart_preserve_stus_reports_and_input_receipts() {
             cursor_after, cursor,
             "Quit changed the previous execution attempt"
         );
-        if !unverified {assert_eq!(states,vec![state.as_str()],"Rich's status tool disagrees with Stu's record");}
+        assert_eq!(
+            states,
+            vec![expected_display_state],
+            "Rich's status tool disagrees with the recovered job's current activity"
+        );
     }
 }
 
