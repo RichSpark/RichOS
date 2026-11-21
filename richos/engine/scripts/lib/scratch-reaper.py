@@ -2912,6 +2912,21 @@ class Reaper(object):
                          % (age // 86400, retention // 86400, path),
                          standing=True)
 
+    def nightly_log_needs_protection(self, base, name):
+        run = name.removesuffix(".log")
+        record = os.path.join(base, "runs", run + ".json")
+        try:
+            with open(record, encoding="utf-8") as handle:
+                tag = os.path.basename(json.load(handle)["out"])
+        except FileNotFoundError:
+            return False
+        except (OSError, ValueError, KeyError, TypeError):
+            return True
+        # The run pointer outlives the archive. A built stable candidate or
+        # an approval decision alone does not release the builder's log.
+        return bool(re.fullmatch(r"v\d+\.\d+\.\d+-nightly\.\d{8}\.\d+", tag)
+                    and not os.path.isfile(os.path.join(base, "promoted-nightlies", tag)))
+
     def scan_nightly(self, walls):
         base = self.cfg["nightly_dir"]
         keep = self.cfg["nightly_keep"]
@@ -2929,8 +2944,17 @@ class Reaper(object):
                 size, newest, has_git = measure(path)
                 items.append((newest, path, size, has_git))
             items.sort(reverse=True)
-            for i, (newest, path, size, has_git) in enumerate(items):
-                if i < keep:
+            retained_rank = 0
+            for newest, path, size, has_git in items:
+                is_log = klass == "nightly-log"
+                empty_log = is_log and size == 0
+                if not empty_log:
+                    retained_rank += 1
+                if is_log and self.nightly_log_needs_protection(base, os.path.basename(path)):
+                    self.add(path, klass, size, KEEP,
+                             "the recorded nightly has no verified stable promotion")
+                    continue
+                if not empty_log and retained_rank <= keep:
                     self.add(path, klass, size, KEEP,
                              "one of the %d newest kept by declaration" % keep)
                     continue
@@ -2944,8 +2968,9 @@ class Reaper(object):
                     self.add(path, klass, size, INDETERMINATE, refused)
                     continue
                 self.add(path, klass, size, DELETE,
-                         "#%d newest of %d, and the declared retention is %d"
-                         % (i + 1, len(items), keep))
+                         "an empty nightly log does not count toward retention" if empty_log else
+                         "#%d newest, beyond the declared retention of %d"
+                         % (retained_rank, keep))
 
     def scan_kept(self, walls):
         """WHAT AN AUTOMATIC LAND KEPT, DELETED AFTER THE DECLARED RETENTION

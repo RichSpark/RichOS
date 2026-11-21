@@ -237,10 +237,11 @@ def settings_open(text):
     (2026-10-25) with the panel plainly open, so a case-sensitive match called an open panel shut.
     The heading stands alone on its line, or starts the line with the next column's heading after
     it (ui/settings-button.js `addColumn`): the rerun of that walk read all three as one line,
-    "HOW IT LOOKS WORKING WITH RICH YOUR COMPANY AND TEAM". A chat line that merely says "how it
-    looks" never counts, because closing Settings is judged by the frame alone once its node is
-    gone."""
-    return bool(re.search(r'^\s*HOW IT LOOKS(?:\s+(?:WORKING WITH RICH|YOUR COMPANY AND TEAM)\b.*)?\s*$',
+    "HOW IT LOOKS WORKING WITH RICH YOUR COMPANY AND TEAM". An icon can contribute one stray
+    character before that grouped line. A chat line that merely says "how it looks" never counts,
+    because closing Settings is judged by the frame alone once its node is gone."""
+    return bool(re.search(r'^[ \t]*(?:HOW IT LOOKS|(?:\S[ \t]+)?HOW IT LOOKS[ \t]+'
+                          r'(?:WORKING WITH RICH|YOUR COMPANY AND TEAM)\b.*)[ \t]*$',
                           text or '', re.M | re.I))
 
 
