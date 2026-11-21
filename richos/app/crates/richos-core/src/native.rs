@@ -847,6 +847,7 @@ enum TurnSink {
     Prompt(Sender<ChunkMsg>),
     Input {
         completed: Box<dyn FnOnce(crate::steering::InputOutcome) + Send>,
+        started: Option<Box<dyn FnOnce() + Send>>,
         limit: Option<crate::claude_accounts::UsageLimit>,
         /// An overload Claude Code reported only as a message in this turn
         /// ([`overloaded_api_error_message`]), so a turn that still ends `end_turn` reaches
@@ -1016,7 +1017,7 @@ impl PendingTurn {
         }
         match self.sink {
             TurnSink::Prompt(sink) => { let _ = sink.send(ChunkMsg::Done(frame)); }
-            TurnSink::Input { completed, limit, overload } => {
+            TurnSink::Input { completed, limit, overload, .. } => {
                 let result = if let Some(limit) = limit {
                     Err(NativeError::Protocol(limit.error(&frame.to_string())))
                 } else {
@@ -2929,6 +2930,7 @@ impl NativeClient {
             let command = msg.get("command_uuid").and_then(|v| v.as_str()).unwrap_or("");
             let lifecycle = msg.get("state").and_then(|v| v.as_str()).unwrap_or("");
             let mut terminal: Option<&'static str> = None;
+            let mut began = Vec::new();
             {
                 let mut guard = current.lock().unwrap();
                 // A named lifecycle establishes this child's native identity protocol for
@@ -2959,7 +2961,14 @@ impl NativeClient {
                             // `completed` reaches a still-parked prompt only on the FOLD
                             // path, where the schema says it precedes that turn's `result`;
                             // either way the next `result` is the one that consumed us.
-                            "started" | "completed" => pending.phase = TurnPhase::Running,
+                            "started" | "completed" => {
+                                pending.phase = TurnPhase::Running;
+                                if lifecycle == "started" {
+                                    if let TurnSink::Input { started, .. } = &mut pending.sink {
+                                        began.extend(started.take());
+                                    }
+                                }
+                            }
                             // **A POSITIVE "this will never run".** Without it the prompt
                             // would wait for a turn the child has already thrown away —
                             // the one way this correlation could be worse than the defect
@@ -2971,6 +2980,7 @@ impl NativeClient {
                         }
                 }
             }
+            for started in began { started(); }
             if let Some(reason) = terminal {
                 let ended: Vec<PendingTurn> = {
                     let mut guard = current.lock().unwrap();
@@ -4117,13 +4127,18 @@ impl TurnCancel for NativeCancelHandle {
     }
 
     fn send_input(&self, id: &str, text: &str, completed: Box<dyn FnOnce(crate::steering::InputOutcome) + Send>) -> Result<bool, String> {
+        self.send_observed_input(id, text, None, completed)
+    }
+
+    fn send_observed_input(&self, id: &str, text: &str, started: Option<Box<dyn FnOnce() + Send>>,
+        completed: Box<dyn FnOnce(crate::steering::InputOutcome) + Send>) -> Result<bool, String> {
         let operation = self.operation_cancel.lock().unwrap();
         if self.reader_closed.load(Ordering::SeqCst) || operation.requested { return Ok(false); }
         {
             let mut current = self.current_prompt.lock().unwrap();
             if current.iter().any(|pending| pending.command_uuid == id) { return Ok(true); }
             current.push(PendingTurn {
-                sink: TurnSink::Input { completed, limit: None, overload: None }, command_uuid: id.to_string(),
+                sink: TurnSink::Input { completed, started, limit: None, overload: None }, command_uuid: id.to_string(),
                 prompt_text: text.to_string(), hook_request_id: None,
                 prepare: None,
                 complete: None,

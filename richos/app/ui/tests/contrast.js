@@ -338,6 +338,31 @@ const SURFACES = [
     what: "the shell as it opens: rail, scope line, first turn, composer",
     drive: async () => {},
   },
+  {
+    name: "richbrief",
+    what: "RichBrief's meeting controls and calendar settings",
+    drive: async p => {
+      await p.click("#nr-brief");
+      await p.waitForSelector("#brief-page");
+    },
+  },
+  {
+    name: "richglance",
+    what: "RichGlance's capture, global shortcut and image viewer settings",
+    nativeReplies: {
+      glance_capture_status: {
+        available: true, enabled: false, registered: false,
+        shortcut: { code: "KeyC", control: true, shift: true, option: false, command: false },
+      },
+      glance_workflow_status: { opensEditor: false, keepsHistory: false },
+    },
+    drive: async p => {
+      await p.click("#nr-glance");
+      await p.waitForSelector("#glance-page");
+      await p.waitForSelector("#gp-after-copy[aria-pressed=true]:enabled");
+      await p.waitForSelector("#gp-viewer:enabled");
+    },
+  },
   ...["offer", "approved", "uncertain"].map(state => ({
     name: "quota-" + state,
     what: "desktop quota windows and the " + state + " weekly reset state",
@@ -1869,7 +1894,7 @@ async function onPlainGround(page, shoot, tally) {
   }
 }
 
-async function openApp(browser, theme, holdSplash, preset) {
+async function openApp(browser, theme, holdSplash, preset, nativeReplies) {
   const page = await browser.newPage({ viewport: { width: 1400, height: 950 }, colorScheme: theme });
   // The occlusion check joins node paths across independent pages. The preview
   // gives seeded turns random IDs, so use one repeatable stream in this suite:
@@ -1957,7 +1982,27 @@ async function openApp(browser, theme, holdSplash, preset) {
   // `SLOW_BRIDGE`, byte-identical in behavior, so `updates.js` can ask the same question of
   // itself. One copy, because two copies of a diagnostic drift and then disagree about what
   // was reproduced.
-  if (LAG_MS > 0) await page.addInitScript(SLOW_BRIDGE, LAG_MS);
+  if (nativeReplies) {
+    // Supply the installed native tool's state before the renderer asks for it at boot.
+    await page.addInitScript(({ replies, lag }) => {
+      let bridge;
+      Object.defineProperty(window, "RichBridge", {
+        configurable: true,
+        get: () => bridge,
+        set(value) {
+          bridge = value;
+          const invoke = value.invoke.bind(value);
+          value.invoke = async (command, args) => {
+            if (lag > 0) await new Promise(resolve => setTimeout(resolve, lag));
+            if (Object.hasOwn(replies, command)) return structuredClone(replies[command]);
+            return invoke(command, args);
+          };
+        },
+      });
+    }, { replies: nativeReplies, lag: LAG_MS });
+  } else if (LAG_MS > 0) {
+    await page.addInitScript(SLOW_BRIDGE, LAG_MS);
+  }
   // A PRE-BOOT MOCK PRESET, for the one state a setter cannot reach: "no company has ever
   // been chosen" is decided before `init()` branches on whether a thread is active, so it
   // has to be in place before any of the page's own scripts run (mock.js's own comment on
@@ -2032,6 +2077,21 @@ function assertTheme(painted, expected, asked) {
 async function walk(page, surface, theme) {
   await page.evaluate(C.pageScript());
   return page.evaluate((o) => window.__contrastProbe(o), { surface, theme });
+}
+
+async function measureThemeSwitch(page, surface, to) {
+  // The settled walk already installed the probe. Read it in the same task as
+  // the theme change, then read it again after any transitions have finished.
+  const instant = await page.evaluate((o) => {
+    document.documentElement.setAttribute("data-theme", o.theme);
+    return window.__contrastProbe(o);
+  }, { surface, theme: to });
+  await page.waitForFunction(() => document.getAnimations().every(a => !(a instanceof CSSTransition)));
+  const settled = await walk(page, surface, to);
+  const lag = Object.keys(instant.failures)
+    .filter(key => !(key in settled.failures))
+    .map(key => ({ node: key, ...instant.failures[key] }));
+  return { lag, measured: (instant.measuredPaths || []).length };
 }
 
 // ---------------------------------------------------------------------------------------
@@ -2484,6 +2544,7 @@ async function main() {
   const PANELS = await declaredPanels(browser);
 
   const perSurface = {};
+  const themeSwitches = new Map();
 
   // THE SHELL'S OWN COUNTS, CAPTURED FROM THIS RUN, so every other surface's floor can be
   // what that surface ADDS to the shell rather than a count of the whole page. See the note
@@ -2529,7 +2590,7 @@ async function main() {
       // For a surface that holds the curtain: the proof that it was still held, in the log.
       let curtain = null;
       for (const theme of THEMES) {
-        const page = await openApp(browser, theme, surface.holdSplash, surface.preset);
+        const page = await openApp(browser, theme, surface.holdSplash, surface.preset, surface.nativeReplies);
         if (page.__curtain) curtain = page.__curtain;
         await surface.drive(page);
         // WHICH DECLARED PANELS THIS DRIVER PUT ON SCREEN, recorded before the walk so that
@@ -2543,7 +2604,18 @@ async function main() {
           seen.panelsReached.get(id).push(surface.name + "/" + theme);
         }
         const out = await walk(page, surface.name, theme);
+        if (!surface.holdSplash) {
+          // The settled walk opens a new page for every starting theme. Keep
+          // that same driven surface and pointer position for the switch read.
+          const to = theme === "light" ? "dark" : "light";
+          themeSwitches.set(surface.name + "/" + theme, await measureThemeSwitch(page, surface.name, to));
+        }
         if (theme === "light") {
+          if (!surface.holdSplash) {
+            // Capture the light screenshot after restoring its original theme.
+            await page.evaluate(() => document.documentElement.setAttribute("data-theme", "light"));
+            await page.waitForFunction(() => document.getAnimations().every(a => !(a instanceof CSSTransition)));
+          }
           // `parkPointer`: every surface above is reached by CLICKING it, and the pointer stays
           // where the last click left it. Where the new state puts a different control under
           // that point, the control is photographed hovered — `voice-model-progress.png`
@@ -3905,39 +3977,26 @@ async function main() {
     // one, so the Output button read `#dfe4ee` on `#f7f5ef` (1.17:1) for 150 ms and `.of-tool`
     // did the same. That window is invisible to a walk that waits.
     //
-    // HOW. Per surface and per direction: drive it, flip `data-theme`, and in the SAME task run
-    // the probe, with no frame and no timer between. Style is recomputed at that point and a
-    // transition starts at its FROM value, so what is read is the first painted frame. The
-    // probe is then run again after the transitions have finished. A failure present only in the
-    // instant read is a lag; one present in both is the surface's own (the debt ledger's) and is
-    // not this check's to count. Debt-bearing surfaces therefore cannot hide a lag, and clean
-    // ones cannot invent one.
-    const lines = [];
+    // The surface loop records both directions on independently opened pages.
+    // A failure present only in the first read identifies lag during the switch.
     let measured = 0;
+    let directions = 0;
     for (const surface of SURFACES) {
       if (surface.holdSplash) continue; // §15's always-dark clamp: there is no switch to measure
       for (const [from, to] of [["light", "dark"], ["dark", "light"]]) {
-        const page = await openApp(browser, from, surface.holdSplash, surface.preset);
-        await surface.drive(page);
-        await page.evaluate(C.pageScript());
-        const instant = await page.evaluate((o) => {
-          document.documentElement.setAttribute("data-theme", o.to);
-          return window.__contrastProbe({ surface: o.surface, theme: o.to });
-        }, { to, surface: surface.name });
-        await page.waitForFunction(() => document.getAnimations().every((a) => !(a instanceof CSSTransition)));
-        const settled = await walk(page, surface.name, to);
-        const lag = Object.keys(instant.failures).filter((k) => !(k in settled.failures));
+        const reading = themeSwitches.get(surface.name + "/" + from);
+        const direction = surface.name + " " + from + "->" + to;
+        assert(reading?.measured > 0, direction + ": missing the first-frame contrast measurement");
         assertEqual(
-          lag.map((k) => ({ node: k, ...instant.failures[k] })),
+          reading.lag,
           [],
-          surface.name + " " + from + "->" + to + ": measured at once after the switch, these fail AA and the settled page does not — a background, border or color is fading"
+          direction + ": measured at once after the switch, these fail AA and the settled page does not — a background, border or color is fading"
         );
-        measured += (instant.measuredPaths || []).length;
-        await page.close();
+        measured += reading.measured;
+        directions++;
       }
     }
-    lines.push(measured + " node reading(s) taken before the first frame, no lag failure");
-    return lines.join("; ");
+    return measured + " node reading(s) across " + directions + " switches taken before the first frame, no lag failure";
   });
 
   // ---- the run's own numbers, printed whether it passes or fails ---------------------------

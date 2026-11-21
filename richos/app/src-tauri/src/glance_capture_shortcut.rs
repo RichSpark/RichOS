@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use tauri::{AppHandle, WebviewWindow};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,11 +53,31 @@ pub async fn glance_capture_configure(app: AppHandle, enabled: bool, shortcut: S
     }
 }
 
+/// The rail button starts the same capture as the global shortcut.
+#[richos_command::command]
+pub async fn glance_capture_open(window: WebviewWindow) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("RichGlance could not reach the window.".into());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let result = tauri::async_runtime::spawn_blocking(|| {
+            mac::open_capture(std::process::id() as libc::pid_t)
+        }).await;
+        if matches!(result, Ok(Ok(()))) {
+            return Ok(());
+        }
+        eprintln!("[RichGlance] capture button could not launch");
+    }
+    Err("RichGlance could not start a capture.".into())
+}
+
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowSettings {
     opens_editor: bool,
     keeps_history: bool,
+    keeps_forever: bool,
 }
 
 #[richos_command::command]
@@ -101,7 +121,11 @@ mod workflow {
     fn read(root: &Path) -> WorkflowSettings {
         WorkflowSettings {
             opens_editor: fs::read(root.join("return-action")).is_ok_and(|bytes| bytes == b"editor"),
-            keeps_history: fs::read(root.join("keep-history")).is_ok_and(|bytes| bytes == b"on"),
+            keeps_history: match fs::read(root.join("keep-history")) {
+                Ok(bytes) => bytes == b"on",
+                Err(error) => error.kind() == io::ErrorKind::NotFound,
+            },
+            keeps_forever: fs::read(root.join("retention")).is_ok_and(|bytes| bytes == b"forever"),
         }
     }
 
@@ -148,6 +172,25 @@ mod workflow {
         })();
         if result.is_err() { drop(fs::remove_file(pending)); }
         result
+    }
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn history_defaults_on_and_respects_explicit_off() {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path();
+            assert!(read(root).keeps_history);
+            assert!(!read(root).keeps_forever);
+            write_setting(root, "retention", b"forever").unwrap();
+            assert!(read(root).keeps_forever);
+            write_setting(root, "keep-history", b"off").unwrap();
+            assert!(!read(root).keeps_history);
+            assert!(read(root).keeps_forever);
+            write_setting(root, "keep-history", b"on").unwrap();
+            assert!(read(root).keeps_history);
+        }
     }
 }
 
@@ -381,7 +424,7 @@ mod mac {
         result
     }
 
-    fn open_capture(origin: libc::pid_t) -> std::io::Result<()> {
+    pub(super) fn open_capture(origin: libc::pid_t) -> std::io::Result<()> {
         let app = application().ok_or_else(|| std::io::Error::other("RichGlance is unavailable"))?;
         let home = std::env::home_dir().ok_or_else(|| std::io::Error::other("home directory is unavailable"))?;
         let directory = home.join("Library/Application Support/app.richos.richglance/Capture Requests");

@@ -46,7 +46,7 @@
   // chip is fed by `get_worker_status`, which returns an empty view whenever no turn is open
   // on the thread — and that window is where background work lives.
   //
-  // Job states come from Stu's saved reports. Tool approvals have no UI.
+  // The app checks current activity before displaying saved reports of work in progress.
   const STATES = {
     registered: "Written down. Nothing has been prepared yet.",
     // Plain words for a business owner (hunt 57, finding 11): it was "Getting a workspace
@@ -91,6 +91,7 @@
     // the land did not go through, or nothing ran at all.
     failed: "Stopped before it finished. Ask Rich what it needs.",
     interrupted: "Stopped.",
+    unknown: "RichOS can't confirm its current status.",
   };
 
   // **A QUESTION IS NOT A JOB, AND THIS PANE MUST NOT CALL ONE FINISHED** — the CEO's ruling
@@ -123,6 +124,7 @@
     settled: "Answered: it's in your conversation.",
     failed: "Rich couldn't get you an answer. Ask him again and he'll try it a different way.",
     interrupted: "Stopped.",
+    unknown: "RichOS can't confirm its current status.",
   };
 
   /// Which set of sentences this row gets. `kind` comes from the assignment register

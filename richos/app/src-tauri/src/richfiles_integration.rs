@@ -176,7 +176,7 @@ pub fn output_reveal_in_richfiles(
         .ok_or_else(|| "The output has no filename.".to_owned())?
         .to_string_lossy()
         .into_owned();
-    open_bundle(Some(path))?;
+    open_bundle(Some(path), false)?;
     Ok(format!("Showing {name} in RichFiles."))
 }
 
@@ -186,11 +186,11 @@ pub fn richfiles_available(window: WebviewWindow) -> bool {
 }
 
 #[richos_command::command]
-pub async fn richfiles_open(window: WebviewWindow) -> Result<(), String> {
+pub async fn richfiles_open(window: WebviewWindow, image_viewer_settings: Option<bool>) -> Result<(), String> {
     if window.label() != "main" {
         return Err("RichFiles could not reach the window.".to_owned());
     }
-    tauri::async_runtime::spawn_blocking(|| open_bundle(None))
+    tauri::async_runtime::spawn_blocking(move || open_bundle(None, image_viewer_settings.unwrap_or(false)))
         .await
         .map_err(|_| "RichFiles could not open.".to_owned())?
 }
@@ -241,11 +241,13 @@ fn richfiles_bundle() -> Option<PathBuf> {
     None
 }
 
-fn open_bundle(file: Option<PathBuf>) -> Result<(), String> {
+fn open_bundle(file: Option<PathBuf>, image_viewer_settings: bool) -> Result<(), String> {
     let bundle = richfiles_bundle().ok_or("This build does not contain RichFiles.")?;
     let mut launch = std::process::Command::new("/usr/bin/open");
     launch.arg("-a").arg(bundle);
-    if let Some(path) = file {
+    if image_viewer_settings {
+        launch.arg("richfiles-workspace://settings/image-viewer");
+    } else if let Some(path) = file {
         launch.arg("--").arg(path);
     }
     let status = launch.status().map_err(|_| "RichFiles could not open.")?;

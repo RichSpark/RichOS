@@ -83,6 +83,9 @@ mkdir -p "$glance/Contents/MacOS" "$glance/Contents/Resources"
 install -m 755 "$build/$configuration/RichGlance" "$glance/Contents/MacOS/RichGlance"
 install -m 644 "$package/RichGlance-Info.plist" "$glance/Contents/Info.plist"
 install -m 644 "$package/Resources/RichGlance.icns" "$glance/Contents/Resources/RichGlance.icns"
+for font in Newsreader-Regular.ttf LICENSE-Newsreader.txt; do
+  install -m 644 "$fonts/$font" "$glance/Contents/Resources/$font"
+done
 /usr/libexec/PlistBuddy -c "Add :RichOSSourceRevision string $(git -C "$root" rev-parse HEAD)" "$glance/Contents/Info.plist"
 if [ "$embedded" -eq 1 ]; then
   drop_build_machine_rpaths "$glance/Contents/MacOS/RichGlance"

@@ -141,6 +141,8 @@
   // cut a five-second screen off at four. One second of grace over whatever this launch's
   // hold is; 4000 at the default, unchanged.
   var CEILING_GRACE_MS = 1000;
+  // The native cover has a matching last-resort release in player.m.
+  var NATIVE_HOME_GRACE_MS = 3000;
 
   // =====================================================================================
   //                          THE ONE NUMBER: THREE SECONDS
@@ -1178,6 +1180,8 @@
   var node = null;
   var yielded = false;
   var nativeRecovering = false;
+  var nativeFinished = false;
+  var homeReady = false;
   var ceiling = null;
   var holdTimer = null;
   var state = {
@@ -1288,7 +1292,21 @@
   /// Get out of the way. Called by `main.js` when the app is usable and by the ceiling -
   /// whichever happens first, and only once. ROUND 85: never by the user's hand.
   function yieldNow(reason) {
-    if (yielded || nativeRecovering || (state.native && reason !== "native-finished")) return;
+    if (yielded || nativeRecovering) return;
+
+    if (state.native) {
+      if (reason === "app-ready") homeReady = true;
+      if (reason === "native-finished") {
+        nativeFinished = true;
+        if (!homeReady && ceiling === null) {
+          ceiling = setTimeout(function () { yieldNow("ceiling"); }, NATIVE_HOME_GRACE_MS);
+        }
+      }
+      // Both sides can finish first. Reveal the painted Home or restored view
+      // only after the movie reaches its authored end and app startup is ready.
+      if (!nativeFinished || (!homeReady && reason !== "ceiling")) return;
+      if (reason !== "ceiling") reason = "native-finished";
+    }
 
     // THE HOLD, AND THE ONE CALLER IT APPLIES TO.
     //
@@ -1462,13 +1480,19 @@
         holdAt(holdMs);
         yieldNow("native-finished");
       } else {
-        recover(Math.max(0, result.elapsedMs));
+        recover(Math.max(0, result.elapsedMs), result.nativeCue === true, result.startedAtMs);
       }
     }, function () { recover(0); });
 
-    function recover(elapsed) {
+    function recover(elapsed, nativeCue, startedAtMs) {
+      function nativeMoment() {
+        if (!Number.isFinite(startedAtMs) || startedAtMs <= 0) return elapsed;
+        var wallTime = window.performance && Number.isFinite(window.performance.timeOrigin)
+          ? window.performance.timeOrigin + now() : Date.now();
+        return Math.min(holdMs, Math.max(elapsed, wallTime - startedAtMs));
+      }
       // Paint the fallback at the same point while the native view still covers it.
-      // The native cue may already have sounded. Only a fallback from zero owns it.
+      // If the native clock started, it owns the cue through a video failure.
       if (!node || yielded) return;
       nativeRecovering = true;
       removeSelf();
@@ -1476,19 +1500,23 @@
       shownAt = null;
       heldMoment = null;
       state.heldAt = null;
-      node = build(entry, elapsed > 0);
+      node = build(entry, nativeCue);
       document.body.insertBefore(node, document.body.firstChild);
       shownAt = clock();
-      holdAt(elapsed);
+      holdAt(nativeMoment());
       Promise.resolve(invoke("splash_native_dismiss", { animated: false })).then(resume, resume);
 
       function resume() {
         if (!node || yielded) return;
+        // Native sound continues while the page builds and the cover is removed.
+        // Seek to its clock so the live bar does not land late.
+        var resumedAt = nativeMoment();
+        if (heldMoment !== resumedAt) holdAt(resumedAt);
         nativeRecovering = false;
         heldMoment = null;
         state.heldAt = null;
-        shownAt = clock() - elapsed;
-        if (bar && barRun(elapsed) === 1) {
+        shownAt = now() - resumedAt;
+        if (bar && barRun(resumedAt) === 1) {
           bar.landed = true;
           bar.landedAt = shownAt + BAR_START_MS + barSpan();
         }

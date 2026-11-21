@@ -3334,6 +3334,16 @@ async function main() {
       init: () => {
         window.__RICHOS_LAUNCH__ = { kind: "fresh", splash: { id: "round-11/v1", native: true, bar: [371, 712.75, 658, 2] } };
         window.__native = { calls: [] };
+        let splash;
+        Object.defineProperty(window, "RichSplash", {
+          get: () => splash,
+          set(value) {
+            splash = value;
+            const yieldNow = value.yieldNow;
+            window.__native.ready = () => yieldNow("app-ready");
+            value.yieldNow = reason => { if (reason !== "app-ready") yieldNow(reason); };
+          },
+        });
         window.__TAURI_INTERNALS__ = {
           invoke(cmd, args) {
             window.__native.calls.push(cmd);
@@ -3352,13 +3362,17 @@ async function main() {
     await page.clock.runFor(7000);
     const playing = await page.evaluate(() => {
       const splash = document.getElementById("splash");
-      window.RichSplash.yieldNow("app-ready");
       return { hidden: getComputedStyle(splash).visibility, children: splash.childElementCount, held: window.RichSplash.state.heldAt, reason: window.RichSplash.state.reason, covered: window.loroCovered() };
     });
     assertEqual(playing, { hidden: "hidden", children: 0, held: 0, reason: null, covered: true }, "native playback keeps Home covered without building the HTML splash");
-    const fading = await page.evaluate(async () => {
+    const atEndpoint = await page.evaluate(async () => {
       window.__native.finish({ state: "finished" });
       await Promise.resolve();
+      return { dismissing: window.__native.calls.includes("splash_native_dismiss"), covered: window.loroCovered() };
+    });
+    assertEqual(atEndpoint, { dismissing: false, covered: true }, "a finished movie must not fade into a loading view");
+    const fading = await page.evaluate(() => {
+      window.__native.ready();
       const style = document.querySelector(".ro-handover")?.style;
       return {
         animated: window.__native.animated,
@@ -3388,13 +3402,18 @@ async function main() {
       { id: "round-11/v1", duration: 3000 },
       { id: "opening/edition-year", duration: 5000 },
     ]) {
-      for (const elapsed of [0, 1250, duration]) {
+      for (const [elapsed, nativeCue] of [[0, false], [0, true], [1250, true], [duration, true]]) {
         const page = await launch(browser, {
           virtualTime: true,
           initArg: id,
           init: (openingId) => {
             window.__RICHOS_LAUNCH__ = { kind: "fresh", splash: { id: openingId, native: true } };
-            window.__native = { dismissals: [] };
+            window.__RICHOS_OPENINGS__ = { sound: true };
+            window.__native = { dismissals: [], sounds: 0 };
+            window.Audio = class {
+              load() {}
+              play() { window.__native.sounds++; return Promise.resolve(); }
+            };
             window.__TAURI_INTERNALS__ = {
               invoke(cmd, args) {
                 if (cmd === "splash_native_finished") return new Promise(resolve => { window.__native.fail = resolve; });
@@ -3407,14 +3426,15 @@ async function main() {
             };
           },
         });
-        const recovered = await page.evaluate(async (elapsedMs) => {
-          window.__native.fail({ state: "fallback", elapsedMs });
+        const recovered = await page.evaluate(async ({ elapsedMs, nativeCue }) => {
+          window.RichSplash.yieldNow("app-ready");
+          window.__native.fail({ state: "fallback", elapsedMs, nativeCue });
           await Promise.resolve();
           await Promise.resolve();
           const splash = window.RichSplash;
           const node = document.getElementById("splash");
           return [splash.moment(), node ? getComputedStyle(node).visibility : "removed", window.__native.dismissals];
-        }, elapsed);
+        }, { elapsedMs: elapsed, nativeCue });
         if (elapsed === duration) {
           assertEqual(recovered, [duration, "removed", [true]], "a failure at the endpoint fades directly to Home");
         } else {
@@ -3424,10 +3444,53 @@ async function main() {
           await page.clock.runFor(REMOVE_AFTER_YIELD_MS + 1);
         }
         assertEqual(await page.evaluate(() => window.loroCovered()), false, "the remainder and fade reveal Home");
+        assertEqual(await page.evaluate(() => window.__native.sounds), nativeCue ? 0 : 1,
+          "only a native player that started owns the cue, even when elapsed time rounds down to zero");
         await page.__ctx.close();
       }
     }
     return "Both durations recover from a failed start, continue from an interruption and fade at the endpoint";
+  });
+
+  await run.check("29c  a slow native handoff does not leave the fallback behind its cue", async () => {
+    const page = await launch(browser, {
+      virtualTime: true,
+      init: () => {
+        window.__RICHOS_LAUNCH__ = { kind: "fresh", splash: { id: "opening/edition-year", native: true } };
+        window.__RICHOS_OPENINGS__ = { sound: true };
+        window.__native = { sounds: 0 };
+        window.Audio = class {
+          load() {}
+          play() { window.__native.sounds++; return Promise.resolve(); }
+        };
+        window.__TAURI_INTERNALS__ = {
+          invoke(cmd) {
+            if (cmd === "splash_native_finished") return new Promise(resolve => { window.__native.fail = resolve; });
+            if (cmd === "splash_native_dismiss") return new Promise(resolve => { window.__native.dismissed = resolve; });
+            return Promise.resolve(null);
+          },
+        };
+      },
+    });
+    await page.clock.runFor(2000);
+    const held = await page.evaluate(async () => {
+      window.__native.fail({
+        state: "fallback", elapsedMs: 1250, nativeCue: true,
+        startedAtMs: performance.timeOrigin + performance.now() - 1250,
+      });
+      await Promise.resolve();
+      return window.RichSplash.moment();
+    });
+    assertEqual(Math.round(held), 1250, "the fallback starts at the same point as the native movie");
+    await page.clock.runFor(500);
+    const resumed = await page.evaluate(async () => {
+      window.__native.dismissed();
+      await Promise.resolve();
+      return { moment: Math.round(window.RichSplash.moment()), sounds: window.__native.sounds };
+    });
+    assertEqual(resumed, { moment: 1750, sounds: 0 }, "fallback artwork must catch up to the uninterrupted native cue");
+    await page.__ctx.close();
+    return "A 500 ms cover-removal delay does not move the cue or replay it";
   });
 
   await run.check("30  a saved opening without a local video plays through before preparing its pack", async () => {

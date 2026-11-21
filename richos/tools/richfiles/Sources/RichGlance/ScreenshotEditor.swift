@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 import RichFilesCore
 import UniformTypeIdentifiers
 
@@ -18,72 +19,124 @@ enum ScreenshotChrome {
 
 @MainActor
 final class ScreenshotEditor: NSObject, NSWindowDelegate {
-    let window: NSWindow
-    let canvas: ScreenshotCanvas
+    typealias LeaveSheetPresenter = @MainActor (NSAlert, NSWindow, @escaping (NSApplication.ModalResponse) -> Void) -> Void
+    let window: ScreenshotEditorWindow
     var closed: (() -> Void)?
-    var retainEdits: ((ScreenshotDocument) -> Bool)?
-    private let scroll = NSScrollView()
-    private let tools = NSStackView()
-    private let properties = NSStackView()
-    private let info = NSTextField(wrappingLabelWithString: "")
-    private let status = NSTextField(labelWithString: "")
-    private let dimensions = NSTextField(labelWithString: "")
-    private let zoomReadout = NSTextField(labelWithString: "100%")
-    private let selection = NSTextField(labelWithString: "")
-    private let ink = NSPopUpButton()
-    private let size = NSPopUpButton()
-    private var toolButtons: [ScreenshotTool: NSButton] = [:]
-    private var undoButton: NSButton!
-    private var redoButton: NSButton!
-    private var editButton: NSButton!
-    private var deleteButton: NSButton!
-    private var earlierButton: NSButton!
-    private var laterButton: NSButton!
-    private var revealButton: NSButton!
-    private var cropButton: NSButton!
-    private var cancelCropButton: NSButton!
-    private var zoom = ScreenshotCanvas.Zoom.fit
-    private var initialLayout = true
-    private var laidOutCrop = CGRect.null
-    private var laidOutTool = ScreenshotTool.select
-    private var closeConfirmed = false
-    private var panelOpen = false
-    private var lastShared: ScreenshotEdits?
-    private let began = ProcessInfo.processInfo.systemUptime
+    var capture: (() -> Void)?
+    private(set) var canvas: ScreenshotCanvas?
+    var hasDocument: Bool { canvas != nil }
 
-    init(document: ScreenshotDocument) {
-        canvas = ScreenshotCanvas(document: document)
-        window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1120, height: 760),
-                          styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                          backing: .buffered, defer: false)
-        super.init()
-        let time = document.created.formatted(date: .omitted, time: .shortened)
-        window.title = document.kind.title + " · " + time
-        window.setAccessibilityTitle("RichGlance Screenshot Editor")
-        window.minSize = CGSize(width: 520, height: 420)
-        window.isReleasedWhenClosed = false
-        window.delegate = self
-        build()
-        canvas.changed = { [weak self] in self?.refresh() }
-        canvas.keys = { [weak self] in self?.handle($0) ?? false }
-        canvas.editText = { [weak self] in self?.showTextEntry() }
-        NotificationCenter.default.addObserver(self, selector: #selector(scrolled),
-                                               name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+    private let store: ScreenshotStore
+    private let presentLeaveSheet: LeaveSheetPresenter
+    private let root = ScreenshotSurface(.chrome)
+    private let titleBar = ScreenshotSurface(.bar)
+    private let bottom = ScreenshotSurface(.bar)
+    private let rail = ScreenshotSurface(.chrome)
+    private let work = ScreenshotSurface(.ground)
+    private let titleRule = ScreenshotRule()
+    private let titleDivider = ScreenshotRule()
+    private let railRule = ScreenshotRule()
+    private let cropRule = ScreenshotRule()
+    private let bottomRule = ScreenshotRule()
+    private let inspector = ScreenshotSurface(.floating, radius: 14, outline: true)
+    private let toast = ScreenshotSurface(.floating, radius: 22, outline: true)
+    private let scroll = NSScrollView()
+    private let empty = ScreenshotSurface(.ground)
+    private let shelf: ScreenshotRecents
+    private let name = screenshotLabel(weight: .semibold)
+    private let meta = screenshotLabel()
+    private let edited = screenshotLabel("Edited", weight: .semibold)
+    private let privacy = screenshotLabel()
+    private let zoomReadout = screenshotLabel(weight: .semibold)
+    private let inspection = screenshotLabel(weight: .semibold)
+    private let hint = screenshotLabel()
+    private let toastText = screenshotLabel(weight: .semibold)
+    private let emptyIcon = NSImageView()
+    private let emptyTitle = screenshotLabel("Capture something to mark it up")
+    private let emptyMessage = NSTextField(wrappingLabelWithString: "A region, a window, a whole display or a long scrolling page. It opens here, ready for arrows, steps, callouts and redaction.")
+    private let newCapture = ScreenshotButton("Capture…", symbol: "viewfinder")
+    private let emptyCapture = ScreenshotButton("Capture…", style: .primary)
+    private let captureShortcut = screenshotLabel()
+    private var shortcutHint: String?
+    private let undoButton = ScreenshotButton("Undo", symbol: "arrow.uturn.backward", style: .plain)
+    private let redoButton = ScreenshotButton("Redo", symbol: "arrow.uturn.forward", style: .plain)
+    private let saveButton = ScreenshotButton("Save PNG…", hint: "⌘S")
+    private let copyButton = ScreenshotButton("Copy Image", hint: "⌘C", style: .primary)
+    private let openNewCapture = ScreenshotButton("Open New Capture", style: .primary)
+    private let shelfToggle = ScreenshotButton("Recent Captures", symbol: "clock", style: .plain)
+    private let zoomModes = ScreenshotChoice(["Fit", "100%"], label: "Zoom mode")
+    private let zoomOutButton = ScreenshotButton("Zoom out", symbol: "minus")
+    private let zoomInButton = ScreenshotButton("Zoom in", symbol: "plus")
+    private let size = ScreenshotChoice(["Regular", "Large"], label: "Mark size")
+    private let edit = ScreenshotButton("Edit Text", hint: "↩")
+    private let delete = ScreenshotButton("Delete", hint: "⌫")
+    private let earlier = ScreenshotButton("Make Earlier")
+    private let later = ScreenshotButton("Make Later")
+    private let reveal = ScreenshotButton("Selected mark is out of view · Show")
+    private let acceptCrop = ScreenshotButton("Crop", hint: "↩", style: .primary)
+    private let cancelCrop = ScreenshotButton("Cancel", hint: "esc")
+    private var toolButtons: [ScreenshotTool: ScreenshotButton] = [:]
+    private var swatches: [ScreenshotButton] = []
+    private var entries: [ScreenshotStore.Entry] = []
+    // Keep incoming captures in the editor session until the user can switch to them.
+    private var pendingCaptures: [ScreenshotDocument] = []
+    private var zoom = ScreenshotCanvas.Zoom.fit
+    private var autoZoom = true
+    private var persisted: ScreenshotEdits?
+    private var lastShared: ScreenshotEdits?
+    private var persistSoon: DispatchWorkItem?
+    private var toastTimer: DispatchWorkItem?
+    private var closeConfirmed = false
+    private var sheetOpen = false
+    private var changingDocument = false
+    private var shelfOpen: Bool
+    private var sessions: [UUID: EditingSession] = [:]
+
+    private struct EditingSession {
+        let edits: ScreenshotEdits
+        let revisions: ScreenshotCanvas.Revisions
+        let zoom: ScreenshotCanvas.Zoom
+        let autoZoom: Bool
+        let scrollPosition: CGPoint
     }
 
-    deinit { NotificationCenter.default.removeObserver(self) }
+    init(store: ScreenshotStore, presentLeaveSheet: @escaping LeaveSheetPresenter = { alert, window, completion in
+        alert.beginSheetModal(for: window, completionHandler: completion)
+    }) {
+        self.store = store
+        self.presentLeaveSheet = presentLeaveSheet
+        shelfOpen = store.showsShelf
+        shelf = ScreenshotRecents(store: store)
+        window = ScreenshotEditorWindow(contentRect: CGRect(x: 0, y: 0, width: 1360, height: 810),
+                                        styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                                        backing: .buffered, defer: false)
+        super.init()
+        window.title = "RichGlance Screenshot Editor"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
+        window.minSize = CGSize(width: 690, height: 590)
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.setAccessibilityTitle("RichGlance Screenshot Editor")
+        window.intercept = { [weak self] in self?.handle($0) ?? false }
+        build()
+        refreshShelf()
+        refresh()
+    }
 
     func show() {
-        let visible = (NSScreen.main ?? window.screen)?.visibleFrame ?? window.frame
-        window.setContentSize(CGSize(width: min(1120, visible.width - 32), height: min(760, visible.height - 48)))
-        window.center()
+        if !window.isVisible {
+            let visible = (NSScreen.main ?? window.screen)?.visibleFrame ?? window.frame
+            window.setContentSize(CGSize(width: min(1360, visible.width - 32), height: min(810, visible.height - 28)))
+            window.center()
+        }
         if #available(macOS 14, *) { NSApp.activate() }
         else { NSApp.activate(ignoringOtherApps: true) }
         if NSApp.isActive {
             focus()
         } else {
-            // The scrolling result floats over an active source app. Ask Launch Services
-            // to bring the existing RichGlance instance forward before assigning key focus.
+            // A scrolling result can leave the source app active.
             window.orderFrontRegardless()
             let configuration = NSWorkspace.OpenConfiguration()
             configuration.activates = true
@@ -95,356 +148,358 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
                 }
             }
         }
-        window.contentView?.layoutSubtreeIfNeeded()
-        layoutCanvas()
         refresh()
-        record(.complete, from: began)
     }
 
     func focus() {
         window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(canvas)
+        focusPicture()
+    }
+
+    private func focusPicture() {
+        if let canvas { window.makeFirstResponder(canvas) }
+        else { window.makeFirstResponder(emptyCapture) }
     }
 
     private func build() {
-        let root = NSStackView()
-        root.orientation = .vertical
-        root.alignment = .width
-        root.spacing = 0
-        root.wantsLayer = true
-        root.layer?.backgroundColor = ScreenshotChrome.colors(for: root).surface.cgColor
         window.contentView = root
-        tools.spacing = 4
-        tools.edgeInsets = NSEdgeInsets(top: 7, left: 10, bottom: 7, right: 10)
+        for view in [titleBar, rail, work, bottom, shelf] { root.addSubview(view) }
+        for view in [titleRule, titleDivider, newCapture, name, meta, edited, undoButton, redoButton, saveButton, copyButton] {
+            titleBar.addSubview(view)
+        }
+        rail.addSubview(railRule)
+        rail.addSubview(cropRule)
+        bottom.addSubview(bottomRule)
+        for button in [undoButton, redoButton, zoomInButton, zoomOutButton] { button.iconOnly = true }
+        undoButton.toolTip = "Undo (⌘Z)"
+        redoButton.toolTip = "Redo (⇧⌘Z)"
         for tool in ScreenshotTool.allCases {
-            let control = button(tool.title, action: #selector(chooseTool(_:)))
-            control.tag = ScreenshotTool.allCases.firstIndex(of: tool) ?? 0
-            control.image = NSImage(systemSymbolName: tool.symbol, accessibilityDescription: nil)?
-                .withSymbolConfiguration(.init(pointSize: 22, weight: .medium))
-            control.isBordered = false
-            control.wantsLayer = true
-            control.layer?.cornerRadius = 9
-            control.focusRingType = .default
-            control.imagePosition = .imageAbove
-            control.setButtonType(.pushOnPushOff)
-            control.toolTip = "\(tool.title) (\(tool.key.uppercased()))"
-            control.heightAnchor.constraint(equalToConstant: 54).isActive = true
-            control.widthAnchor.constraint(greaterThanOrEqualToConstant: 62).isActive = true
-            toolButtons[tool] = control
-            tools.addArrangedSubview(control)
+            let button = ScreenshotButton(tool.title, symbol: tool.symbol, style: .tool)
+            button.toolTip = "\(tool.title) (\(tool.key.uppercased()))"
+            button.onPress = { [weak self] in self?.select(tool) }
+            toolButtons[tool] = button
+            rail.addSubview(button)
         }
-        undoButton = button("Undo", action: #selector(undo))
-        redoButton = button("Redo", action: #selector(redo))
-        let save = button("Save PNG…  ⌘S", action: #selector(saveImage))
-        let copy = button("Copy Image  ⌘C", action: #selector(copyImage))
-        save.setAccessibilityLabel("Save PNG…")
-        copy.setAccessibilityLabel("Copy Image")
-        copy.bezelColor = ScreenshotInk.yellow.color
-        for control in [undoButton!, redoButton!, save, copy] {
-            tools.addArrangedSubview(control)
-        }
-        root.addArrangedSubview(strip(tools, height: 70))
-        properties.spacing = 8
-        properties.edgeInsets = NSEdgeInsets(top: 5, left: 16, bottom: 5, right: 16)
-        selection.font = .systemFont(ofSize: 16, weight: .semibold)
-        ink.addItems(withTitles: ScreenshotInk.allCases.map { $0.rawValue.capitalized })
-        ink.target = self
-        ink.action = #selector(changeInk)
-        ink.setAccessibilityLabel("Mark color")
-        size.addItems(withTitles: ["Regular", "Large"])
-        size.target = self
-        size.action = #selector(changeSize)
-        size.setAccessibilityLabel("Mark size")
-        for control in [ink, size] {
-            control.font = .systemFont(ofSize: 16)
-            control.controlSize = .large
-        }
-        editButton = button("Edit Text", action: #selector(showTextEntry))
-        deleteButton = button("Delete", action: #selector(deleteMark))
-        earlierButton = button("Make Earlier", action: #selector(earlier))
-        laterButton = button("Make Later", action: #selector(later))
-        revealButton = button("Show", action: #selector(reveal))
-        cropButton = button("Crop", action: #selector(commitCrop))
-        cancelCropButton = button("Cancel", action: #selector(cancelCrop))
-        for view in [selection, ink, size, editButton!, earlierButton!, laterButton!, deleteButton!,
-                     revealButton!, cancelCropButton!, cropButton!] as [NSView] {
-            properties.addArrangedSubview(view)
-        }
-        root.addArrangedSubview(strip(properties, height: 42))
-        info.font = .systemFont(ofSize: 16)
-        info.maximumNumberOfLines = 3
-        info.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let guidance = NSStackView(views: [info])
-        guidance.edgeInsets = NSEdgeInsets(top: 8, left: 16, bottom: 10, right: 16)
-        root.addArrangedSubview(guidance)
-        scroll.documentView = canvas
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = true
         scroll.autohidesScrollers = true
-        scroll.borderType = .noBorder
         scroll.drawsBackground = false
         scroll.contentView.postsBoundsChangedNotifications = true
         scroll.setAccessibilityLabel("Editable screenshot")
-        root.addArrangedSubview(scroll)
-        scroll.setContentHuggingPriority(.defaultLow, for: .vertical)
-        scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 110).isActive = true
-        status.font = .systemFont(ofSize: 16)
-        status.lineBreakMode = .byTruncatingTail
-        status.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        dimensions.font = .monospacedDigitSystemFont(ofSize: 16, weight: .medium)
-        zoomReadout.font = .monospacedDigitSystemFont(ofSize: 16, weight: .medium)
-        let bottom = NSStackView(views: [
-            dimensions, status, NSView(), button("Fit", action: #selector(fit)), button("100%", action: #selector(actual)),
-            button("−", action: #selector(zoomOut)), zoomReadout, button("+", action: #selector(zoomIn)),
-        ])
-        bottom.edgeInsets = NSEdgeInsets(top: 6, left: 10, bottom: 6, right: 10)
-        bottom.spacing = 10
-        root.addArrangedSubview(bottom)
-    }
-
-    private func strip(_ stack: NSStackView, height: CGFloat) -> NSScrollView {
-        let strip = NSScrollView()
-        strip.drawsBackground = false
-        strip.hasHorizontalScroller = true
-        strip.autohidesScrollers = true
-        strip.scrollerStyle = .overlay
-        let host = NSView()
-        host.addSubview(stack)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: host.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: host.trailingAnchor),
-            stack.centerYAnchor.constraint(equalTo: host.centerYAnchor),
-        ])
-        strip.documentView = host
-        host.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            host.leadingAnchor.constraint(equalTo: strip.contentView.leadingAnchor),
-            host.topAnchor.constraint(equalTo: strip.contentView.topAnchor),
-            host.heightAnchor.constraint(equalToConstant: height),
-            strip.heightAnchor.constraint(equalToConstant: height),
-        ])
-        strip.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        return strip
-    }
-
-    private func button(_ title: String, action: Selector) -> NSButton {
-        let button = NSButton(title: title, target: self, action: action)
-        button.bezelStyle = .rounded
-        button.font = .systemFont(ofSize: 16, weight: .medium)
-        button.controlSize = .large
-        button.setContentCompressionResistancePriority(.required, for: .horizontal)
-        return button
-    }
-
-    private func layoutCanvas() {
-        let size = scroll.contentView.bounds.size
-        guard size.width > 1, size.height > 1 else { return }
-        if initialLayout {
-            initialLayout = false
-            let crop = canvas.document.crop
-            if crop.height / crop.width * size.width > size.height * 2 {
-                let backing = window.backingScaleFactor
-                zoom = .custom(min(1, max(1, size.width - 78) * backing / crop.width))
-            }
+        NotificationCenter.default.addObserver(self, selector: #selector(scrolled),
+                                               name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+        for view in [scroll, inspector, empty, reveal, toast] { work.addSubview(view) }
+        for view in [inspection, hint, size, edit, delete, earlier, later, acceptCrop, cancelCrop] { inspector.addSubview(view) }
+        swatches = ScreenshotInk.allCases.map { ink in
+            let button = ScreenshotButton(ink.rawValue.capitalized, style: .swatch)
+            button.swatch = ink.color
+            button.toolTip = ink.rawValue.capitalized
+            button.onPress = { [weak self] in self?.canvas?.setStyle(ink: ink); self?.focusPicture() }
+            inspector.addSubview(button)
+            return button
         }
-        canvas.layoutImage(in: size, zoom: zoom)
-        zoomReadout.stringValue = "\(Int((canvas.factor * window.backingScaleFactor * 100).rounded()))%"
+        for view in [emptyIcon, emptyTitle, emptyMessage, emptyCapture, captureShortcut] { empty.addSubview(view) }
+        emptyIcon.image = NSApp.applicationIconImage
+        emptyIcon.imageScaling = .scaleProportionallyUpOrDown
+        emptyIcon.setAccessibilityElement(false)
+        emptyTitle.font = Self.emptyTitleFont
+        emptyTitle.alignment = .center
+        emptyMessage.font = .systemFont(ofSize: 16)
+        emptyMessage.alignment = .center
+        emptyMessage.maximumNumberOfLines = 3
+        toast.addSubview(toastText)
+        toast.isHidden = true
+        for view in [shelfToggle, openNewCapture, privacy, zoomModes, zoomOutButton, zoomReadout, zoomInButton] { bottom.addSubview(view) }
+
+        newCapture.onPress = { [weak self] in self?.startCapture() }
+        emptyCapture.onPress = newCapture.onPress
+        undoButton.onPress = { [weak self] in self?.canvas?.undo(); self?.focusPicture() }
+        redoButton.onPress = { [weak self] in self?.canvas?.redo(); self?.focusPicture() }
+        copyButton.onPress = { [weak self] in self?.copyImage() }
+        saveButton.onPress = { [weak self] in self?.saveImage() }
+        shelfToggle.onPress = { [weak self] in self?.toggleShelf() }
+        openNewCapture.onPress = { [weak self] in self?.openNextCapture() }
+        zoomModes.changed = { [weak self] in self?.setZoom($0 == 0 ? .fit : .actual) }
+        zoomOutButton.onPress = { [weak self] in self?.changeZoom(direction: -1) }
+        zoomInButton.onPress = { [weak self] in self?.changeZoom(direction: 1) }
+        size.changed = { [weak self] in self?.canvas?.setStyle(large: $0 == 1); self?.focusPicture() }
+        edit.onPress = { [weak self] in self?.canvas?.startCallout() }
+        delete.onPress = { [weak self] in self?.canvas?.deleteSelected(); self?.focusPicture() }
+        earlier.onPress = { [weak self] in self?.canvas?.reorderSelected(by: -1); self?.focusPicture() }
+        later.onPress = { [weak self] in self?.canvas?.reorderSelected(by: 1); self?.focusPicture() }
+        acceptCrop.onPress = { [weak self] in self?.commitCrop() }
+        cancelCrop.onPress = { [weak self] in self?.canvas?.cancelCrop(); self?.focusPicture() }
+        reveal.onPress = { [weak self] in self?.canvas?.revealSelection(); self?.focusPicture() }
+        shelf.open = { [weak self] in self?.open($0) }
+        shelf.remove = { [weak self] in self?.deleteCapture($0) }
+        shelf.hide = { [weak self] in self?.setShelf(false); self?.window.makeFirstResponder(self?.shelfToggle) }
+        shelf.clearAll = { [weak self] in self?.clearAll() }
+        shelf.turnOff = { [weak self] in self?.turnOff() }
+        shelf.turnOn = { [weak self] in self?.turnOn() }
+        shelf.changeRetention = { [weak self] in self?.changeRetention($0) }
+        shelf.focusCanvas = { [weak self] in self?.focusPicture() }
+        root.changedAppearance = { [weak self] in self?.refresh() }
     }
 
-    private func refresh() {
-        if laidOutCrop != canvas.document.crop || laidOutTool != canvas.tool {
-            laidOutCrop = canvas.document.crop
-            laidOutTool = canvas.tool
-            layoutCanvas()
+    private static let emptyTitleFont: NSFont = {
+        if let font = Bundle.main.url(forResource: "Newsreader-Regular", withExtension: "ttf") {
+            CTFontManagerRegisterFontsForURL(font as CFURL, .process, nil)
         }
-        let mark = canvas.selectedMark
-        let crop = canvas.document.crop
-        window.isDocumentEdited = canvas.hasChanges
-        dimensions.stringValue = "\(Int(crop.width)) × \(Int(crop.height)) px"
-        info.stringValue = canvas.document.hasRedactions
-            ? "Copy and Save make one flat picture. Under the redaction the pixels are replaced. The original stays only on this Mac."
-            : "Copy and Save make one flat picture of what is inside the frame. Your marks and the original stay on this Mac."
-        let colors = ScreenshotChrome.colors(for: canvas)
-        window.contentView?.layer?.backgroundColor = colors.surface.cgColor
-        for (tool, control) in toolButtons {
-            let active = tool == canvas.tool
-            let ink = active ? ScreenshotRenderer.ink : colors.ink
-            control.state = active ? .on : .off
-            control.contentTintColor = ink
-            control.layer?.backgroundColor = (active ? ScreenshotInk.yellow.color : NSColor.clear).cgColor
-            control.attributedTitle = NSAttributedString(string: tool.title, attributes: [
-                .font: NSFont.systemFont(ofSize: 16, weight: active ? .bold : .medium),
-                .foregroundColor: ink,
-                .underlineStyle: active ? NSUnderlineStyle.thick.rawValue : 0,
-            ])
-        }
-        let cropping = canvas.tool == .crop
-        let styled = !cropping && (mark?.tool ?? canvas.tool) != .redact && (mark != nil || canvas.tool != .select)
-        selection.stringValue = cropping ? "Crop" : (mark?.tool ?? canvas.tool).title
-        ink.isHidden = !styled
-        size.isHidden = !styled
-        ink.selectItem(withTitle: (mark?.ink ?? canvas.ink).rawValue.capitalized)
-        size.selectItem(at: (mark?.large ?? canvas.large) ? 1 : 0)
-        editButton.isHidden = cropping || mark?.tool != .text
-        earlierButton.isHidden = cropping || mark?.tool != .steps
-        laterButton.isHidden = earlierButton.isHidden
-        if let mark, let step = canvas.document.edits.number(for: mark) {
-            earlierButton.isEnabled = step > 1
-            laterButton.isEnabled = step < canvas.document.edits.marks.filter { $0.tool == .steps }.count
-        }
-        deleteButton.isHidden = cropping || mark == nil
-        undoButton.isEnabled = canvas.canUndo
-        redoButton.isEnabled = canvas.canRedo
-        cropButton.isHidden = !cropping
-        cancelCropButton.isHidden = !cropping
-        scrolled()
-    }
+        return NSFont(name: "Newsreader-Regular", size: 34) ?? NSFont(name: "Georgia", size: 34) ?? .systemFont(ofSize: 34)
+    }()
 
-    @objc private func scrolled() {
-        revealButton.isHidden = canvas.tool == .crop || !canvas.selectionIsOffscreen
-        if !revealButton.isHidden, let mark = canvas.selectedMark { selection.stringValue = mark.tool.title + " · Out of view" }
-        else if canvas.tool != .crop { selection.stringValue = (canvas.selectedMark?.tool ?? canvas.tool).title }
-    }
-
-    private func select(_ tool: ScreenshotTool) {
-        canvas.selected = nil
-        canvas.tool = tool
-        focusCanvas()
-    }
-
-    private func focusCanvas() { window.makeFirstResponder(canvas) }
-    @objc private func chooseTool(_ sender: NSButton) { select(ScreenshotTool.allCases[sender.tag]) }
-    @objc private func changeInk() { canvas.setStyle(ink: ScreenshotInk.allCases[max(0, ink.indexOfSelectedItem)]); focusCanvas() }
-    @objc private func changeSize() { canvas.setStyle(large: size.indexOfSelectedItem == 1); focusCanvas() }
-    @objc private func deleteMark() { canvas.deleteSelected(); focusCanvas() }
-    @objc private func earlier() { canvas.reorderSelected(by: -1); focusCanvas() }
-    @objc private func later() { canvas.reorderSelected(by: 1); focusCanvas() }
-    @objc private func reveal() { canvas.revealSelection(); focusCanvas() }
-    @objc private func undo() { canvas.undo(); focusCanvas() }
-    @objc private func redo() { canvas.redo(); focusCanvas() }
-    @objc private func commitCrop() { canvas.commitCrop(); focusCanvas() }
-    @objc private func cancelCrop() { canvas.cancelCrop(); focusCanvas() }
-    @objc private func fit() { zoom = .fit; layoutCanvas(); focusCanvas() }
-    @objc private func actual() { zoom = .actual; layoutCanvas(); focusCanvas() }
-    @objc private func zoomIn() { changeZoom(by: 1.25) }
-    @objc private func zoomOut() { changeZoom(by: 0.8) }
-
-    private func changeZoom(by multiplier: CGFloat) {
-        zoom = .custom(min(6, max(0.005, canvas.factor * window.backingScaleFactor * multiplier)))
-        layoutCanvas()
-        focusCanvas()
-    }
-
-    @objc private func showTextEntry() {
-        guard !panelOpen, let mark = canvas.selectedMark, mark.tool == .text else { return }
-        let field = NSTextField(string: mark.text)
-        field.font = .systemFont(ofSize: 16)
-        field.placeholderString = "Callout text"
-        field.frame.size = CGSize(width: 320, height: 28)
-        let alert = NSAlert()
-        alert.messageText = "Edit Callout"
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Done")
-        alert.addButton(withTitle: "Cancel")
-        alert.window.initialFirstResponder = field
-        panelOpen = true
-        alert.beginSheetModal(for: window) { [weak self] response in
-            guard let self else { return }
-            panelOpen = false
-            if response == .alertFirstButtonReturn { canvas.editSelected { $0.text = field.stringValue } }
-            else if mark.text.isEmpty { canvas.deleteSelected() }
-            focusCanvas()
-        }
-    }
-
-    @objc func copyImage() {
-        if canvas.tool == .crop { canvas.commitCrop() }
-        let start = ProcessInfo.processInfo.systemUptime
-        if let image = ScreenshotRenderer.flattened(canvas.document),
-           let png = ScreenshotRenderer.png(image), ScreenshotRenderer.copy(png) {
-            lastShared = canvas.document.edits
-            announce("Copied \(image.width) × \(image.height) px as one flat picture")
-            record(.complete, from: start)
+    func changeDocument(_ document: ScreenshotDocument, newCapture: Bool = false) {
+        if canvas?.document.id == document.id { focusPicture(); return }
+        if newCapture {
+            pendingCaptures.append(document)
+            if pendingCaptures.count == 1 { openNextCapture() }
+            layoutBottom(width: bottom.bounds.width)
         } else {
-            announce("Could not copy the picture. Try again.")
-            record(.issues, from: start)
+            leaveCurrent { [weak self] in self?.install(document) }
         }
-        focusCanvas()
     }
 
-    @objc func saveImage() {
-        guard !panelOpen else { return }
-        if canvas.tool == .crop { canvas.commitCrop() }
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.png]
-        panel.nameFieldStringValue = "RichGlance Screenshot.png"
-        panelOpen = true
-        panel.beginSheetModal(for: window) { [weak self] response in
+    private func openNextCapture() {
+        guard let document = pendingCaptures.first else { return }
+        leaveCurrent { [weak self] in self?.install(document, newCapture: true) }
+    }
+
+    private func install(_ document: ScreenshotDocument?, newCapture: Bool = false) {
+        if let document { pendingCaptures.removeAll { $0.id == document.id } }
+        changingDocument = true
+        persistSoon?.cancel()
+        let previous = canvas
+        if let previous, entries.contains(where: { $0.id == previous.document.id }) {
+            sessions[previous.document.id] = EditingSession(edits: previous.document.edits, revisions: previous.revisions,
+                                                            zoom: zoom, autoZoom: autoZoom,
+                                                            scrollPosition: scroll.contentView.bounds.origin)
+        }
+        canvas = document.map(ScreenshotCanvas.init)
+        if let previous, let canvas {
+            canvas.commonInk = previous.commonInk
+            canvas.highlightInk = previous.highlightInk
+            canvas.sizes = previous.sizes
+            if previous.tool != .crop { canvas.tool = previous.tool }
+        }
+        scroll.documentView = canvas
+        canvas?.changed = { [weak self] in self?.canvasChanged() }
+        persisted = document?.edits
+        lastShared = nil
+        let previousSession = document.flatMap { sessions.removeValue(forKey: $0.id) }
+        let session = previousSession?.edits == document?.edits ? previousSession : nil
+        if let session { canvas?.revisions = session.revisions }
+        autoZoom = session?.autoZoom ?? true
+        zoom = session?.zoom ?? (document?.kind == .scrolling ? .actual : .fit)
+        changingDocument = false
+        refreshShelf(newCapture: newCapture)
+        refresh()
+        scroll.contentView.scroll(to: session?.scrollPosition ?? .zero)
+        scroll.reflectScrolledClipView(scroll.contentView)
+        focusPicture()
+    }
+
+    private func open(_ entry: ScreenshotStore.Entry) {
+        guard canvas?.document.id != entry.id else { focusPicture(); return }
+        do {
+            guard let document = try store.load(entry) else {
+                refreshShelf()
+                announce("This capture could not be opened.")
+                return
+            }
+            changeDocument(document)
+        } catch { announce("This capture could not be opened.") }
+    }
+
+    func showShelf() { setShelf(true) }
+
+    func refreshShelf(newCapture: Bool = false) {
+        shortcutHint = CaptureShortcutHint.current()
+        if canvas == nil { layoutEmpty() }
+        do {
+            entries = try store.entries()
+            let retained = Set(entries.map(\.id))
+            sessions = sessions.filter { retained.contains($0.key) }
+            shelf.update(entries: entries, selected: canvas?.document.id, enabled: store.keepsHistory,
+                         retention: store.retention, newCapture: newCapture)
+        } catch {
+            entries = []
+            shelf.update(entries: [], selected: canvas?.document.id, enabled: store.keepsHistory,
+                         retention: store.retention, unavailable: true)
+        }
+        let count = entries.count
+        shelfToggle.counter = count
+        shelfToggle.setAccessibilityLabel("Recent Captures, \(count) \(count == 1 ? "capture" : "captures")")
+        shelfToggle.setAccessibilityValue(shelfOpen ? "Expanded" : "Collapsed")
+    }
+
+    private func setShelf(_ open: Bool) {
+        guard shelfOpen != open else { return }
+        do {
+            try store.setShelfVisible(open)
+            shelfOpen = open
+            refresh()
+            if open { refreshShelf() }
+        } catch { announce("Could not save the shelf setting.") }
+    }
+
+    private func toggleShelf() {
+        setShelf(!shelfOpen)
+        window.makeFirstResponder(shelfToggle)
+    }
+
+    private func changeRetention(_ value: ScreenshotStore.Retention) {
+        guard value != store.retention else { return }
+        do {
+            try store.setRetention(value)
+            refreshShelf()
+            announce(value == .week ? "Captures are kept on this Mac for 7 days."
+                                    : "Captures are kept on this Mac forever, until you delete them.")
+        } catch {
+            refreshShelf()
+            announce("Could not change how long captures are kept.")
+        }
+    }
+
+    private func turnOn() {
+        do {
+            try store.setHistory(true)
+            refreshShelf()
+            announce("Recent Captures is on. Each capture stays on this Mac \(store.retention.duration).")
+            focusPicture()
+        } catch { announce("Could not turn on Recent Captures.") }
+    }
+
+    private func deleteCapture(_ entry: ScreenshotStore.Entry) {
+        do {
+            let selectedIndex = entries.firstIndex { $0.id == entry.id }
+            try store.remove(entry.id)
+            if canvas?.document.id == entry.id {
+                let remaining = try store.entries()
+                if let selectedIndex, !remaining.isEmpty {
+                    let replacement = try store.load(remaining[min(selectedIndex, remaining.count - 1)])
+                    install(replacement)
+                } else { install(nil) }
+            } else { refreshShelf() }
+            announce("Capture deleted from this Mac.")
+        } catch { announce("Could not delete this capture.") }
+    }
+
+    private func clearAll() {
+        let count = entries.count
+        guard count > 0 else { return }
+        confirm("Delete all \(count) recent captures?",
+                detail: "Their originals and marks are removed from this Mac. Pictures you already copied or saved are not affected.",
+                action: "Delete All", restore: { [weak self] in self?.shelf.focusClear() }) { [weak self] in
             guard let self else { return }
-            panelOpen = false
-            defer { focusCanvas() }
-            guard response == .OK, let url = panel.url else { return }
-            let start = ProcessInfo.processInfo.systemUptime
-            do {
-                guard let image = ScreenshotRenderer.flattened(canvas.document),
-                      let data = ScreenshotRenderer.png(image) else { throw CocoaError(.fileWriteUnknown) }
-                try data.write(to: url, options: .atomic)
-                lastShared = canvas.document.edits
-                announce("Saved \(image.width) × \(image.height) px as one flat picture")
-                record(.complete, from: start)
-            } catch {
-                announce("Could not save the PNG. Choose a different location and try again.")
-                record(.issues, from: start)
-            }
+            do { try store.clear(); install(nil) }
+            catch { announce("Could not clear Recent Captures.") }
         }
     }
 
-    private func announce(_ text: String) {
-        status.stringValue = text
-        status.toolTip = text
-        NSAccessibility.post(element: status, notification: .valueChanged)
+    private func turnOff() {
+        let count = entries.count
+        let detail = "The \(count) \(count == 1 ? "capture" : "captures") kept on this Mac will be deleted. The capture you have open stays open until you close it.\n\nFrom then on a capture is not kept after you close it."
+        confirm("Turn off Recent Captures?", detail: detail, action: "Turn Off and Delete",
+                restore: { [weak self] in self?.shelf.focusOptions() }) { [weak self] in
+            guard let self else { return }
+            do { try store.setHistory(false); refreshShelf(); focusPicture() }
+            catch { announce("Could not turn off Recent Captures.") }
+        }
     }
 
-    private func handle(_ event: NSEvent) -> Bool {
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.numericPad, .function, .capsLock])
-        let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
-        if flags == .command || flags == [.command, .shift] {
-            switch (key, flags) {
-            case ("z", .command): undo()
-            case ("z", _): redo()
-            case ("c", .command): copyImage()
-            case ("s", .command): saveImage()
-            case ("0", .command): fit()
-            case ("1", .command): actual()
-            default: return false
-            }
+    private func confirm(_ title: String, detail: String, action: String, restore: @escaping () -> Void,
+                         perform: @escaping () -> Void) {
+        guard !sheetOpen else { return }
+        canvas?.finishCallout()
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = detail
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: action).hasDestructiveAction = true
+        sheetOpen = true
+        alert.beginSheetModal(for: window) { [weak self] response in
+            self?.sheetOpen = false
+            if response == .alertSecondButtonReturn { perform() }
+            else { restore() }
+        }
+    }
+
+    private func startCapture() {
+        canvas?.finishCallout()
+        _ = saveEditsNow()
+        capture?()
+    }
+
+    private func canvasChanged() {
+        guard !changingDocument else { return }
+        refresh()
+        guard let canvas, !canvas.isInteracting, canvas.document.edits != persisted else { return }
+        persistSoon?.cancel()
+        let task = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            if saveEditsNow() { refreshShelf() }
+        }
+        persistSoon = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: task)
+    }
+
+    @discardableResult
+    private func saveEditsNow() -> Bool {
+        persistSoon?.cancel()
+        persistSoon = nil
+        guard let canvas else { return true }
+        let document = canvas.document
+        guard entries.contains(where: { $0.id == document.id }), store.keepsHistory else { return false }
+        if document.edits == persisted { return true }
+        let started = ProcessInfo.processInfo.systemUptime
+        do {
+            guard try store.retain(document, existingOnly: true) else { return false }
+            persisted = document.edits
+            record(.complete, for: document, from: started)
             return true
+        } catch {
+            record(.issues, for: document, from: started)
+            announce("Could not keep changes in Recent Captures.")
+            return false
         }
-        guard flags.isEmpty || flags == .shift else { return false }
-        let step: CGFloat = flags.contains(.shift) ? 10 : 1
-        switch event.keyCode {
-        case 123: canvas.nudge(dx: -step, dy: 0)
-        case 124: canvas.nudge(dx: step, dy: 0)
-        case 125: canvas.nudge(dx: 0, dy: step)
-        case 126: canvas.nudge(dx: 0, dy: -step)
-        case 48: canvas.selectNext(backwards: flags.contains(.shift))
-        case 51, 117: deleteMark()
-        case 53:
-            if canvas.tool == .crop { cancelCrop() }
-            else { canvas.selected = nil; canvas.refresh() }
-        case 36, 76:
-            if canvas.tool == .crop { commitCrop() }
-            else { showTextEntry() }
-        default:
-            guard let tool = ScreenshotTool.allCases.first(where: { $0.key == key }) else { return false }
-            select(tool)
-        }
-        return true
     }
 
-    func windowDidResize(_ notification: Notification) { layoutCanvas() }
-    func windowDidChangeBackingProperties(_ notification: Notification) { layoutCanvas() }
+    private func leaveCurrent(_ completion: @escaping () -> Void) {
+        guard !sheetOpen else { return }
+        guard let canvas else { completion(); return }
+        canvas.finishCallout()
+        if saveEditsNow() || !canvas.hasChanges || lastShared == canvas.document.edits { completion(); return }
+        askBeforeLeaving("Switch without keeping your edits?", completion: completion)
+    }
+
+    private func askBeforeLeaving(_ title: String, closing: Bool = false, completion: @escaping () -> Void) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = "Recent Captures is off or this screenshot could not be kept. You can copy the edited image before leaving."
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: closing ? "Close" : "Discard Changes").hasDestructiveAction = true
+        alert.addButton(withTitle: closing ? "Copy Image and Close" : "Copy Image and Continue")
+        sheetOpen = true
+        presentLeaveSheet(alert, window) { [weak self] response in
+            guard let self else { return }
+            sheetOpen = false
+            if response == .alertThirdButtonReturn, copyFlattened() { completion() }
+            else if response == .alertSecondButtonReturn { completion() }
+            else { focusPicture() }
+        }
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard !sheetOpen else { return false }
+        canvas?.finishCallout()
+        if closeConfirmed || saveEditsNow() || canvas?.hasChanges != true { return true }
+        askBeforeLeaving("Close without keeping your edits?", closing: true) { [weak self] in
+            guard let self else { return }
+            closeConfirmed = true
+            window.performClose(nil)
+        }
+        return false
+    }
 
     func allowApplicationQuit() -> Bool {
         if windowShouldClose(window) { return true }
@@ -452,34 +507,460 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
         return false
     }
 
-    func windowShouldClose(_ sender: NSWindow) -> Bool {
-        guard !panelOpen else { return false }
-        if closeConfirmed { return true }
-        if retainEdits?(canvas.document) == true || !canvas.hasChanges { return true }
-        let alert = NSAlert()
-        alert.messageText = "Close without keeping your edits?"
-        alert.informativeText = "Recent Captures is off or this screenshot could not be kept. You can copy the edited image before closing."
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Close")
-        alert.addButton(withTitle: "Copy Image and Close")
-        panelOpen = true
-        alert.beginSheetModal(for: window) { [weak self] response in
-            guard let self else { return }
-            panelOpen = false
-            if response == .alertThirdButtonReturn {
-                copyImage()
-                guard lastShared == canvas.document.edits else { return }
-            } else if response != .alertSecondButtonReturn { return }
-            closeConfirmed = true
-            window.performClose(nil)
-        }
-        return false
+    func windowWillClose(_ notification: Notification) { closed?() }
+    func windowDidResize(_ notification: Notification) { refresh() }
+    func windowDidChangeBackingProperties(_ notification: Notification) { layoutCanvas() }
+
+    func copyImage() {
+        guard !sheetOpen else { return }
+        canvas?.finishCallout()
+        if canvas?.previewCrop != nil { canvas?.commitCrop() }
+        _ = copyFlattened()
+        focusPicture()
     }
 
-    func windowWillClose(_ notification: Notification) { closed?() }
+    private func copyFlattened() -> Bool {
+        guard let document = canvas?.document else { return false }
+        let started = ProcessInfo.processInfo.systemUptime
+        guard let image = ScreenshotRenderer.flattened(document), let png = ScreenshotRenderer.png(image),
+              ScreenshotRenderer.copy(png) else {
+            announce("Could not copy the picture. Try again.")
+            record(.issues, for: document, from: started)
+            return false
+        }
+        lastShared = document.edits
+        announce("Copied \(image.width) × \(image.height) px as one flat picture")
+        record(.complete, for: document, from: started)
+        return true
+    }
 
-    private func record(_ outcome: RichFilesDiagnostics.Outcome, from start: TimeInterval) {
-        RichFilesDiagnostics.record(.glanceCaptureOutput, id: canvas.document.id, outcome: outcome,
+    func saveImage() {
+        guard !sheetOpen, let canvas else { return }
+        canvas.finishCallout()
+        let document = canvas.document
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.png]
+        let date = DateFormatter()
+        date.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
+        let filename = document.title.replacingOccurrences(of: "/", with: " ").replacingOccurrences(of: ":", with: " ")
+        panel.nameFieldStringValue = "\(filename) \(date.string(from: document.created)).png"
+        sheetOpen = true
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { return }
+            sheetOpen = false
+            window.makeFirstResponder(saveButton)
+            guard response == .OK, let url = panel.url else { return }
+            let started = ProcessInfo.processInfo.systemUptime
+            do {
+                guard let image = ScreenshotRenderer.flattened(document), let data = ScreenshotRenderer.png(image) else {
+                    throw CocoaError(.fileWriteUnknown)
+                }
+                try data.write(to: url, options: .atomic)
+                lastShared = document.edits
+                announce("Saved \(image.width) × \(image.height) px as one flat picture")
+                record(.complete, for: document, from: started)
+            } catch {
+                announce("Could not save the PNG. Choose a different location and try again.")
+                record(.issues, for: document, from: started)
+            }
+        }
+    }
+
+    private func announce(_ message: String) {
+        toastText.stringValue = message
+        toast.isHidden = false
+        layoutToast()
+        NSAccessibility.post(element: toastText, notification: .announcementRequested,
+                             userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.medium.rawValue])
+        toastTimer?.cancel()
+        let task = DispatchWorkItem { [weak self] in self?.toast.isHidden = true }
+        toastTimer = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.2, execute: task)
+    }
+
+    private func record(_ outcome: RichFilesDiagnostics.Outcome, for document: ScreenshotDocument, from start: TimeInterval) {
+        RichFilesDiagnostics.record(.glanceCaptureOutput, id: document.id, outcome: outcome,
                                     started: start, total: 1, confirmed: outcome == .complete ? 1 : 0)
+    }
+
+    private func select(_ tool: ScreenshotTool) {
+        guard let canvas else { return }
+        canvas.finishCallout()
+        canvas.selected = nil
+        canvas.tool = tool
+        focusPicture()
+    }
+
+    private func commitCrop() {
+        guard let canvas, let crop = canvas.previewCrop, !crop.isEmpty else { return }
+        canvas.commitCrop()
+        announce("Cropped to \(Int(crop.width)) × \(Int(crop.height)) px. The whole capture is kept; Crop brings it back.")
+        focusPicture()
+    }
+
+    private func setZoom(_ value: ScreenshotCanvas.Zoom) {
+        autoZoom = false
+        zoom = value
+        layoutCanvas()
+        focusPicture()
+    }
+
+    private func changeZoom(direction: Int) {
+        guard let canvas else { return }
+        let current = canvas.factor * window.backingScaleFactor
+        let steps: [CGFloat] = [0.1, 0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.5, 2, 3, 4]
+        let next = direction > 0 ? steps.first { $0 > current + 0.005 } : steps.last { $0 < current - 0.005 }
+        guard let next else { return }
+        setZoom(next == 1 ? .actual : .custom(next))
+    }
+
+    private func handle(_ event: NSEvent) -> Bool {
+        guard !sheetOpen else { return false }
+        let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
+        let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        if canvas?.isTyping == true { return false }
+        if flags == [.command, .option], event.keyCode == 15 {
+            toggleShelf()
+            return true
+        }
+        if shelfOpen, shelf.handle(event) { return true }
+        guard let canvas else { return false }
+        switch (key, flags) {
+        case ("z", .command): canvas.undo(); focusPicture(); return true
+        case ("z", [.command, .shift]): canvas.redo(); focusPicture(); return true
+        case ("c", .command): copyImage(); return true
+        case ("s", .command): saveImage(); return true
+        case ("0", .command): setZoom(.fit); return true
+        case ("1", .command): setZoom(.actual); return true
+        case ("[", []), ("]", []):
+            if let index = entries.firstIndex(where: { $0.id == canvas.document.id }) {
+                let next = index + (key == "[" ? 1 : -1)
+                if entries.indices.contains(next) { open(entries[next]) }
+            }
+            return true
+        default: break
+        }
+        guard flags.isEmpty || flags == .shift else { return false }
+        if let tool = ScreenshotTool.allCases.first(where: { $0.key == key }) { select(tool); return true }
+        guard window.firstResponder === canvas else { return false }
+        let step: CGFloat = flags.contains(.shift) ? 10 : 1
+        switch event.keyCode {
+        case 123 where canvas.selectedMark != nil || canvas.previewCrop != nil: canvas.nudge(dx: -step, dy: 0)
+        case 124 where canvas.selectedMark != nil || canvas.previewCrop != nil: canvas.nudge(dx: step, dy: 0)
+        case 125 where canvas.selectedMark != nil || canvas.previewCrop != nil: canvas.nudge(dx: 0, dy: step)
+        case 126 where canvas.selectedMark != nil || canvas.previewCrop != nil: canvas.nudge(dx: 0, dy: -step)
+        case 48 where canvas.previewCrop == nil && !canvas.document.edits.marks.isEmpty:
+            canvas.selectNext(backwards: flags.contains(.shift))
+        case 51, 117: canvas.deleteSelected()
+        case 53:
+            if canvas.previewCrop != nil { canvas.cancelCrop() }
+            else { canvas.selected = nil; canvas.refresh() }
+        case 36, 76:
+            if canvas.previewCrop != nil { commitCrop() }
+            else { canvas.startCallout() }
+        default: return false
+        }
+        return true
+    }
+
+    private func refresh() {
+        let palette = ScreenshotEditorPalette(root)
+        name.textColor = palette.ink
+        meta.textColor = palette.muted
+        edited.textColor = palette.gold
+        privacy.textColor = palette.muted
+        inspection.textColor = palette.ink
+        hint.textColor = palette.muted
+        emptyTitle.textColor = palette.ink
+        emptyMessage.textColor = palette.muted
+        toastText.textColor = palette.ink
+        zoomReadout.textColor = palette.ink
+        zoomReadout.font = .monospacedDigitSystemFont(ofSize: 16, weight: .semibold)
+        let document = canvas?.document
+        let mark = canvas?.selectedMark
+        let tool = canvas?.tool ?? .select
+        name.stringValue = document?.title ?? "RichGlance"
+        if let document {
+            let time = Calendar.current.isDateInToday(document.created)
+                ? "Today " + document.created.formatted(date: .omitted, time: .shortened)
+                : document.created.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+            meta.stringValue = "\(document.kind.title) · \(time)"
+        } else {
+            meta.stringValue = "Screenshot editor"
+        }
+        let hasEdits = canvas?.hasChanges == true
+        window.isDocumentEdited = hasEdits
+        edited.isHidden = !hasEdits
+        for (item, button) in toolButtons {
+            button.isEnabled = document != nil
+            button.isSelected = document != nil && item == tool
+        }
+        for control in [copyButton, saveButton, zoomInButton, zoomOutButton] + zoomModes.buttons {
+            control.isEnabled = document != nil
+        }
+        undoButton.isEnabled = canvas?.canUndo == true
+        redoButton.isEnabled = canvas?.canRedo == true
+        empty.isHidden = document != nil
+        inspector.isHidden = document == nil
+        scroll.isHidden = document == nil
+        shelf.isHidden = !shelfOpen
+        scrolled()
+        shelfToggle.symbol = "clock"
+        shelfToggle.trailingSymbol = shelfOpen ? "chevron.down" : "chevron.up"
+        shelfToggle.counter = entries.count
+        shelfToggle.title = "Recent Captures"
+        shelfToggle.setAccessibilityValue(shelfOpen ? "Expanded" : "Collapsed")
+        if let document {
+            privacy.stringValue = document.hasRedactions
+                ? "Copy and Save make one flat picture with the redacted pixels replaced. The original stays only on this Mac."
+                : "Copy and Save make one flat picture of what is inside the frame. Your marks and the original stay on this Mac."
+        } else {
+            privacy.stringValue = "Captures stay on this Mac."
+        }
+        privacy.toolTip = privacy.stringValue
+
+        let cropping = canvas?.previewCrop != nil
+        let selectedTool = mark?.tool ?? tool
+        let styled = !cropping && selectedTool != .redact && selectedTool != .select
+        for (button, color) in zip(swatches, ScreenshotInk.allCases) {
+            button.isHidden = !styled
+            button.isSelected = (mark?.ink ?? canvas?.ink) == color
+        }
+        size.isHidden = !styled || selectedTool == .highlight
+        size.selection = (mark?.large ?? canvas?.large) == true ? 1 : 0
+        edit.isHidden = cropping || mark?.tool != .text
+        delete.isHidden = cropping || mark == nil
+        earlier.isHidden = cropping || mark?.tool != .steps
+        later.isHidden = earlier.isHidden
+        acceptCrop.isHidden = !cropping
+        cancelCrop.isHidden = !cropping
+        let steps = document?.edits.marks.filter { $0.tool == .steps }.count ?? 0
+        if let crop = canvas?.previewCrop {
+            inspection.stringValue = "Crop · \(Int(crop.width)) × \(Int(crop.height)) px"
+            hint.stringValue = "· drag the handles, then press Return"
+            acceptCrop.isEnabled = !crop.isEmpty
+        } else if let mark {
+            hint.stringValue = ""
+            if let index = document?.edits.number(for: mark) {
+                inspection.stringValue = "Step \(index) of \(steps)"
+                earlier.isEnabled = index > 1
+                later.isEnabled = index < steps
+            } else if mark.tool == .redact {
+                inspection.stringValue = "Redaction · \(Int(mark.rect.integral.width)) × \(Int(mark.rect.integral.height)) px"
+                hint.stringValue = "· resize it until nothing shows"
+            } else {
+                inspection.stringValue = mark.tool == .text ? "Text callout" : mark.tool.title
+            }
+        } else {
+            inspection.stringValue = tool.title
+            let instructions: String
+            switch tool {
+            case .select: instructions = "click a mark to choose it, drag it to move it"
+            case .arrow: instructions = "drag from the tail to the point"
+            case .text: instructions = "click to add a callout, then type"
+            case .box: instructions = "drag around what you want to show"
+            case .highlight: instructions = "drag across what you want to highlight"
+            case .steps: instructions = "click to place step \(steps + 1)"
+            case .redact: instructions = "drag over what must not be seen"
+            case .crop: instructions = "drag the handles, then press Return"
+            }
+            hint.stringValue = "· " + instructions
+        }
+        layout()
+    }
+
+    private func layout() {
+        let width = root.bounds.width, height = root.bounds.height
+        guard width > 0, height > 246 else { return }
+        let shelfHeight: CGFloat = shelfOpen ? 142 : 0
+        let workHeight = height - 58 - 46 - shelfHeight
+        titleBar.frame = CGRect(x: 0, y: 0, width: width, height: 58)
+        rail.frame = CGRect(x: 0, y: 58, width: 92, height: workHeight)
+        work.frame = CGRect(x: 92, y: 58, width: width - 92, height: workHeight)
+        bottom.frame = CGRect(x: 0, y: work.frame.maxY, width: width, height: 46)
+        shelf.frame = CGRect(x: 0, y: bottom.frame.maxY, width: width, height: shelfHeight)
+        layoutTitle(width: width)
+        layoutBottom(width: width)
+        titleRule.frame = CGRect(x: 0, y: 57, width: width, height: 1)
+        titleDivider.frame = CGRect(x: saveButton.frame.minX - 8, y: 16, width: 1, height: 26)
+        railRule.frame = CGRect(x: 91, y: 0, width: 1, height: workHeight)
+        bottomRule.frame = CGRect(x: 0, y: 0, width: width, height: 1)
+        let tile = min(58, (workHeight - 35) / 8)
+        for (index, tool) in ScreenshotTool.allCases.enumerated() {
+            toolButtons[tool]?.frame = CGRect(x: 8, y: 7 + CGFloat(index) * (tile + 2) + (index == 7 ? 7 : 0),
+                                              width: 76, height: tile)
+        }
+        cropRule.frame = CGRect(x: 14, y: (toolButtons[.crop]?.frame.minY ?? 0) - 4, width: 64, height: 1)
+        layoutInspector()
+        let y = inspector.isHidden ? 0 : inspector.frame.maxY + 4
+        scroll.frame = CGRect(x: 0, y: y, width: work.bounds.width, height: max(0, workHeight - y))
+        empty.frame = work.bounds
+        layoutEmpty()
+        reveal.frame = CGRect(x: max(4, work.bounds.width - reveal.naturalWidth() - 20),
+                              y: y + 9, width: reveal.naturalWidth(), height: 34)
+        layoutToast()
+        layoutCanvas()
+    }
+
+    private func layoutTitle(width: CGFloat) {
+        let narrow = width <= 900
+        newCapture.iconOnly = narrow
+        saveButton.keyHint = narrow ? nil : "⌘S"
+        copyButton.keyHint = narrow ? nil : "⌘C"
+        newCapture.frame = CGRect(x: 87, y: 10, width: newCapture.naturalWidth(), height: 38)
+        var right = width - 12
+        for button in [copyButton, saveButton, redoButton, undoButton] {
+            right -= button.naturalWidth()
+            button.frame = CGRect(x: right, y: 9, width: button.naturalWidth(), height: 40)
+            right -= button === saveButton ? 17 : 8
+        }
+        let left = newCapture.frame.maxX + 10
+        let total = max(0, right - left)
+        let editedWidth: CGFloat = edited.isHidden ? 0 : labelWidth(edited)
+        meta.isHidden = narrow
+        let metaWidth = narrow ? 0 : min(labelWidth(meta), total * 0.43)
+        let nameWidth = min(labelWidth(name), max(0, total - editedWidth - metaWidth))
+        let x = narrow ? left : left + max(0, (total - nameWidth - metaWidth - editedWidth) / 2)
+        name.frame = CGRect(x: x, y: 19, width: nameWidth, height: 22)
+        name.toolTip = name.stringValue
+        meta.frame = CGRect(x: name.frame.maxX + 1, y: 19, width: metaWidth, height: 22)
+        edited.frame = CGRect(x: meta.frame.maxX, y: 19, width: editedWidth, height: 22)
+    }
+
+    private func layoutBottom(width: CGFloat) {
+        shelfToggle.frame = CGRect(x: 10, y: 6, width: shelfToggle.naturalWidth(), height: 34)
+        zoomInButton.frame = CGRect(x: width - 42, y: 7, width: 32, height: 32)
+        zoomReadout.frame = CGRect(x: width - 111, y: 13, width: 64, height: 22)
+        zoomReadout.alignment = .center
+        zoomOutButton.frame = CGRect(x: width - 147, y: 7, width: 32, height: 32)
+        zoomModes.frame = CGRect(x: width - 263, y: 5, width: 110, height: 36)
+        openNewCapture.isHidden = pendingCaptures.isEmpty
+        let nextX = shelfToggle.frame.maxX + 8
+        let nextWidth = min(openNewCapture.naturalWidth(), max(0, zoomModes.frame.minX - nextX - 6))
+        openNewCapture.frame = CGRect(x: nextX, y: 6, width: nextWidth, height: 34)
+        let privacyX = (openNewCapture.isHidden ? shelfToggle.frame.maxX : openNewCapture.frame.maxX) + 14
+        privacy.isHidden = width <= 900
+        privacy.frame = CGRect(x: privacyX, y: 13, width: max(0, width - 271 - privacyX), height: 22)
+    }
+
+    private func labelWidth(_ field: NSTextField) -> CGFloat {
+        let font = field.font ?? .systemFont(ofSize: 16)
+        return ceil((field.stringValue as NSString).size(withAttributes: [.font: font]).width) + 12
+    }
+
+    private func layoutInspector() {
+        guard !inspector.isHidden else { return }
+        let available = work.bounds.width - 28
+        hint.isHidden = work.bounds.width <= 700 || hint.stringValue.isEmpty
+        for button in [edit, delete, cancelCrop, acceptCrop] {
+            if work.bounds.width <= 700 { button.keyHint = nil }
+        }
+        if work.bounds.width > 700 {
+            edit.keyHint = "↩"; delete.keyHint = "⌫"; cancelCrop.keyHint = "esc"; acceptCrop.keyHint = "↩"
+        }
+
+        var groups: [[(NSView, CGFloat)]] = [[(inspection, labelWidth(inspection))]]
+        if !hint.isHidden { groups[0].append((hint, labelWidth(hint))) }
+        let colors = swatches.filter { !$0.isHidden }.map { ($0 as NSView, CGFloat(34)) }
+        if !colors.isEmpty { groups.append(colors) }
+        if !size.isHidden { groups.append([(size, size.naturalWidth)]) }
+        for button in [earlier, later, edit, delete, cancelCrop, acceptCrop] where !button.isHidden {
+            groups.append([(button, button.naturalWidth())])
+        }
+        let padding: CGFloat = 10
+        var x = padding, y: CGFloat = 6, right: CGFloat = 0
+        for group in groups {
+            let needed = group.reduce(CGFloat(0)) { $0 + $1.1 + 4 } - 4
+            if x > padding, x + needed + padding > available {
+                x = padding
+                y += 40
+            }
+            for (view, width) in group {
+                let isLabel = view is NSTextField
+                view.frame = CGRect(x: x, y: y + (isLabel ? 7 : 0),
+                                    width: min(width, max(0, available - x - padding)), height: isLabel ? 21 : 34)
+                right = max(right, view.frame.maxX)
+                x += width + 4
+            }
+            x += 6
+        }
+        let total = min(available, right + padding)
+        inspector.frame = CGRect(x: (work.bounds.width - total) / 2, y: 10, width: total, height: y + 40)
+    }
+
+    private func layoutEmpty() {
+        let center = CGPoint(x: empty.bounds.midX, y: empty.bounds.midY)
+        let width = max(1, min(520, empty.bounds.width - 32))
+        emptyIcon.frame = CGRect(x: center.x - 42, y: max(6, center.y - 129), width: 84, height: 84)
+        emptyTitle.frame = CGRect(x: center.x - width / 2, y: emptyIcon.frame.maxY + 12, width: width, height: 45)
+        emptyMessage.frame = CGRect(x: center.x - width / 2, y: emptyTitle.frame.maxY + 5, width: width, height: 46)
+        captureShortcut.stringValue = shortcutHint.map { "or press \($0) in any app" } ?? ""
+        captureShortcut.textColor = ScreenshotEditorPalette(empty).muted
+        let hintWidth = captureShortcut.intrinsicContentSize.width
+        let showShortcut = shortcutHint != nil && width >= hintWidth + 146
+        captureShortcut.isHidden = !showShortcut
+        let x = center.x - (showShortcut ? (116 + 14 + hintWidth) / 2 : 58)
+        let y = emptyMessage.frame.maxY + 12
+        emptyCapture.frame = CGRect(x: x, y: y, width: 116, height: 40)
+        captureShortcut.frame = CGRect(x: x + 130, y: y + 10, width: hintWidth + 4, height: 22)
+    }
+
+    private func layoutToast() {
+        let width = max(1, min(work.bounds.width - 24, toastText.intrinsicContentSize.width + 44))
+        toast.frame = CGRect(x: (work.bounds.width - width) / 2, y: work.bounds.height - 62, width: width, height: 44)
+        toastText.frame = CGRect(x: 21, y: 12, width: width - 41, height: 21)
+    }
+
+    private func layoutCanvas() {
+        guard let canvas, scroll.contentSize != .zero else {
+            zoomReadout.stringValue = ""
+            return
+        }
+        if autoZoom {
+            let area = canvas.tool == .crop ? canvas.document.bounds : canvas.document.crop
+            if area.height > 2.2 * area.width {
+                let width = max(1, scroll.contentSize.width - 78)
+                let ratio = width * window.backingScaleFactor / area.width
+                zoom = ratio >= 1 ? .actual : .custom(ratio)
+            } else {
+                zoom = .fit
+            }
+        }
+        canvas.layoutImage(in: scroll.contentSize, zoom: zoom)
+        if case .fit = zoom { zoomModes.selection = 0 }
+        else if case .actual = zoom { zoomModes.selection = 1 }
+        else { zoomModes.selection = -1 }
+        zoomReadout.stringValue = "\(Int((canvas.factor * window.backingScaleFactor * 100).rounded()))%"
+        scrolled()
+    }
+
+    @objc private func scrolled() { reveal.isHidden = canvas?.selectionIsOffscreen != true }
+}
+
+
+@MainActor
+private enum CaptureShortcutHint {
+    private struct Preference: Decodable {
+        struct Shortcut: Decodable {
+            let code: String
+            let control, option, shift, command: Bool
+
+            var label: String {
+                let mods = (control ? "⌃" : "") + (option ? "⌥" : "") + (shift ? "⇧" : "") + (command ? "⌘" : "")
+                let key = code.hasPrefix("Key") ? String(code.dropFirst(3))
+                    : code.hasPrefix("Digit") ? String(code.dropFirst(5)) : code
+                return mods + key
+            }
+        }
+        let enabled: Bool
+        let shortcut: Shortcut
+    }
+
+    static func current() -> String? {
+        guard !NSRunningApplication.runningApplications(withBundleIdentifier: "com.richos.app").isEmpty,
+              let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first,
+              let bytes = try? Data(contentsOf: support.appendingPathComponent("com.richos.app/richglance-shortcut.json")),
+              let preference = try? JSONDecoder().decode(Preference.self, from: bytes), preference.enabled else { return nil }
+        return preference.shortcut.label
     }
 }

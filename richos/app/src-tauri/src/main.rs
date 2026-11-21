@@ -780,6 +780,10 @@ impl richos_core::work_host::WorkNotifier for WorkNotice {
     }
 
 
+    fn assignment_activity_changed(&self) {
+        drop(self.app.emit("rich://assignment-activity-changed", ()));
+    }
+
     /// **§2.4a — the settle-while-closed end state.** The last registered assignment has
     /// ended and no window is open, so the app quits itself.
     ///
@@ -1298,7 +1302,7 @@ struct AppState {
     /// Behind its own mutex and NOT inside `config` for the reason `config.rs`'s own first
     /// paragraph gives: that file holds mutable point-in-time preference, and this is an
     /// append-only event log. They share a directory and a durability posture, nothing else.
-    launch: Mutex<LaunchStore>,
+    launch: Arc<Mutex<LaunchStore>>,
     /// WHERE HIS MEMORY IS, AND WHETHER THIS INSTALL CAN READ IT (`memory.rs`).
     ///
     /// Behind its own mutex and NOT the spine's, for the fourth time and the same reason:
@@ -2590,6 +2594,30 @@ fn install_correction_desk(
     Some(desk)
 }
 
+#[cfg(target_os = "macos")]
+fn start_window_services(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    fn start(app: &AppHandle, main: objc2::MainThreadMarker) -> Result<(), String> {
+        cleaner_host::start(app, main)?;
+        cleaner_service::register(app, main)
+    }
+
+    // The usual setup hook is already on AppKit's thread. With a native opening,
+    // setup runs on a worker. Only the worker waits for this piece of setup.
+    if let Some(main) = objc2::MainThreadMarker::new() {
+        return Ok(start(app, main)?);
+    }
+
+    let handle = app.clone();
+    let (finished, ready) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let result = objc2::MainThreadMarker::new()
+            .ok_or_else(|| "Window services require the main thread".to_string())
+            .and_then(|main| start(&handle, main));
+        drop(finished.send(result));
+    })?;
+    Ok(ready.recv()??)
+}
+
 fn main() {
     if std::env::args().nth(1).as_deref() == Some(richos_core::quota::terminal::HEADLESS_PROTOCOL) {
         std::process::exit(richos_core::quota::terminal::run(std::env::args().skip(2).collect()));
@@ -3134,6 +3162,12 @@ fn main() {
             let displays = read_displays(app.handle());
             let geometry_path = data_dir.join("window.json");
             let mut saved = window_geometry::GeometryStore::new(&geometry_path).load();
+            // The selected native opening can present as soon as AppKit regains control.
+            // Its Home page still needs all the state installed by the rest of setup.
+            #[cfg(target_os = "macos")]
+            let mut native_startup_complete = None;
+            #[cfg(not(target_os = "macos"))]
+            let native_startup_complete: Option<tokio::sync::oneshot::Sender<()>> = None;
             for window_config in &window_configs {
                 let kind = launch_store.next_window_kind();
                 let preference = window_geometry::Preference {
@@ -3152,10 +3186,10 @@ fn main() {
                 let window_splash = splash.as_ref().filter(|_| kind == LaunchKind::Fresh);
                 #[cfg(target_os = "macos")]
                 if let Some((pick, worker)) = window_splash.and_then(|pick| pack.take().map(|worker| (pick, worker))) {
-                    start_native_window(
+                    native_startup_complete = Some(start_native_window(
                         app.handle(), window_config, placement, geometry_path.clone(), start_ordinal,
                         NativeOpening { pick, worker, bar: native_bar }, openings_record.clone(),
-                    )?;
+                    )?);
                     continue;
                 }
                 let mut builder = tauri::WebviewWindowBuilder::from_config(app.handle(), window_config)?
@@ -3288,1116 +3322,1147 @@ fn main() {
                 start_ordinal.map(|n| n.to_string()).unwrap_or_else(|| "-".to_string()),
                 window_configs.len()
             );
-            // What waits for the page starts at the latest 5 s after the first frame, and the
-            // launch line is written then if the page never reported.
-            first_frame::arm_ceiling(app.handle().clone(), || launch_timing::write_line(false));
-            // WHAT USED TO START BEFORE THE WINDOW, NOW STARTED WHEN THE PAGE TAKES OVER (rule 3):
-            // each one starts a thread that competes for the processor in the first fraction of
-            // a second.
-            first_frame::after_page(app.handle(), || {
-                // The user's terminal environment, read once from the login shell for every
-                // lease (build plan item 4), so the first lease does not wait for it.
-                richos_core::login_environment::warm();
-                // Synthesis is independent of recognition and video transcription, and runs
-                // even when no speech model is installed yet.
-                if updates::selftest_mode().is_none() {
-                    voice_provision::fetch_rich_voice_in_background();
+            // A clean quit can arrive before the native opening has a Home page or AppState.
+            let launch_store = Arc::new(Mutex::new(launch_store));
+            app.manage(Arc::clone(&launch_store));
+
+            let finish_startup = move |app: &AppHandle| -> Result<(), Box<dyn std::error::Error>> {
+                // What waits for the page starts at the latest 5 s after the first frame, and the
+                // launch line is written then if the page never reported.
+                first_frame::arm_ceiling(app.clone(), || launch_timing::write_line(false));
+                // WHAT USED TO START BEFORE THE WINDOW, NOW STARTED WHEN THE PAGE TAKES OVER (rule 3):
+                // each one starts a thread that competes for the processor in the first fraction of
+                // a second.
+                first_frame::after_page(app, || {
+                    // The user's terminal environment, read once from the login shell for every
+                    // lease (build plan item 4), so the first lease does not wait for it.
+                    richos_core::login_environment::warm();
+                    // Synthesis is independent of recognition and video transcription, and runs
+                    // even when no speech model is installed yet.
+                    if updates::selftest_mode().is_none() {
+                        voice_provision::fetch_rich_voice_in_background();
+                    }
+                    richdoctor_install::start();
+                });
+                {
+                    let sampler_app = app.clone();
+                    let engine_state = data_dir.join("engine-state");
+                    first_frame::after_page(app, move || {
+                        match richos_core::system_resources::Monitor::start(&engine_state) {
+                            Ok(monitor) => {
+                                if let Some(slot) = sampler_app.try_state::<ResourceMonitor>() {
+                                    *slot.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(monitor);
+                                }
+                            }
+                            Err(error) => eprintln!("[richos] resources unavailable: {error}"),
+                        }
+                    });
                 }
-                richdoctor_install::start();
-            });
-            {
-                let sampler_app = app.handle().clone();
-                let engine_state = data_dir.join("engine-state");
-                first_frame::after_page(app.handle(), move || {
-                    match richos_core::system_resources::Monitor::start(&engine_state) {
-                        Ok(monitor) => {
-                            if let Some(slot) = sampler_app.try_state::<ResourceMonitor>() {
-                                *slot.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(monitor);
+                let ledger_path = data_dir.join("conversation-ledger.jsonl");
+                let checkpoint_path = data_dir.join("swearmeter-cache");
+                let cards_path = data_dir.join("engine-state/questions/store.json");
+                let checkpoint = richos_core::swearmeter_checkpoint::Checkpoint::load(&checkpoint_path, &ledger_path, &cards_path);
+                let cached_card_counts = checkpoint.as_ref().map(|cache| Arc::new(cache.cards.clone()));
+                let cached_ledger_source = checkpoint.as_ref().map(|cache| cache.ledger_source.clone());
+                // The existing mandatory card-history read can run beside ledger replay.
+                // Its file generation is checked again at the original input-order boundary.
+                let card_counts_load = {
+                    let root = data_dir.join("engine-state");
+                    let cached = cached_card_counts.clone();
+                    std::thread::Builder::new().name("richos-card-history".into()).spawn(move || {
+                        richos_core::questions::Store::new(root).swearmeter_startup_cached(cached.as_deref())
+                    }).ok()
+                };
+                let ledger = Ledger::open_cached(&ledger_path, checkpoint.map(|cache| (cache.ledger_source, cache.ledger))).expect("open ledger");
+
+                // WHAT DID NOT LOAD, ON THE BOOT LINE, BEFORE ANYTHING ELSE USES THE LEDGER.
+                //
+                // `Ledger::replay` prints a line per skipped record and a summary of its own
+                // (`report_skipped`) — that is the operator's account. This is the CEO's, in
+                // the words the window will render, so an operator reading a boot log and a CEO
+                // reading his own screen are told the SAME thing rather than two versions of it.
+                //
+                // The `expect` above is the reason this matters at all: until 2026-09-05 a
+                // single record this build could not parse came out of `Ledger::open` as `Err`
+                // and this line panicked inside the Tauri setup hook — the window never opened.
+                // The reader survives such a record now; this is what stops it doing so quietly.
+                let history_health = ledger.history_health();
+                if !history_health.is_clean() {
+                    eprintln!("[richos] {}", history_health.headline);
+                    eprintln!("[richos] {}", history_health.detail);
+                }
+
+                let mut spine = Spine::new(ledger);
+
+                // Attach the live UI sink: streamed reply deltas + turn-state events flow to
+                // the webview via Tauri events (see app/STREAMING.md for the contract).
+                spine.set_observer(Box::new(TauriEmitter { app: app.clone() }));
+                // Haiku's title for a new conversation (`thread_title.rs`) arrives here, off the
+                // spine, after the first message. The sidebar is told to read its rows again, and a
+                // connected phone gets the list with the new name on its live stream.
+                let titles = app.clone();
+                spine.set_title_observer(Arc::new(move |thread_id: &str, title: &str| {
+                    let Some(state) = titles.try_state::<AppState>() else { return };
+                    if show_haiku_title(&state.nav, thread_id, title) {
+                        let summary = serde_json::json!({ "threadId": thread_id });
+                        if let Err(e) = titles.emit(richos_core::live::EVENT_THREAD_SUMMARY_UPDATED, summary) {
+                            eprintln!("[richos] the sidebar was not told about the new title ({e})");
+                        }
+                        tell_the_phone_the_threads(&titles);
+                    }
+                }));
+
+                // Durable CEO preferences (company name, assertiveness dial, the raw-retention
+                // window) — same app data dir as the ledger, same durability posture, survives
+                // restart.
+                //
+                // OPENED HERE, ahead of the machinery block below, rather than where it used to
+                // sit fifty lines further down: boot eviction now reads its window out of this
+                // store (§7.2), and a store opened after the eviction it governs would leave the
+                // CEO's setting unread for exactly the one moment it matters.
+                let config_path = data_dir.join("config.json");
+                // ConfigStore::open never fails on a corrupt/missing file (it degrades to
+                // defaults internally — see config.rs) — expect() here only guards the
+                // genuinely-unexpected io error creating the parent dir.
+                let config = ConfigStore::open(&config_path).expect("open config store");
+
+                // =====================================================================
+                // WHICH COMPANY THIS COPY OF RICH WORKS FOR — resolved HERE, and here for
+                // one reason: step 2 of the order is the saved choice, and the saved
+                // choice lives in the store opened on the line above.
+                // =====================================================================
+                //
+                // It used to run fifty lines further up, before the config file was open,
+                // which is exactly why there were only two steps and why a Finder launch
+                // had no route to an entity at all. A resolver that runs before the store
+                // holding the answer cannot read the answer.
+                //
+                // A thread requires an entity home, so boot still conjures none out of
+                // nowhere. If an entity resolves, the default thread is created/activated
+                // in it; if none does, the app launches with NO active context, every send
+                // is still refused — and `entity_choice`/`choose_entity` are how the CEO
+                // reaches one from inside the window, which is the part that was missing.
+                // =====================================================================
+                // WHICH COMPANIES THIS COPY OF RICH KNOWS — read from disk, not compiled in
+                // =====================================================================
+                //
+                // Until 2026-09-04 this was `EntityRegistry::ceos_companies()`: a `const` table
+                // of one man's six companies, bound to absolute roots under his own home
+                // directory, shipped inside every binary. On his machine it worked. On anybody
+                // else's it published a private list into the company picker AND locked the app,
+                // because no path a second person works in was a registered root.
+                //
+                // It is his own file now. Absent is the ordinary first-run state and yields an
+                // EMPTY registry, which resolves nothing, refuses every root, and makes the app
+                // ASK — the same shape `entity_choice`'s `chosen: None` already had.
+                let registry_path = richos_core::entity::entity_registry_path(&data_dir);
+                let mut registry_load = EntityRegistry::load(&registry_path);
+                for note in &registry_load.notes {
+                    eprintln!("[richos] {note}");
+                }
+                // THE NO-ORPHAN MIGRATION, and it runs exactly once per install.
+                //
+                // An install that ran under the compiled-in table has a ledger full of threads
+                // bound to `femcboost`, `richos` and the rest. Those ids stop being registered
+                // the moment the table leaves the binary, and an unregistered id fails every
+                // scoped read and write — the threads would still be on disk and would be
+                // unreachable, which for the person reading the screen is the same thing.
+                //
+                // So the ids that ALREADY OWN RECORDS HERE are restored. That is a fact about
+                // this machine, read off this machine's own ledger, and it is the only thing
+                // asserted: no root is invented, because nothing here knows where those
+                // companies live and a guessed root is a wrong entity waiting to happen.
+                //
+                // It is gated on `Absent` rather than on emptiness: a file the owner has
+                // deliberately emptied is an answer, and re-seeding it would overwrite him.
+                if registry_load.source == RegistrySource::Absent {
+                    let existing = entity_ids_already_in_the_ledger(&spine);
+                    if !existing.is_empty() {
+                        let migrated = EntityRegistry::from_existing_ids(&existing);
+                        match migrated.save(&registry_path) {
+                            Ok(()) => {
+                                eprintln!(
+                                    "[richos] company registry: this install already had threads under \
+                                     {} compan(ies) ({}). They have been written to {} so they keep \
+                                     resolving. No folder was guessed for any of them — open the \
+                                     company settings to add one.",
+                                    migrated.len(),
+                                    migrated.entities().iter().map(|e| e.id.to_string()).collect::<Vec<_>>().join(", "),
+                                    registry_path.display()
+                                );
+                                registry_load = EntityRegistry::load(&registry_path);
+                            }
+                            // A FAILED MIGRATION IS NOT A FAILED BOOT. The app comes up with an
+                            // empty registry and asks, which is recoverable; refusing to start
+                            // would not be.
+                            Err(e) => eprintln!(
+                                "[richos] company registry: could not write {} ({e}). Existing threads \
+                                 will not resolve until a company is registered in the window.",
+                                registry_path.display()
+                            ),
+                        }
+                    }
+                }
+                let registry = registry_load.registry.clone();
+                eprintln!(
+                    "[richos] company registry: {} compan(ies), {} ({})",
+                    registry.len(),
+                    registry_path.display(),
+                    registry_load.source.as_str()
+                );
+                spine.set_entity_registry(registry.clone());
+
+                // THE CENTRAL FOLDER AND THE ONBOARDING RECORD — the two halves of `onboarding.rs`.
+                //
+                // This is the caller the onboarding document says does not exist. Its whole finding
+                // is that `engine/CLAUDE.md.template:25` carries a correct instruction in a file
+                // nothing renders, and that `provision-claude-md.sh` has a test suite and no caller;
+                // a company layer wired to nothing would be the third instance of the same defect in
+                // the same evening.
+                //
+                // The central root is REPORTED, never created. `~/myrichos` and everything under it
+                // belong to the central-folder work, and an app that helpfully created its own
+                // source could never report the source missing — which is exactly how this machine
+                // ended up with four `corpus.*` symlinks pointing at a directory that is not there
+                // (`richos-central-folder-2026-09-06.md` §1.3).
+                match richos_core::company::install_central_root() {
+                    Some(root) => {
+                        eprintln!(
+                            "[richos] central folder: {} ({})",
+                            root.display(),
+                            if root.is_dir() { "present" } else { "NOT THERE — no company has anything on file" }
+                        );
+                        spine.set_central_root(root);
+                    }
+                    None => eprintln!("[richos] central folder: no home directory — no company layer this launch"),
+                }
+                spine.set_onboarding_record(richos_core::onboarding::record_path(&data_dir));
+
+                let boot = boot_entity(&registry, &config);
+                match &boot.entity {
+                    Some(entity) => {
+                        eprintln!("[richos] company: {entity} (via {})", boot.source.map(|s| s.describe()).unwrap_or("resolution"));
+                        let launch_binding = open_launch_context(&mut spine, entity);
+                        if let Err(error) = spine.migrate_legacy_onboarding_declination() {
+                            eprintln!("[richos] onboarding answer migration failed: {error}");
+                        }
+                        // WHAT THIS LAUNCH WILL ACTUALLY DO ABOUT ONBOARDING, said out loud.
+                        //
+                        // Every state prints, including the good one, for the reason the lease line
+                        // above it prints its success: before that line a working boot was silent
+                        // and a reader had to infer it from a failure line not appearing. A CEO who
+                        // will never be asked about his business is the single failure this work
+                        // exists to remove, and a boot that says nothing about it cannot be checked.
+                        match &launch_binding {
+                            Some(binding) => eprintln!("[richos] {}", spine.describe_onboarding(binding)),
+                            None => eprintln!("[richos] launch opens in no conversation; he picks one"),
+                        }
+                    }
+                    // THE OPERATOR'S HALF of the same condition. `ENTITY_UNRESOLVED_MESSAGE`
+                    // is written for the CEO and deliberately names no environment variable;
+                    // this line is read by whoever it names, in a terminal, where
+                    // `RICHOS_ENTITY` is the correct and actionable instruction.
+                    //
+                    // IT NO LONGER ENDS THERE, and that is the substantive change: the CEO is
+                    // now asked in the window, so this says what he will see rather than
+                    // implying a terminal is the only way through.
+                    // THE LIST IS DERIVED, NOT TYPED. It was typed, it said "femcboost,
+                    // deeply, prospects or richos", and on 2026-09-01 the registry grew to the
+                    // CEO's real six — at which point a hand-written list becomes an operator
+                    // instruction that omits two of the valid answers and reads as if they are
+                    // invalid. Reading it off the registry is one expression and cannot drift.
+                    // THE OPERATOR'S HALF, and since 2026-09-04 it has two shapes, because
+                    // the condition has two causes and they need different sentences. An install
+                    // with companies registered and none resolved is a CHOICE waiting to be made;
+                    // an install with NO companies registered has nothing to choose between, and
+                    // telling that operator to set `RICHOS_ENTITY` to "one of " an empty list
+                    // would be an instruction he cannot follow.
+                    None if registry.is_empty() => eprintln!(
+                        "[richos] no company is registered on this install yet — RichOS will ask in \
+                         the window and save the company details to {}.",
+                        registry_path.display()
+                    ),
+                    None => eprintln!(
+                        "[richos] choose a company in the window. Available companies: {}.",
+                        registry.entities().iter().map(|e| e.id.to_string()).collect::<Vec<_>>().join(", ")
+                    ),
+                }
+                // ONBOARDING'S OTHER HALF, and it was found by running this rather than by
+                // reading it: with no company resolved, the line inside the arm above never
+                // prints, so a boot said nothing at all about onboarding — which is the exact
+                // silence this work exists to remove, reproduced by the work removing it.
+                //
+                // It is not an error. There is nothing to interview about until he has said
+                // which company this is, and the company sheet asks that before this could
+                // matter (`richos-central-folder-2026-09-06.md` §2.2: the picker writes the row,
+                // the interview writes the row's contents). The boot says so rather than
+                // leaving a reader to work out why a line is missing.
+                if boot.entity.is_none() {
+                    eprintln!(
+                        "[richos] onboarding: no company resolved, so nothing to ask about yet — \
+                         the question comes after he says which company this is"
+                    );
+                }
+
+                // The MACHINERY journal + its live sink (techy-mode design §2.1). Its own
+                // directory beside the ledger and config, per §2.1: NOT loro (it would poison
+                // the context compiler) and NOT the conversation ledger (which replays whole
+                // at every boot, and whose `messages()` is one missing filter away from the
+                // CEO's conversation).
+                //
+                // Retention is attached UNCONDITIONALLY and has no flag gating it (§3.2:
+                // "Routing and retention run ALWAYS"). That is what makes "flip a thread I
+                // already had" possible at all, and it is why this line is here rather than
+                // behind a setting. The accepted cost is ~1-2 MB/day of machinery an owner may
+                // never look at — named as a cost, not hidden.
+                let machinery_root = data_dir.join("machinery");
+                let journal = MachineryJournal::new(&machinery_root);
+                // Tier-B eviction at boot (§2.4), against THE CEO'S OWN WINDOW (§7.2) rather
+                // than against two constants. `raw_retention()` on an install that has never
+                // set it is `RAW_RETENTION_DAYS` / `RAW_MAX_TOTAL_BYTES` — the same 14 days and
+                // 2 GB this line passed before — so nothing about an existing machine changes.
+                // Tier A — the normalized record — is never touched at ANY setting, so an
+                // evicted day still renders its structure, titles, statuses and paths. Boot is
+                // the right moment: it is off the streaming hot path entirely.
+                let evicted = journal.evict_raw_within(richos_core::util::now_millis(), config.raw_retention());
+                if evicted > 0 {
+                    eprintln!("[richos] machinery: evicted {evicted} raw shard(s) past the retention window");
+                }
+                spine.set_machinery_journal(journal);
+                spine.set_machinery_observer(Box::new(TauriMachineryEmitter { app: app.clone() }));
+
+                // THE OUTPUT RECORD (Output side panel PRD §3-§4): `<data>/output/<thread>.jsonl`,
+                // written by witnesses — Rich's own completed write-tool calls live, and at every
+                // turn end the hook's `writes.jsonl` for this lease (a front-desk worker's writes,
+                // the files a command made). The SAME store goes to the work host below.
+                let output_store = richos_core::output::OutputStore::for_data_dir(&data_dir)
+                    .with_scratch(richos_core::output::ScratchRoots::standard())
+                    .with_observer(Arc::new(TauriOutputEmitter { app: app.clone() }));
+                spine.set_output_store(output_store.clone(), Some(data_dir.join("engine-state").join("evidence")));
+
+                // The ADDITIVE §13 family (UX brief slice 3) — see `events.rs`. A THIRD sink
+                // beside the two above, so the four events the shipping UI listens to are
+                // untouched; `crates/richos-core/tests/live_event_tests.rs` asserts their
+                // payloads are byte-identical with and without this line.
+                //
+                // TWO SINKS ON ONE STREAM SINCE THE PHONE CHANNEL (`src/phone/`). `set_live_observer`
+                // takes exactly one observer, so the two are fanned out rather than the spine being
+                // reshaped — and the fan-out hands both the SAME `&LiveEvent`, after the SAME gate, so
+                // the phone can never see anything the calm view cannot. The phone's half is INERT
+                // until he pairs a phone: it drops everything it is given while no listener runs,
+                // which is why it can be installed here, once, rather than reaching into the spine
+                // later (plan §2.5 item 1).
+                let (phone_runtime, phone_emitter) = phone::PhoneRuntime::install(data_dir.clone());
+                spine.set_live_observer(Box::new(phone::stream::FanOutLiveEmitter::new(vec![
+                    Box::new(events::TauriLiveEmitter { app: app.clone() }),
+                    phone_emitter,
+                ])));
+
+                // THE WORKER-LIFECYCLE STREAM (UX §7), 2026-08-29.
+                //
+                // Without this line `Spine::timeline` supplies an EMPTY worker stream and a
+                // delegated `Task` call reaches the CEO as one nameless activity row reading
+                // "Worked" — which is what shipped, and why `TimelineItem::WorkerActivity`
+                // existed, was fully tested, and had never once occurred on the wire.
+                //
+                // `CurrentTeamDir` re-resolves on every read rather than binding a path at boot:
+                // the engine's hooks are snapshotted at SESSION start, so the directory this
+                // machine's current session writes to changes without RichOS relaunching. The
+                // home fallback is deliberately never read — it accumulates across sessions and
+                // cannot be session-scoped (`worker_events.rs`).
+                spine.set_worker_events(WorkerEventsSource::CurrentTeamDir);
+
+                // TIER C — COMPANY MEMORY (continuity §2.1 #8 / §4, open-items 3.5).
+                //
+                // Without this line the seam that has existed since the continuity foundation
+                // stays unset and every re-prime asserts a fresh Rich into existence with no
+                // company memory at all, while the compiler sits complete and versioned one
+                // directory away. That is what shipped, and it is why `LoroContextCompiler`
+                // was fully specified, fully documented and had never once been called.
+                //
+                // Nothing is inferred. `LORO_CORPUS`/`LORO_ROOT` names the corpus and
+                // `RICHOS_LORO_DIR` names the tools; with either unset the app boots with
+                // `LoroTier::NotWired`, which the priming prompt states as a fact about THIS
+                // INSTALL rather than as a claim about what is recorded.
+                //
+                // PROVENANCE. The compiler retains the ITEMS of every accepted slice here, and
+                // the spine reads them when the CEO says a record is wrong — see `belief.rs`.
+                // Without this the loro desk has no proposer, because `propose` takes a record
+                // reference and nothing in the app could supply one honestly.
+                let loro_provenance: SharedSliceProvenance =
+                    std::sync::Arc::new(Mutex::new(SliceProvenance::new()));
+                // RESOLVED FOR A LAUNCH WITH NO TERMINAL, since 2026-09-01. `from_env` is
+                // still the whole of the explicit path and is still exclusive; what changed is
+                // that a Finder launch — launchd's environment, no LORO_* anything — now also
+                // reaches the two per-user pointers an operator can put in place. Measured
+                // before and after on the signed bundle:
+                // `docs/verification/installed-app-2026-09-01/`.
+                // MOVED, UNCHANGED, TO `memory.rs` ON 2026-09-01, and moved for one reason:
+                // first-run provisioning has to run all of it a SECOND time. The CEO answers
+                // "set my memory up", a corpus appears on disk, and the app has to start using
+                // it without being relaunched — so the wiring cannot be a hundred lines that
+                // only exist inside `setup`. Two copies would drift and the drifted one would
+                // be the one he hits.
+                //
+                // BOTH HALVES COME BACK. Until 2026-09-01 this call produced only the READ half
+                // and the correction desk below built its own writer out of the environment,
+                // ninety lines later — which is how a GUI launch came to resolve the CEO's
+                // corpus for reading and nothing at all for writing. `WiredMemory` carries the
+                // writer that the SAME `LoroInstall` produced, so the two cannot disagree.
+                let resolution = resolve_engine();
+                let engine = resolution.dir.clone().unwrap_or_else(|| std::path::PathBuf::from("/nonexistent/richos-engine"));
+                let wired = memory::wire_company_memory(&mut spine, &loro_provenance, &registry, &engine);
+                let memory_status = wired.status;
+                // AND THE RESOLUTION, kept whole. `home_field_data` compiles the home screen's
+                // picture out of this and must not lock the spine to reach it.
+                let loro_install = Arc::new(Mutex::new(wired.install));
+
+                // Attach the compute lease. A boot with no Claude auth, no `claude` binary, or a
+                // binary that rejects our flags does NOT silently degrade: no lease is attached
+                // and EVERY send is refused with `LEASE_UNAVAILABLE_MESSAGE` — a calm,
+                // Rich-voiced "not connected" that the CEO cannot mistake for a working app
+                // (`send_message`, and the voice submit callback, both ask `Spine::has_lease`
+                // at the moment of the send, never a boolean cached here).
+                //
+                // **The DIAGNOSIS is printed verbatim, and that is the loud half §16 demands.**
+                // `NativeError` carries the child's own stderr, so a binary that stopped
+                // accepting `--permission-prompt-tool stdio` announces itself here as
+                // `error: unknown option '--permission-prompt-tool'` rather than as a mystery.
+                // It is not shown to the CEO — a flag name is not CEO copy — but it is the first
+                // thing whoever set RichOS up will read, and the sentence he DOES see points at
+                // exactly that person.
+                // NAMED AT BOOT, ALWAYS. Seven candidates resolve this now (engine.rs), so
+                // "which one answered" is a fact an operator needs and cannot otherwise obtain —
+                // the same reason the success line below names the binary instead of leaving a
+                // working boot silent. When nothing answered, every place looked is printed:
+                // "not found" without the list is what sends someone hunting.
+                // WHICH BUILD IS THIS — first, and on every launch. It is one line and it is the
+                // one a walk, an audit or a bug report needs before any other fact about the
+                // process is worth anything (`engine::source_commit`). Until 2026-09-18 a signed,
+                // notarized candidate carried no commit anywhere in it.
+                eprintln!("[richos] this app: {}", engine::source_commit_note());
+                eprintln!("[richos] engine directory: {}", resolution.describe());
+                if resolution.source.is_none() {
+                    for (source, path) in &resolution.tried {
+                        eprintln!("[richos]   looked in {} ({})", path.display(), source.as_str());
+                    }
+                }
+                // AN ENGINE THAT IS THERE AND IS NOT THIS BUILD'S — one line each, with both
+                // versions in it. Printed whether or not the walk went on to find the right
+                // engine elsewhere: "there is no engine" and "there is an engine and it belongs to
+                // a different release of this app" are different problems with different repairs,
+                // and a rollback produces the second one on a machine where everything else is
+                // healthy (spec point 22).
+                for (source, path, why) in &resolution.rejected {
+                    eprintln!("[richos]   passed over {} ({}) — {why}", path.display(), source.as_str());
+                }
+                // THE ENGINE THE BOOT ACTUALLY FOUND, as opposed to the sentinel above. First-run
+                // setup asks the same question through this value, so it never offers to install
+                // something the boot already resolved — the dogfood checkout being the case that
+                // would otherwise be asked every launch.
+                let boot_engine: Option<PathBuf> =
+                    resolution.source.is_some().then(|| engine.clone());
+                let setup_on_worker = boot_engine.is_some() && !richos_core::setup::engine_update_due(
+                    &richos_core::setup::SetupPaths::from_process(),
+                    richos_core::setup::engine_pin().as_ref(),
+                );
+                // THE CELL THE LEASE FACTORY READS. Shared, so a successful first-run install can
+                // re-point it without a relaunch (`setup_view::run`).
+                let engine_cell: Arc<Mutex<PathBuf>> = Arc::new(Mutex::new(engine.clone()));
+                // RESOLVED OR REFUSED, NEVER SILENTLY DEGRADED — the 2026-09-17 candidate-walk
+                // fix. `resolve_claude_bin` used to fall through to the bare name `claude` here,
+                // which this launch's own boot went on to hand a provider whose `PATH` gets
+                // replaced by `runtime.rs::EngineRuntime::path` (`engine_profile.rs`); a bare name
+                // that PATH can never resolve. The failure then surfaced two turns later,
+                // misclassified by `interruption.rs` as "usually clears on its own" — false for a
+                // binary that was never there. `resolve_claude_bin_checked` names every place
+                // looked when nothing answers, exactly like the "first-run setup" block below.
+                let claude_bin = match resolve_claude_bin_checked() {
+                    Ok(path) => path,
+                    Err(e) => {
+                        eprintln!("[richos] compute connection: {e}");
+                        std::path::PathBuf::from("claude")
+                    }
+                };
+                // THE CELL THE LEASE FACTORY READS, beside `engine_cell` and for the same reason
+                // (see `EngineLeaseFactory`). A successful first-run install rewrites it.
+                let claude_bin_cell: Arc<Mutex<PathBuf>> = Arc::new(Mutex::new(claude_bin.clone()));
+                // Connect on the first accepted request. The spine publishes Working and
+                // installs Stop before spawning, so startup cannot block the window or leave
+                // a CEO staring at an inert application during the CLI handshake.
+                // Attach the rotation/recovery seam REGARDLESS of initial boot success — even
+                // if Claude wasn't signed in at launch, wiring the factory means a later sign-in
+                // + retry (or a crash recovery attempt) has a real respawn path rather than none.
+
+                let quota = Arc::new(richos_core::quota::Service::open_account_wide(&data_dir)?);
+                // THE FIRST READ OF THE WHOLE HISTORY, off the launch path (§118): every account's
+                // transcripts priced once, so the Token spend screen opens on its figure. 9.28 GB took
+                // 15.97 s on the CEO's Mac (2026-10-11); it waits 20 s so the launch has the machine.
+                // A screen opened before it ends says it is counting; later reads take only new lines.
+                let spend_weak = Arc::downgrade(&quota);
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(20));
+                    if let Some(quota) = spend_weak.upgrade() { quota.spend_update(); }
+                });
+                // Read immediately at startup, regardless of the pause switch. Session
+                // starts and account changes wake this same reader. Otherwise its cache
+                // enforces the shared polling cadence, with reset deadlines and error backoff.
+                let quota_weak = Arc::downgrade(&quota);
+                let quota_bin = claude_bin_cell.clone();
+                let quota_app = app.clone();
+                std::thread::spawn(move || {
+                    let mut wait = std::time::Duration::ZERO;
+                    let mut counted: Option<std::time::Instant> = None;
+                    let mut last_fable = None;
+                    loop {
+                        let Some(quota) = quota_weak.upgrade() else { break };
+                        quota.wait_for_refresh(wait);
+                        if quota.is_shutdown() { break; }
+                        // **How many agents are working**, for round 16's "15 agents reading at
+                        // once" and "3 agents are holding their place": the provider's own launch
+                        // rows with no end observed, in every open lease session (the drill chip's
+                        // "N working", summed). Counted here, every 5 seconds, so a turn boundary
+                        // that says a line never takes the work host's locks to count.
+                        if counted.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(5)) {
+                            if let Some(state) = quota_app.try_state::<AppState>() {
+                                let mut sessions: Vec<String> = state.control.lease_sessions().into_iter().chain(state.work.lease_sessions()).collect();
+                                sessions.sort(); sessions.dedup();
+                                let engine_state = state.data_dir.join("engine-state");
+                                quota.set_agents_working(sessions.iter()
+                                    .map(|session| richos_core::app_workers::status(&engine_state, Some(session)).active).sum());
+                                counted = Some(std::time::Instant::now());
                             }
                         }
-                        Err(error) => eprintln!("[richos] resources unavailable: {error}"),
+                        let bin = quota_bin.lock().unwrap().clone();
+                        quota.refresh_in_background(&bin);
+                        // **Fill-first's notices, the moment they are read** (plan §15 answer 9:
+                        // the high-speed alert "at once, in the conversation"). Only when no turn
+                        // holds the spine: a running turn says them at its own end instead
+                        // (`Spine::raise_quota_notices`), and this never waits on one.
+                        if let Some(state) = quota_app.try_state::<AppState>() {
+                            if let Ok(mut spine) = state.spine.try_lock() {
+                                spine.raise_quota_notices(None);
+                            }
+                        }
+                        let current_fable = quota.fable_view();
+                        if last_fable.as_ref() != Some(&current_fable) {
+                            let _sent = quota_app.emit("rich://fable-quota-switch", &current_fable);
+                            last_fable = Some(current_fable);
+                        }
+                        wait = std::time::Duration::from_secs(1);
                     }
                 });
-            }
-            let ledger_path = data_dir.join("conversation-ledger.jsonl");
-            let checkpoint_path = data_dir.join("swearmeter-cache");
-            let cards_path = data_dir.join("engine-state/questions/store.json");
-            let checkpoint = richos_core::swearmeter_checkpoint::Checkpoint::load(&checkpoint_path, &ledger_path, &cards_path);
-            let cached_card_counts = checkpoint.as_ref().map(|cache| Arc::new(cache.cards.clone()));
-            let cached_ledger_source = checkpoint.as_ref().map(|cache| cache.ledger_source.clone());
-            // The existing mandatory card-history read can run beside ledger replay.
-            // Its file generation is checked again at the original input-order boundary.
-            let card_counts_load = {
-                let root = data_dir.join("engine-state");
-                let cached = cached_card_counts.clone();
-                std::thread::Builder::new().name("richos-card-history".into()).spawn(move || {
-                    richos_core::questions::Store::new(root).swearmeter_startup_cached(cached.as_deref())
-                }).ok()
-            };
-            let ledger = Ledger::open_cached(&ledger_path, checkpoint.map(|cache| (cache.ledger_source, cache.ledger))).expect("open ledger");
-
-            // WHAT DID NOT LOAD, ON THE BOOT LINE, BEFORE ANYTHING ELSE USES THE LEDGER.
-            //
-            // `Ledger::replay` prints a line per skipped record and a summary of its own
-            // (`report_skipped`) — that is the operator's account. This is the CEO's, in
-            // the words the window will render, so an operator reading a boot log and a CEO
-            // reading his own screen are told the SAME thing rather than two versions of it.
-            //
-            // The `expect` above is the reason this matters at all: until 2026-09-05 a
-            // single record this build could not parse came out of `Ledger::open` as `Err`
-            // and this line panicked inside the Tauri setup hook — the window never opened.
-            // The reader survives such a record now; this is what stops it doing so quietly.
-            let history_health = ledger.history_health();
-            if !history_health.is_clean() {
-                eprintln!("[richos] {}", history_health.headline);
-                eprintln!("[richos] {}", history_health.detail);
-            }
-
-            let mut spine = Spine::new(ledger);
-
-            // Attach the live UI sink: streamed reply deltas + turn-state events flow to
-            // the webview via Tauri events (see app/STREAMING.md for the contract).
-            spine.set_observer(Box::new(TauriEmitter { app: app.handle().clone() }));
-            // Haiku's title for a new conversation (`thread_title.rs`) arrives here, off the
-            // spine, after the first message. The sidebar is told to read its rows again, and a
-            // connected phone gets the list with the new name on its live stream.
-            let titles = app.handle().clone();
-            spine.set_title_observer(Arc::new(move |thread_id: &str, title: &str| {
-                let Some(state) = titles.try_state::<AppState>() else { return };
-                if show_haiku_title(&state.nav, thread_id, title) {
-                    let summary = serde_json::json!({ "threadId": thread_id });
-                    if let Err(e) = titles.emit(richos_core::live::EVENT_THREAD_SUMMARY_UPDATED, summary) {
-                        eprintln!("[richos] the sidebar was not told about the new title ({e})");
-                    }
-                    tell_the_phone_the_threads(&titles);
-                }
-            }));
-
-            // Durable CEO preferences (company name, assertiveness dial, the raw-retention
-            // window) — same app data dir as the ledger, same durability posture, survives
-            // restart.
-            //
-            // OPENED HERE, ahead of the machinery block below, rather than where it used to
-            // sit fifty lines further down: boot eviction now reads its window out of this
-            // store (§7.2), and a store opened after the eviction it governs would leave the
-            // CEO's setting unread for exactly the one moment it matters.
-            let config_path = data_dir.join("config.json");
-            // ConfigStore::open never fails on a corrupt/missing file (it degrades to
-            // defaults internally — see config.rs) — expect() here only guards the
-            // genuinely-unexpected io error creating the parent dir.
-            let config = ConfigStore::open(&config_path).expect("open config store");
-
-            // =====================================================================
-            // WHICH COMPANY THIS COPY OF RICH WORKS FOR — resolved HERE, and here for
-            // one reason: step 2 of the order is the saved choice, and the saved
-            // choice lives in the store opened on the line above.
-            // =====================================================================
-            //
-            // It used to run fifty lines further up, before the config file was open,
-            // which is exactly why there were only two steps and why a Finder launch
-            // had no route to an entity at all. A resolver that runs before the store
-            // holding the answer cannot read the answer.
-            //
-            // A thread requires an entity home, so boot still conjures none out of
-            // nowhere. If an entity resolves, the default thread is created/activated
-            // in it; if none does, the app launches with NO active context, every send
-            // is still refused — and `entity_choice`/`choose_entity` are how the CEO
-            // reaches one from inside the window, which is the part that was missing.
-            // =====================================================================
-            // WHICH COMPANIES THIS COPY OF RICH KNOWS — read from disk, not compiled in
-            // =====================================================================
-            //
-            // Until 2026-09-04 this was `EntityRegistry::ceos_companies()`: a `const` table
-            // of one man's six companies, bound to absolute roots under his own home
-            // directory, shipped inside every binary. On his machine it worked. On anybody
-            // else's it published a private list into the company picker AND locked the app,
-            // because no path a second person works in was a registered root.
-            //
-            // It is his own file now. Absent is the ordinary first-run state and yields an
-            // EMPTY registry, which resolves nothing, refuses every root, and makes the app
-            // ASK — the same shape `entity_choice`'s `chosen: None` already had.
-            let registry_path = richos_core::entity::entity_registry_path(&data_dir);
-            let mut registry_load = EntityRegistry::load(&registry_path);
-            for note in &registry_load.notes {
-                eprintln!("[richos] {note}");
-            }
-            // THE NO-ORPHAN MIGRATION, and it runs exactly once per install.
-            //
-            // An install that ran under the compiled-in table has a ledger full of threads
-            // bound to `femcboost`, `richos` and the rest. Those ids stop being registered
-            // the moment the table leaves the binary, and an unregistered id fails every
-            // scoped read and write — the threads would still be on disk and would be
-            // unreachable, which for the person reading the screen is the same thing.
-            //
-            // So the ids that ALREADY OWN RECORDS HERE are restored. That is a fact about
-            // this machine, read off this machine's own ledger, and it is the only thing
-            // asserted: no root is invented, because nothing here knows where those
-            // companies live and a guessed root is a wrong entity waiting to happen.
-            //
-            // It is gated on `Absent` rather than on emptiness: a file the owner has
-            // deliberately emptied is an answer, and re-seeding it would overwrite him.
-            if registry_load.source == RegistrySource::Absent {
-                let existing = entity_ids_already_in_the_ledger(&spine);
-                if !existing.is_empty() {
-                    let migrated = EntityRegistry::from_existing_ids(&existing);
-                    match migrated.save(&registry_path) {
-                        Ok(()) => {
-                            eprintln!(
-                                "[richos] company registry: this install already had threads under \
-                                 {} compan(ies) ({}). They have been written to {} so they keep \
-                                 resolving. No folder was guessed for any of them — open the \
-                                 company settings to add one.",
-                                migrated.len(),
-                                migrated.entities().iter().map(|e| e.id.to_string()).collect::<Vec<_>>().join(", "),
-                                registry_path.display()
-                            );
-                            registry_load = EntityRegistry::load(&registry_path);
-                        }
-                        // A FAILED MIGRATION IS NOT A FAILED BOOT. The app comes up with an
-                        // empty registry and asks, which is recoverable; refusing to start
-                        // would not be.
-                        Err(e) => eprintln!(
-                            "[richos] company registry: could not write {} ({e}). Existing threads \
-                             will not resolve until a company is registered in the window.",
-                            registry_path.display()
-                        ),
-                    }
-                }
-            }
-            let registry = registry_load.registry.clone();
-            eprintln!(
-                "[richos] company registry: {} compan(ies), {} ({})",
-                registry.len(),
-                registry_path.display(),
-                registry_load.source.as_str()
-            );
-            spine.set_entity_registry(registry.clone());
-
-            // THE CENTRAL FOLDER AND THE ONBOARDING RECORD — the two halves of `onboarding.rs`.
-            //
-            // This is the caller the onboarding document says does not exist. Its whole finding
-            // is that `engine/CLAUDE.md.template:25` carries a correct instruction in a file
-            // nothing renders, and that `provision-claude-md.sh` has a test suite and no caller;
-            // a company layer wired to nothing would be the third instance of the same defect in
-            // the same evening.
-            //
-            // The central root is REPORTED, never created. `~/myrichos` and everything under it
-            // belong to the central-folder work, and an app that helpfully created its own
-            // source could never report the source missing — which is exactly how this machine
-            // ended up with four `corpus.*` symlinks pointing at a directory that is not there
-            // (`richos-central-folder-2026-09-06.md` §1.3).
-            match richos_core::company::install_central_root() {
-                Some(root) => {
-                    eprintln!(
-                        "[richos] central folder: {} ({})",
-                        root.display(),
-                        if root.is_dir() { "present" } else { "NOT THERE — no company has anything on file" }
-                    );
-                    spine.set_central_root(root);
-                }
-                None => eprintln!("[richos] central folder: no home directory — no company layer this launch"),
-            }
-            spine.set_onboarding_record(richos_core::onboarding::record_path(&data_dir));
-
-            let boot = boot_entity(&registry, &config);
-            match &boot.entity {
-                Some(entity) => {
-                    eprintln!("[richos] company: {entity} (via {})", boot.source.map(|s| s.describe()).unwrap_or("resolution"));
-                    let launch_binding = open_launch_context(&mut spine, entity);
-                    if let Err(error) = spine.migrate_legacy_onboarding_declination() {
-                        eprintln!("[richos] onboarding answer migration failed: {error}");
-                    }
-                    // WHAT THIS LAUNCH WILL ACTUALLY DO ABOUT ONBOARDING, said out loud.
-                    //
-                    // Every state prints, including the good one, for the reason the lease line
-                    // above it prints its success: before that line a working boot was silent
-                    // and a reader had to infer it from a failure line not appearing. A CEO who
-                    // will never be asked about his business is the single failure this work
-                    // exists to remove, and a boot that says nothing about it cannot be checked.
-                    match &launch_binding {
-                        Some(binding) => eprintln!("[richos] {}", spine.describe_onboarding(binding)),
-                        None => eprintln!("[richos] launch opens in no conversation; he picks one"),
-                    }
-                }
-                // THE OPERATOR'S HALF of the same condition. `ENTITY_UNRESOLVED_MESSAGE`
-                // is written for the CEO and deliberately names no environment variable;
-                // this line is read by whoever it names, in a terminal, where
-                // `RICHOS_ENTITY` is the correct and actionable instruction.
-                //
-                // IT NO LONGER ENDS THERE, and that is the substantive change: the CEO is
-                // now asked in the window, so this says what he will see rather than
-                // implying a terminal is the only way through.
-                // THE LIST IS DERIVED, NOT TYPED. It was typed, it said "femcboost,
-                // deeply, prospects or richos", and on 2026-09-01 the registry grew to the
-                // CEO's real six — at which point a hand-written list becomes an operator
-                // instruction that omits two of the valid answers and reads as if they are
-                // invalid. Reading it off the registry is one expression and cannot drift.
-                // THE OPERATOR'S HALF, and since 2026-09-04 it has two shapes, because
-                // the condition has two causes and they need different sentences. An install
-                // with companies registered and none resolved is a CHOICE waiting to be made;
-                // an install with NO companies registered has nothing to choose between, and
-                // telling that operator to set `RICHOS_ENTITY` to "one of " an empty list
-                // would be an instruction he cannot follow.
-                None if registry.is_empty() => eprintln!(
-                    "[richos] no company is registered on this install yet — RichOS will ask in \
-                     the window and save the company details to {}.",
-                    registry_path.display()
-                ),
-                None => eprintln!(
-                    "[richos] choose a company in the window. Available companies: {}.",
-                    registry.entities().iter().map(|e| e.id.to_string()).collect::<Vec<_>>().join(", ")
-                ),
-            }
-            // ONBOARDING'S OTHER HALF, and it was found by running this rather than by
-            // reading it: with no company resolved, the line inside the arm above never
-            // prints, so a boot said nothing at all about onboarding — which is the exact
-            // silence this work exists to remove, reproduced by the work removing it.
-            //
-            // It is not an error. There is nothing to interview about until he has said
-            // which company this is, and the company sheet asks that before this could
-            // matter (`richos-central-folder-2026-09-06.md` §2.2: the picker writes the row,
-            // the interview writes the row's contents). The boot says so rather than
-            // leaving a reader to work out why a line is missing.
-            if boot.entity.is_none() {
-                eprintln!(
-                    "[richos] onboarding: no company resolved, so nothing to ask about yet — \
-                     the question comes after he says which company this is"
+                // Whether THIS launch was told which engine to use. `EnvEngineDir` and
+                // `EnvEngineRoot` are the only two sources that are a statement rather than a
+                // search (`engine.rs` candidates 1 and 2).
+                let explicit_engine = matches!(
+                    resolution.source,
+                    Some(engine::EngineSource::EnvEngineDir) | Some(engine::EngineSource::EnvEngineRoot)
                 );
-            }
-
-            // The MACHINERY journal + its live sink (techy-mode design §2.1). Its own
-            // directory beside the ledger and config, per §2.1: NOT loro (it would poison
-            // the context compiler) and NOT the conversation ledger (which replays whole
-            // at every boot, and whose `messages()` is one missing filter away from the
-            // CEO's conversation).
-            //
-            // Retention is attached UNCONDITIONALLY and has no flag gating it (§3.2:
-            // "Routing and retention run ALWAYS"). That is what makes "flip a thread I
-            // already had" possible at all, and it is why this line is here rather than
-            // behind a setting. The accepted cost is ~1-2 MB/day of machinery an owner may
-            // never look at — named as a cost, not hidden.
-            let machinery_root = data_dir.join("machinery");
-            let journal = MachineryJournal::new(&machinery_root);
-            // Tier-B eviction at boot (§2.4), against THE CEO'S OWN WINDOW (§7.2) rather
-            // than against two constants. `raw_retention()` on an install that has never
-            // set it is `RAW_RETENTION_DAYS` / `RAW_MAX_TOTAL_BYTES` — the same 14 days and
-            // 2 GB this line passed before — so nothing about an existing machine changes.
-            // Tier A — the normalized record — is never touched at ANY setting, so an
-            // evicted day still renders its structure, titles, statuses and paths. Boot is
-            // the right moment: it is off the streaming hot path entirely.
-            let evicted = journal.evict_raw_within(richos_core::util::now_millis(), config.raw_retention());
-            if evicted > 0 {
-                eprintln!("[richos] machinery: evicted {evicted} raw shard(s) past the retention window");
-            }
-            spine.set_machinery_journal(journal);
-            spine.set_machinery_observer(Box::new(TauriMachineryEmitter { app: app.handle().clone() }));
-
-            // THE OUTPUT RECORD (Output side panel PRD §3-§4): `<data>/output/<thread>.jsonl`,
-            // written by witnesses — Rich's own completed write-tool calls live, and at every
-            // turn end the hook's `writes.jsonl` for this lease (a front-desk worker's writes,
-            // the files a command made). The SAME store goes to the work host below.
-            let output_store = richos_core::output::OutputStore::for_data_dir(&data_dir)
-                .with_scratch(richos_core::output::ScratchRoots::standard())
-                .with_observer(Arc::new(TauriOutputEmitter { app: app.handle().clone() }));
-            spine.set_output_store(output_store.clone(), Some(data_dir.join("engine-state").join("evidence")));
-
-            // The ADDITIVE §13 family (UX brief slice 3) — see `events.rs`. A THIRD sink
-            // beside the two above, so the four events the shipping UI listens to are
-            // untouched; `crates/richos-core/tests/live_event_tests.rs` asserts their
-            // payloads are byte-identical with and without this line.
-            //
-            // TWO SINKS ON ONE STREAM SINCE THE PHONE CHANNEL (`src/phone/`). `set_live_observer`
-            // takes exactly one observer, so the two are fanned out rather than the spine being
-            // reshaped — and the fan-out hands both the SAME `&LiveEvent`, after the SAME gate, so
-            // the phone can never see anything the calm view cannot. The phone's half is INERT
-            // until he pairs a phone: it drops everything it is given while no listener runs,
-            // which is why it can be installed here, once, rather than reaching into the spine
-            // later (plan §2.5 item 1).
-            let (phone_runtime, phone_emitter) = phone::PhoneRuntime::install(data_dir.clone());
-            spine.set_live_observer(Box::new(phone::stream::FanOutLiveEmitter::new(vec![
-                Box::new(events::TauriLiveEmitter { app: app.handle().clone() }),
-                phone_emitter,
-            ])));
-
-            // THE WORKER-LIFECYCLE STREAM (UX §7), 2026-08-29.
-            //
-            // Without this line `Spine::timeline` supplies an EMPTY worker stream and a
-            // delegated `Task` call reaches the CEO as one nameless activity row reading
-            // "Worked" — which is what shipped, and why `TimelineItem::WorkerActivity`
-            // existed, was fully tested, and had never once occurred on the wire.
-            //
-            // `CurrentTeamDir` re-resolves on every read rather than binding a path at boot:
-            // the engine's hooks are snapshotted at SESSION start, so the directory this
-            // machine's current session writes to changes without RichOS relaunching. The
-            // home fallback is deliberately never read — it accumulates across sessions and
-            // cannot be session-scoped (`worker_events.rs`).
-            spine.set_worker_events(WorkerEventsSource::CurrentTeamDir);
-
-            // TIER C — COMPANY MEMORY (continuity §2.1 #8 / §4, open-items 3.5).
-            //
-            // Without this line the seam that has existed since the continuity foundation
-            // stays unset and every re-prime asserts a fresh Rich into existence with no
-            // company memory at all, while the compiler sits complete and versioned one
-            // directory away. That is what shipped, and it is why `LoroContextCompiler`
-            // was fully specified, fully documented and had never once been called.
-            //
-            // Nothing is inferred. `LORO_CORPUS`/`LORO_ROOT` names the corpus and
-            // `RICHOS_LORO_DIR` names the tools; with either unset the app boots with
-            // `LoroTier::NotWired`, which the priming prompt states as a fact about THIS
-            // INSTALL rather than as a claim about what is recorded.
-            //
-            // PROVENANCE. The compiler retains the ITEMS of every accepted slice here, and
-            // the spine reads them when the CEO says a record is wrong — see `belief.rs`.
-            // Without this the loro desk has no proposer, because `propose` takes a record
-            // reference and nothing in the app could supply one honestly.
-            let loro_provenance: SharedSliceProvenance =
-                std::sync::Arc::new(Mutex::new(SliceProvenance::new()));
-            // RESOLVED FOR A LAUNCH WITH NO TERMINAL, since 2026-09-01. `from_env` is
-            // still the whole of the explicit path and is still exclusive; what changed is
-            // that a Finder launch — launchd's environment, no LORO_* anything — now also
-            // reaches the two per-user pointers an operator can put in place. Measured
-            // before and after on the signed bundle:
-            // `docs/verification/installed-app-2026-09-01/`.
-            // MOVED, UNCHANGED, TO `memory.rs` ON 2026-09-01, and moved for one reason:
-            // first-run provisioning has to run all of it a SECOND time. The CEO answers
-            // "set my memory up", a corpus appears on disk, and the app has to start using
-            // it without being relaunched — so the wiring cannot be a hundred lines that
-            // only exist inside `setup`. Two copies would drift and the drifted one would
-            // be the one he hits.
-            //
-            // BOTH HALVES COME BACK. Until 2026-09-01 this call produced only the READ half
-            // and the correction desk below built its own writer out of the environment,
-            // ninety lines later — which is how a GUI launch came to resolve the CEO's
-            // corpus for reading and nothing at all for writing. `WiredMemory` carries the
-            // writer that the SAME `LoroInstall` produced, so the two cannot disagree.
-            let resolution = resolve_engine();
-            let engine = resolution.dir.clone().unwrap_or_else(|| std::path::PathBuf::from("/nonexistent/richos-engine"));
-            let wired = memory::wire_company_memory(&mut spine, &loro_provenance, &registry, &engine);
-            let memory_status = wired.status;
-            // AND THE RESOLUTION, kept whole. `home_field_data` compiles the home screen's
-            // picture out of this and must not lock the spine to reach it.
-            let loro_install = Arc::new(Mutex::new(wired.install));
-
-            // Attach the compute lease. A boot with no Claude auth, no `claude` binary, or a
-            // binary that rejects our flags does NOT silently degrade: no lease is attached
-            // and EVERY send is refused with `LEASE_UNAVAILABLE_MESSAGE` — a calm,
-            // Rich-voiced "not connected" that the CEO cannot mistake for a working app
-            // (`send_message`, and the voice submit callback, both ask `Spine::has_lease`
-            // at the moment of the send, never a boolean cached here).
-            //
-            // **The DIAGNOSIS is printed verbatim, and that is the loud half §16 demands.**
-            // `NativeError` carries the child's own stderr, so a binary that stopped
-            // accepting `--permission-prompt-tool stdio` announces itself here as
-            // `error: unknown option '--permission-prompt-tool'` rather than as a mystery.
-            // It is not shown to the CEO — a flag name is not CEO copy — but it is the first
-            // thing whoever set RichOS up will read, and the sentence he DOES see points at
-            // exactly that person.
-            // NAMED AT BOOT, ALWAYS. Seven candidates resolve this now (engine.rs), so
-            // "which one answered" is a fact an operator needs and cannot otherwise obtain —
-            // the same reason the success line below names the binary instead of leaving a
-            // working boot silent. When nothing answered, every place looked is printed:
-            // "not found" without the list is what sends someone hunting.
-            // WHICH BUILD IS THIS — first, and on every launch. It is one line and it is the
-            // one a walk, an audit or a bug report needs before any other fact about the
-            // process is worth anything (`engine::source_commit`). Until 2026-09-18 a signed,
-            // notarized candidate carried no commit anywhere in it.
-            eprintln!("[richos] this app: {}", engine::source_commit_note());
-            eprintln!("[richos] engine directory: {}", resolution.describe());
-            if resolution.source.is_none() {
-                for (source, path) in &resolution.tried {
-                    eprintln!("[richos]   looked in {} ({})", path.display(), source.as_str());
+                // THE CONTEXT METER AND "KEEP CHAT ALIVE" (CEO, 2026-11-16, round 83): what each
+                // chat's two sessions say about their context size and their last request, kept
+                // beside the ledger so a chat shows its last size after a relaunch. Every lease
+                // writes here; a change in a chat's size goes to the window as it happens.
+                let chat_readings = richos_core::chat_cache::Readings::open(&data_dir.join("chat-readings.json"));
+                {
+                    let app = app.clone();
+                    chat_readings.set_observer(Arc::new(move |thread, chat| chat_cache_host::publish(&app, thread, chat)));
                 }
-            }
-            // AN ENGINE THAT IS THERE AND IS NOT THIS BUILD'S — one line each, with both
-            // versions in it. Printed whether or not the walk went on to find the right
-            // engine elsewhere: "there is no engine" and "there is an engine and it belongs to
-            // a different release of this app" are different problems with different repairs,
-            // and a rollback produces the second one on a machine where everything else is
-            // healthy (spec point 22).
-            for (source, path, why) in &resolution.rejected {
-                eprintln!("[richos]   passed over {} ({}) — {why}", path.display(), source.as_str());
-            }
-            // THE ENGINE THE BOOT ACTUALLY FOUND, as opposed to the sentinel above. First-run
-            // setup asks the same question through this value, so it never offers to install
-            // something the boot already resolved — the dogfood checkout being the case that
-            // would otherwise be asked every launch.
-            let boot_engine: Option<PathBuf> =
-                resolution.source.is_some().then(|| engine.clone());
-            let setup_on_worker = boot_engine.is_some() && !richos_core::setup::engine_update_due(
-                &richos_core::setup::SetupPaths::from_process(),
-                richos_core::setup::engine_pin().as_ref(),
-            );
-            // THE CELL THE LEASE FACTORY READS. Shared, so a successful first-run install can
-            // re-point it without a relaunch (`setup_view::run`).
-            let engine_cell: Arc<Mutex<PathBuf>> = Arc::new(Mutex::new(engine.clone()));
-            // RESOLVED OR REFUSED, NEVER SILENTLY DEGRADED — the 2026-09-17 candidate-walk
-            // fix. `resolve_claude_bin` used to fall through to the bare name `claude` here,
-            // which this launch's own boot went on to hand a provider whose `PATH` gets
-            // replaced by `runtime.rs::EngineRuntime::path` (`engine_profile.rs`); a bare name
-            // that PATH can never resolve. The failure then surfaced two turns later,
-            // misclassified by `interruption.rs` as "usually clears on its own" — false for a
-            // binary that was never there. `resolve_claude_bin_checked` names every place
-            // looked when nothing answers, exactly like the "first-run setup" block below.
-            let claude_bin = match resolve_claude_bin_checked() {
-                Ok(path) => path,
-                Err(e) => {
-                    eprintln!("[richos] compute connection: {e}");
-                    std::path::PathBuf::from("claude")
-                }
-            };
-            // THE CELL THE LEASE FACTORY READS, beside `engine_cell` and for the same reason
-            // (see `EngineLeaseFactory`). A successful first-run install rewrites it.
-            let claude_bin_cell: Arc<Mutex<PathBuf>> = Arc::new(Mutex::new(claude_bin.clone()));
-            // Connect on the first accepted request. The spine publishes Working and
-            // installs Stop before spawning, so startup cannot block the window or leave
-            // a CEO staring at an inert application during the CLI handshake.
-            // Attach the rotation/recovery seam REGARDLESS of initial boot success — even
-            // if Claude wasn't signed in at launch, wiring the factory means a later sign-in
-            // + retry (or a crash recovery attempt) has a real respawn path rather than none.
+                let lease_factory = || EngineLeaseFactory {
+                    #[cfg(target_os = "macos")]
+                    app: app.clone(),
+                    quota: quota.clone(),
+                    chat_readings: Arc::clone(&chat_readings),
 
-            let quota = Arc::new(richos_core::quota::Service::open_account_wide(&data_dir)?);
-            // THE FIRST READ OF THE WHOLE HISTORY, off the launch path (§118): every account's
-            // transcripts priced once, so the Token spend screen opens on its figure. 9.28 GB took
-            // 15.97 s on the CEO's Mac (2026-10-11); it waits 20 s so the launch has the machine.
-            // A screen opened before it ends says it is counting; later reads take only new lines.
-            let spend_weak = Arc::downgrade(&quota);
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_secs(20));
-                if let Some(quota) = spend_weak.upgrade() { quota.spend_update(); }
-            });
-            // Read immediately at startup, regardless of the pause switch. Session
-            // starts and account changes wake this same reader. Otherwise its cache
-            // enforces the shared polling cadence, with reset deadlines and error backoff.
-            let quota_weak = Arc::downgrade(&quota);
-            let quota_bin = claude_bin_cell.clone();
-            let quota_app = app.handle().clone();
-            std::thread::spawn(move || {
-                let mut wait = std::time::Duration::ZERO;
-                let mut counted: Option<std::time::Instant> = None;
-                let mut last_fable = None;
-                loop {
-                    let Some(quota) = quota_weak.upgrade() else { break };
-                    quota.wait_for_refresh(wait);
-                    if quota.is_shutdown() { break; }
-                    // **How many agents are working**, for round 16's "15 agents reading at
-                    // once" and "3 agents are holding their place": the provider's own launch
-                    // rows with no end observed, in every open lease session (the drill chip's
-                    // "N working", summed). Counted here, every 5 seconds, so a turn boundary
-                    // that says a line never takes the work host's locks to count.
-                    if counted.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(5)) {
-                        if let Some(state) = quota_app.try_state::<AppState>() {
-                            let mut sessions: Vec<String> = state.control.lease_sessions().into_iter().chain(state.work.lease_sessions()).collect();
-                            sessions.sort(); sessions.dedup();
-                            let engine_state = state.data_dir.join("engine-state");
-                            quota.set_agents_working(sessions.iter()
-                                .map(|session| richos_core::app_workers::status(&engine_state, Some(session)).active).sum());
-                            counted = Some(std::time::Instant::now());
-                        }
-                    }
-                    let bin = quota_bin.lock().unwrap().clone();
-                    quota.refresh_in_background(&bin);
-                    // **Fill-first's notices, the moment they are read** (plan §15 answer 9:
-                    // the high-speed alert "at once, in the conversation"). Only when no turn
-                    // holds the spine: a running turn says them at its own end instead
-                    // (`Spine::raise_quota_notices`), and this never waits on one.
-                    if let Some(state) = quota_app.try_state::<AppState>() {
-                        if let Ok(mut spine) = state.spine.try_lock() {
-                            spine.raise_quota_notices(None);
-                        }
-                    }
-                    let current_fable = quota.fable_view();
-                    if last_fable.as_ref() != Some(&current_fable) {
-                        let _sent = quota_app.emit("rich://fable-quota-switch", &current_fable);
-                        last_fable = Some(current_fable);
-                    }
-                    wait = std::time::Duration::from_secs(1);
-                }
-            });
-            // Whether THIS launch was told which engine to use. `EnvEngineDir` and
-            // `EnvEngineRoot` are the only two sources that are a statement rather than a
-            // search (`engine.rs` candidates 1 and 2).
-            let explicit_engine = matches!(
-                resolution.source,
-                Some(engine::EngineSource::EnvEngineDir) | Some(engine::EngineSource::EnvEngineRoot)
-            );
-            // THE CONTEXT METER AND "KEEP CHAT ALIVE" (CEO, 2026-11-16, round 83): what each
-            // chat's two sessions say about their context size and their last request, kept
-            // beside the ledger so a chat shows its last size after a relaunch. Every lease
-            // writes here; a change in a chat's size goes to the window as it happens.
-            let chat_readings = richos_core::chat_cache::Readings::open(&data_dir.join("chat-readings.json"));
-            {
-                let app = app.handle().clone();
-                chat_readings.set_observer(Arc::new(move |thread, chat| chat_cache_host::publish(&app, thread, chat)));
-            }
-            let lease_factory = || EngineLeaseFactory {
-                #[cfg(target_os = "macos")]
-                app: app.handle().clone(),
-                quota: quota.clone(),
-                chat_readings: Arc::clone(&chat_readings),
-
-                claude_bin: Arc::clone(&claude_bin_cell),
-                engine_dir: Arc::clone(&engine_cell),
-                data_dir: data_dir.clone(),
-                explicit_engine,
-                loro_install: Arc::clone(&loro_install),
-            };
-            spine.set_lease_factory(Box::new(lease_factory()));
-            // **THE WORK HOST — the background-work spec §2.1's second lease, and a SECOND
-            // factory instance rather than a shared one.** The factory is stateless except
-            // for the two cells it reads, and both are `Arc`s, so the work host sees the
-            // same engine directory and the same `claude` path the moment first-run setup
-            // rewrites them. Giving the spine's factory away instead would have coupled the
-            // two leases' lifetimes, which is the thing §2.1 exists to separate.
-            //
-            // It is started here and runs for the life of the process. With nothing
-            // registered it is a thread parked on a condition variable; it never polls.
-            let work = richos_core::work_host::WorkHost::new(
-                &data_dir.join("engine-state"),
-                Box::new(lease_factory()),
-                Arc::new(WorkNotice { app: app.handle().clone() }),
-            );
-            work.set_quota(quota.clone());
-            // "Keep chat alive" reaches Stu's sessions through the same readings, for the chats
-            // whose box is checked (`chat_cache_host.rs`).
-            work.set_keep_alive(Arc::clone(&chat_readings), chat_cache_host::kept(app.handle().clone()));
-            // The back end's written files — its own, its workers', its commands' — reach the
-            // assignment's thread's output list after every back-end turn (PRD §4.1 (b)).
-            work.set_output_store(output_store.clone());
-            work.start();
-            eprintln!("[richos] compute connection: starts with the first cancellable request over {}", claude_bin.display());
-            // Codex's entries, for Stu, the app's own child from launch to quit (gap X).
-            if CODEX_SINK.set(codex_sink(app.handle().clone())).is_err() {
-                eprintln!("[richos] Codex watch: its sink was already set");
-            }
-            // **THE APP CLEANS UP ITS OWN GARBAGE, NO MATTER WHAT** (CEO §54 addendum 2): what an
-            // earlier run left (a crash or a force-quit included) goes now, on its own thread;
-            // again whenever Stu's jobs have settled, and at quit (the Exit arm). The engine's
-            // reaper decides and deletes, scoped to this app (`richos_core::app_cleanup`).
-            let cleanup = richos_core::app_cleanup::hook(Arc::clone(&engine_cell), data_dir.clone());
-            work.set_cleanup(Arc::clone(&cleanup));
-            // The disk monitor makes its first query immediately. Both it and
-            // the startup sweep wait for the same verification as the decoder.
-            let start_cleanup = {
-                let engine = Arc::clone(&engine_cell);
-                let data = data_dir.clone();
-                let cleanup = Arc::clone(&cleanup);
-                move |sweep: bool| {
-                    if sweep {
-                        cleanup(richos_core::app_cleanup::Moment::Start);
-                    }
-                    let floor = richos_core::app_cleanup::floor_check(engine, data.clone());
-                    richos_core::app_cleanup::watch_disk(data, cleanup, floor);
-                }
-            };
-            if let Some(dir) = boot_engine.clone() {
-                check_boot_engine(
-                    app.handle().clone(), dir, data_dir.clone(), claude_bin.clone(), setup_on_worker,
-                    start_cleanup,
-                );
-            } else {
-                start_cleanup(true);
-            }
-
-            // Release grants from the old process. Stu owns job recovery through his inbox.
-            work.set_screen(std::sync::Arc::new(screen::MacScreen));
-            let recovery=richos_core::recovery::reconcile(&data_dir.join("engine-state"));
-            eprintln!("[richos] {}",recovery.log_message());
-
-            // ==============================================================================
-            // FIRST-RUN SETUP — what this machine is missing, named at boot
-            //
-            // §19: "Today RichOS runs on his Mac and would not run on anyone else's." The
-            // boot line below is the honest statement of that, printed on EVERY launch so
-            // the condition is visible before a customer discovers it as a broken app. On the
-            // CEO's own machine it says nothing is missing and costs two `stat` calls.
-            // ==============================================================================
-            let engine_update_now = !setup_on_worker
-                && report_startup_setup(app.handle(), boot_engine.as_deref());
-
-            // Left-navigation view state — same app data dir, same durability posture as
-            // the ledger and config, and never fatal: a corrupt file degrades to defaults
-            // rather than refusing the launch (nav.rs).
-            let nav_store = nav::NavStore::open(data_dir.join("navigation.json"));
-
-            // THE STOP/STEER CONTROL (UX §9.2/§9.3). Its intake log sits beside the
-            // ledger, same app data dir, same durability posture — and deliberately NOT
-            // inside the ledger, because a request that has not been acted on yet is not
-            // evidence of anything that happened.
-            //
-            // A control that cannot be opened degrades to `detached()`, which REFUSES to
-            // stop rather than acting on a request it cannot record. An unrecorded stop is
-            // indistinguishable from a crash on the next boot, and §6.1's "You stopped
-            // after {duration}" would be back to attributing a crash to the CEO.
-            let control = match TurnControl::open(data_dir.join("intake.jsonl")) {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("[richos] steering intake unavailable, stop will refuse rather than pretend: {e}");
-                    TurnControl::detached()
-                }
-            };
-            spine.set_turn_control(control.clone());
-            // A card answer keeps the input order it was accepted with until it reaches the
-            // ledger; never hand that order to a new input after a restart.
-            let card_store = richos_core::questions::Store::new(data_dir.join("engine-state"));
-            let card_startup = match card_counts_load {
-                Some(reader) => reader.join().unwrap_or_else(|_| Err("Card history reader stopped unexpectedly".into()))
-                    .and_then(|snapshot| card_store.swearmeter_refresh_startup(snapshot)),
-                None => card_store.swearmeter_startup_cached(cached_card_counts.as_deref()),
-            };
-            let (card_counts, card_source) = match card_startup {
-                Ok((order, projection, source)) => {
-                    if let Some(order) = order { control.advance_input_order(order); }
-                    (projection, source)
-                }
-                Err(e) => {
-                    eprintln!("[richos] saved answer history unreadable: {e}");
-                    if let Ok(Some(order)) = card_store.highest_order() { control.advance_input_order(order); }
-                    let mut projection = richos_core::swearmeter_questions::Projection::empty();
-                    projection.available = false;
-                    (projection, None)
-                }
-            };
-            let card_source_seen = card_source.is_some();
-            if card_counts.available && (cached_ledger_source.as_ref() != spine.ledger().swearmeter_source_stamp()
-                || cached_card_counts.as_ref().map(|cache| &cache.source) != Some(&card_source)) {
-                let cards = richos_core::swearmeter_checkpoint::CachedCards { source: card_source, summary: card_counts.summary() };
-                if let Err(error) = richos_core::swearmeter_checkpoint::Checkpoint::save(&checkpoint_path, &ledger_path, &cards_path, spine.ledger(), cards) {
-                    eprintln!("[richos] numeric checkpoint could not be saved: {error}");
-                }
-            }
-
-            // DOCUMENT SEARCH, started before the first lease so every conversation lease is
-            // offered Rich's search tool. Reading the folder and building the meaning index run
-            // on the service's own utility-priority thread; a running turn makes indexing step
-            // aside briefly before each passage (information, not a scheduler).
-            let search = {
-                let busy_control = control.clone();
-                let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
-                doc_search::start(&home, &data_dir, std::sync::Arc::new(move || busy_control.has_active_turns()), config.search_folders())
-            };
-            let search_socket = doc_search::serve_tool(&search, &data_dir, spine.reader());
-
-            // WHAT HE ASKED FOR AND THIS BUILD COULD NOT READ, ON THE BOOT LINE.
-            //
-            // The same shape as the ledger's line above and for the same reason:
-            // `IntakeLog::open` prints the operator's account (one line per skipped record
-            // plus a summary), and this is the CEO's, in the sentences a surface would
-            // render — so a boot log and a screen say the same thing rather than two
-            // versions of it.
-            //
-            // IT IS A DIFFERENT STATEMENT FROM THE LEDGER'S, which is why it is a separate
-            // pair of lines rather than folded into `history_health`. The ledger's says part
-            // of the conversation on screen did not load. This one says something he TYPED
-            // while Rich was working never reached Rich at all — the intake log holds his
-            // words before they become turns, so a record lost here is a message that was
-            // never answered and never shown.
-            //
-            // NO NEW SURFACE IS BUILT HERE. There is no window notice for the intake log
-            // today; `TurnControl::intake_health()` is the seam one would read, and what
-            // the smallest honest surface is remains an open question rather than something
-            // invented in this change. Silent, however, it is no longer.
-            match control.intake_health() {
-                Some(h) if !h.is_clean() => {
-                    eprintln!("[richos] {}", h.headline);
-                    eprintln!("[richos] {}", h.detail);
-                }
-                // Clean, or detached — and those are different facts. A detached control has
-                // no file to read, which is not the same as a file with nothing wrong in it;
-                // the line above has already said why it is detached.
-                _ => {}
-            }
-
-            // Restore durable Stops before any recovered message is submitted. Reconciliation
-            // queues accepted inputs locally. A provider reply must never hold the window's thread.
-            spine.detach_conversation_io();
-            if let Err(e) = spine.recover_after_restart() {
-                eprintln!("[richos] intake reconciliation at boot: {e}");
-            }
-            adopt_at_the_turn_boundary(&mut spine, &work);
-
-            // THE CORRECTION DESK (open-items 3.5). Its log sits beside the ledger and the
-            // intake log, same durability posture, and deliberately NOT in the ledger: a
-            // proposal the CEO has not answered yet is not evidence of anything that
-            // happened — the same rule `TurnControl`'s intake log follows.
-            //
-            // THE WRITER IS NOT RESOLVED HERE. It arrives from `wire_company_memory` above,
-            // out of the one `LoroInstall` the read half was also built from. What used to
-            // be on this line was `CliLoroWriter::from_env()`, and it is the third instance
-            // in one day of the same premise failure — a component reading its configuration
-            // from environment variables that a Finder launch does not have. `ps eww` on a
-            // real double-click carries `HOME`, `USER` and
-            // `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, and nothing else, so on the CEO's
-            // installed app this was `Ok(None)` on every boot and the desk was dead: he
-            // could be shown a proposal, confirm it, and reach a writer with no corpus.
-            //
-            // OPENED AND WIRED BY `install_correction_desk`, which `provision_memory` also
-            // calls. ONE function, because the boot path and the first-run path have to
-            // produce the same desk wired to the same seams — and two copies of "open it,
-            // hand it to the spine, attach the observer" would drift, with the copy that
-            // drifted being the one a new customer hits in his first five minutes.
-            let correction = match wired.writer {
-                Some(writer) => install_correction_desk(&mut spine, app.handle(), &data_dir, writer),
-                // NOT A SILENT NO-OP. `wire_company_memory` has already printed the reason
-                // and, for the no-corpus case, every candidate it looked at — the same
-                // sentences the read path prints, because it is the same resolution. This
-                // line says what it MEANS for the desk, so nobody has to join the two facts
-                // up themselves.
-                None => {
-                    eprintln!(
-                        "[richos] loro correction desk: CLOSED — {}. Confirming a correction \
-                         will refuse and say so rather than appearing to write.",
-                        match memory_status.state.as_str() {
-                            "none" => "no corpus resolved (candidates listed above)",
-                            "no-compiler" => "a corpus resolved but loro-write.mjs is not installed",
-                            other => other,
-                        }
-                    );
-                    None
-                }
-            };
-
-            // THE FLYWHEEL'S AUTOMATIC TRIGGER (`spoken.rs` + `staging.rs`). Its log sits
-            // beside the ledger, the intake log and the loro desk, same durability posture
-            // and deliberately NOT in the ledger: a question the CEO has not answered is
-            // not evidence of anything that happened.
-            //
-            // The desk is attached to the SPINE (so every utterance is examined as it is
-            // submitted, with no command typed) and kept in `AppState` as the same `Arc`
-            // (so answering it never waits on the turn lock).
-            let spoken = match CandidateDesk::open(data_dir.join("spoken-corrections.jsonl")) {
-                Ok(mut desk) => {
-                    // The vocabulary writer. Absent on an ordinary install with no local
-                    // service configured — detection and staging still work, and only the
-                    // CONFIRM step reports that it has nowhere to write. It never claims a
-                    // term was learned when nothing wrote it.
-                    match CliVocabulary::from_env() {
-                        Some(v) => desk.set_vocabulary(Box::new(v)),
-                        None => eprintln!(
-                            "[richos] no RICHOS_SERVICE_BIN — spoken corrections will be recorded \
-                             and asked, and confirming one will report that there is no vocabulary \
-                             to write to"
-                        ),
-                    }
-                    let shared = desk.shared();
-                    Some(shared)
-                }
-                Err(e) => {
-                    // Refuse rather than pretend, exactly as the loro desk does above: a
-                    // desk that cannot record durably would lose the CEO's correction
-                    // across a relaunch, which is worse than saying so.
-                    eprintln!(
-                        "[richos] spoken-correction desk unavailable, corrections will not be \
-                         recorded: {e}"
-                    );
-                    None
-                }
-            };
-            // THE SPOKEN TRIGGER, wired at the same seam the belief one is
-            // (`install_correction_desk`): the desk the Tauri commands answer through is
-            // the desk the turn path files into, one `Arc`, so a question raised inside a
-            // two-hour turn is answerable during it.
-            if let Some(desk) = &spoken {
-                spine.set_candidate_desk(desk.clone());
-                spine.set_correction_observer(Box::new(TauriCorrectionEmitter {
-                    app: app.handle().clone(),
-                }));
-
-                // THE THIRD TRIGGER — heard vs sent (`heard.rs`), the one that watches
-                // rather than listens, into the SAME desk. Opt-in, and this is the only
-                // place that decides it.
+                    claude_bin: Arc::clone(&claude_bin_cell),
+                    engine_dir: Arc::clone(&engine_cell),
+                    data_dir: data_dir.clone(),
+                    explicit_engine,
+                    loro_install: Arc::clone(&loro_install),
+                };
+                spine.set_lease_factory(Box::new(lease_factory()));
+                // **THE WORK HOST — the background-work spec §2.1's second lease, and a SECOND
+                // factory instance rather than a shared one.** The factory is stateless except
+                // for the two cells it reads, and both are `Arc`s, so the work host sees the
+                // same engine directory and the same `claude` path the moment first-run setup
+                // rewrites them. Giving the spine's factory away instead would have coupled the
+                // two leases' lifetimes, which is the thing §2.1 exists to separate.
                 //
-                // WHY IT IS NOT ON BY DEFAULT, when the other two are. It measured
-                // precision 0.972 rather than 1.000 (156 invented pairs,
-                // `docs/measurements/heard-vs-sent-trigger-2026-08-30/`), and its one false
-                // positive is a pair that would rewrite an ordinary English word in every
-                // future dictation. It also fires on an edit the CEO never volunteered —
-                // he fixed his own text and moved on — so a wrong question here costs more
-                // than after a sentence he just spoke. Until the defect is repaired in
-                // `capture.js`'s shared expansion rule where it actually lives, the CEO
-                // turns this on deliberately or not at all. **No default is a judgement
-                // this file gets to make on his behalf.**
-                match std::env::var("RICHOS_HEARD_TRIGGER").as_deref() {
-                    Ok("on") | Ok("1") | Ok("true") => match DictationJournal::from_env() {
-                        Some(j) if j.present() => {
-                            eprintln!(
-                                "[richos] heard-vs-sent trigger ON — reading the dictation \
-                                 journal at {}",
-                                j.describe()
-                            );
-                            spine.set_heard_source(Box::new(j));
+                // It is started here and runs for the life of the process. With nothing
+                // registered it is a thread parked on a condition variable; it never polls.
+                let work = richos_core::work_host::WorkHost::new(
+                    &data_dir.join("engine-state"),
+                    Box::new(lease_factory()),
+                    Arc::new(WorkNotice { app: app.clone() }),
+                );
+                work.set_quota(quota.clone());
+                // "Keep chat alive" reaches Stu's sessions through the same readings, for the chats
+                // whose box is checked (`chat_cache_host.rs`).
+                work.set_keep_alive(Arc::clone(&chat_readings), chat_cache_host::kept(app.clone()));
+                // The back end's written files — its own, its workers', its commands' — reach the
+                // assignment's thread's output list after every back-end turn (PRD §4.1 (b)).
+                work.set_output_store(output_store.clone());
+                work.start();
+                eprintln!("[richos] compute connection: starts with the first cancellable request over {}", claude_bin.display());
+                // Codex's entries, for Stu, the app's own child from launch to quit (gap X).
+                if CODEX_SINK.set(codex_sink(app.clone())).is_err() {
+                    eprintln!("[richos] Codex watch: its sink was already set");
+                }
+                // **THE APP CLEANS UP ITS OWN GARBAGE, NO MATTER WHAT** (CEO §54 addendum 2): what an
+                // earlier run left (a crash or a force-quit included) goes now, on its own thread;
+                // again whenever Stu's jobs have settled, and at quit (the Exit arm). The engine's
+                // reaper decides and deletes, scoped to this app (`richos_core::app_cleanup`).
+                let cleanup = richos_core::app_cleanup::hook(Arc::clone(&engine_cell), data_dir.clone());
+                work.set_cleanup(Arc::clone(&cleanup));
+                // The disk monitor makes its first query immediately. Both it and
+                // the startup sweep wait for the same verification as the decoder.
+                let start_cleanup = {
+                    let engine = Arc::clone(&engine_cell);
+                    let data = data_dir.clone();
+                    let cleanup = Arc::clone(&cleanup);
+                    move |sweep: bool| {
+                        if sweep {
+                            cleanup(richos_core::app_cleanup::Moment::Start);
                         }
-                        Some(j) => eprintln!(
-                            "[richos] heard-vs-sent trigger was switched on, but there is no \
-                             dictation journal at {} — the trigger has no \"heard\" side and \
-                             stays silent. Install the flywheel patch \
-                             (tools/richos-hud/dictation-flywheel.patch) or point \
-                             RICHOS_DICTATION_JOURNAL at the journal.",
-                            j.describe()
-                        ),
-                        None => eprintln!(
-                            "[richos] heard-vs-sent trigger was switched on, but no journal \
-                             location could be resolved (no $HOME and no \
-                             RICHOS_DICTATION_JOURNAL) — the trigger stays silent"
-                        ),
-                    },
+                        let floor = richos_core::app_cleanup::floor_check(engine, data.clone());
+                        richos_core::app_cleanup::watch_disk(data, cleanup, floor);
+                    }
+                };
+                if let Some(dir) = boot_engine.clone() {
+                    check_boot_engine(
+                        app.clone(), dir, data_dir.clone(), claude_bin.clone(), setup_on_worker,
+                        start_cleanup,
+                    );
+                } else {
+                    start_cleanup(true);
+                }
+
+                // Release grants from the old process. Stu owns job recovery through his inbox.
+                work.set_screen(std::sync::Arc::new(screen::MacScreen));
+                let recovery=richos_core::recovery::reconcile(&data_dir.join("engine-state"));
+                eprintln!("[richos] {}",recovery.log_message());
+
+                // ==============================================================================
+                // FIRST-RUN SETUP — what this machine is missing, named at boot
+                //
+                // §19: "Today RichOS runs on his Mac and would not run on anyone else's." The
+                // boot line below is the honest statement of that, printed on EVERY launch so
+                // the condition is visible before a customer discovers it as a broken app. On the
+                // CEO's own machine it says nothing is missing and costs two `stat` calls.
+                // ==============================================================================
+                let engine_update_now = !setup_on_worker
+                    && report_startup_setup(app, boot_engine.as_deref());
+
+                // Left-navigation view state — same app data dir, same durability posture as
+                // the ledger and config, and never fatal: a corrupt file degrades to defaults
+                // rather than refusing the launch (nav.rs).
+                let nav_store = nav::NavStore::open(data_dir.join("navigation.json"));
+
+                // THE STOP/STEER CONTROL (UX §9.2/§9.3). Its intake log sits beside the
+                // ledger, same app data dir, same durability posture — and deliberately NOT
+                // inside the ledger, because a request that has not been acted on yet is not
+                // evidence of anything that happened.
+                //
+                // A control that cannot be opened degrades to `detached()`, which REFUSES to
+                // stop rather than acting on a request it cannot record. An unrecorded stop is
+                // indistinguishable from a crash on the next boot, and §6.1's "You stopped
+                // after {duration}" would be back to attributing a crash to the CEO.
+                let control = match TurnControl::open(data_dir.join("intake.jsonl")) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("[richos] steering intake unavailable, stop will refuse rather than pretend: {e}");
+                        TurnControl::detached()
+                    }
+                };
+                spine.set_turn_control(control.clone());
+                // A card answer keeps the input order it was accepted with until it reaches the
+                // ledger; never hand that order to a new input after a restart.
+                let card_store = richos_core::questions::Store::new(data_dir.join("engine-state"));
+                let card_startup = match card_counts_load {
+                    Some(reader) => reader.join().unwrap_or_else(|_| Err("Card history reader stopped unexpectedly".into()))
+                        .and_then(|snapshot| card_store.swearmeter_refresh_startup(snapshot)),
+                    None => card_store.swearmeter_startup_cached(cached_card_counts.as_deref()),
+                };
+                let (card_counts, card_source) = match card_startup {
+                    Ok((order, projection, source)) => {
+                        if let Some(order) = order { control.advance_input_order(order); }
+                        (projection, source)
+                    }
+                    Err(e) => {
+                        eprintln!("[richos] saved answer history unreadable: {e}");
+                        if let Ok(Some(order)) = card_store.highest_order() { control.advance_input_order(order); }
+                        let mut projection = richos_core::swearmeter_questions::Projection::empty();
+                        projection.available = false;
+                        (projection, None)
+                    }
+                };
+                let card_source_seen = card_source.is_some();
+                if card_counts.available && (cached_ledger_source.as_ref() != spine.ledger().swearmeter_source_stamp()
+                    || cached_card_counts.as_ref().map(|cache| &cache.source) != Some(&card_source)) {
+                    let cards = richos_core::swearmeter_checkpoint::CachedCards { source: card_source, summary: card_counts.summary() };
+                    if let Err(error) = richos_core::swearmeter_checkpoint::Checkpoint::save(&checkpoint_path, &ledger_path, &cards_path, spine.ledger(), cards) {
+                        eprintln!("[richos] numeric checkpoint could not be saved: {error}");
+                    }
+                }
+
+                // DOCUMENT SEARCH, started before the first lease so every conversation lease is
+                // offered Rich's search tool. Reading the folder and building the meaning index run
+                // on the service's own utility-priority thread; a running turn makes indexing step
+                // aside briefly before each passage (information, not a scheduler).
+                let search = {
+                    let busy_control = control.clone();
+                    let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
+                    doc_search::start(&home, &data_dir, std::sync::Arc::new(move || busy_control.has_active_turns()), config.search_folders())
+                };
+                let search_socket = doc_search::serve_tool(&search, &data_dir, spine.reader());
+
+                // WHAT HE ASKED FOR AND THIS BUILD COULD NOT READ, ON THE BOOT LINE.
+                //
+                // The same shape as the ledger's line above and for the same reason:
+                // `IntakeLog::open` prints the operator's account (one line per skipped record
+                // plus a summary), and this is the CEO's, in the sentences a surface would
+                // render — so a boot log and a screen say the same thing rather than two
+                // versions of it.
+                //
+                // IT IS A DIFFERENT STATEMENT FROM THE LEDGER'S, which is why it is a separate
+                // pair of lines rather than folded into `history_health`. The ledger's says part
+                // of the conversation on screen did not load. This one says something he TYPED
+                // while Rich was working never reached Rich at all — the intake log holds his
+                // words before they become turns, so a record lost here is a message that was
+                // never answered and never shown.
+                //
+                // NO NEW SURFACE IS BUILT HERE. There is no window notice for the intake log
+                // today; `TurnControl::intake_health()` is the seam one would read, and what
+                // the smallest honest surface is remains an open question rather than something
+                // invented in this change. Silent, however, it is no longer.
+                match control.intake_health() {
+                    Some(h) if !h.is_clean() => {
+                        eprintln!("[richos] {}", h.headline);
+                        eprintln!("[richos] {}", h.detail);
+                    }
+                    // Clean, or detached — and those are different facts. A detached control has
+                    // no file to read, which is not the same as a file with nothing wrong in it;
+                    // the line above has already said why it is detached.
                     _ => {}
                 }
-            }
 
-            // THE FEEDBACK CHANNEL'S ONE FILE (`feedback.rs`), beside the ledger, the intake
-            // log and the two correction desks — same durability posture, and deliberately
-            // NOT in the ledger: what the CEO thinks of a session is not evidence of
-            // anything that happened in it.
-            //
-            // ONE FILE, NOT A DIRECTORY, and that is the module's own testable property: a
-            // directory invites a second file beside the first — a spool, an "unsent"
-            // shard, a marker — and `feedback_no_outbound_tests.rs` asserts that recording
-            // produces exactly one file and nothing else.
-            let feedback = match FeedbackStore::open(data_dir.join("feedback.jsonl")) {
-                Ok(store) => Some(Mutex::new(store)),
-                Err(e) => {
-                    eprintln!(
-                        "[richos] feedback store unavailable, the feedback surface will refuse \
-                         rather than take an answer it cannot keep: {e}"
-                    );
-                    None
+                // Restore durable Stops before any recovered message is submitted. Reconciliation
+                // queues accepted inputs locally. A provider reply must never hold the window's thread.
+                spine.detach_conversation_io();
+                if let Err(e) = spine.recover_after_restart() {
+                    eprintln!("[richos] intake reconciliation at boot: {e}");
                 }
+                adopt_at_the_turn_boundary(&mut spine, &work);
+
+                // THE CORRECTION DESK (open-items 3.5). Its log sits beside the ledger and the
+                // intake log, same durability posture, and deliberately NOT in the ledger: a
+                // proposal the CEO has not answered yet is not evidence of anything that
+                // happened — the same rule `TurnControl`'s intake log follows.
+                //
+                // THE WRITER IS NOT RESOLVED HERE. It arrives from `wire_company_memory` above,
+                // out of the one `LoroInstall` the read half was also built from. What used to
+                // be on this line was `CliLoroWriter::from_env()`, and it is the third instance
+                // in one day of the same premise failure — a component reading its configuration
+                // from environment variables that a Finder launch does not have. `ps eww` on a
+                // real double-click carries `HOME`, `USER` and
+                // `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, and nothing else, so on the CEO's
+                // installed app this was `Ok(None)` on every boot and the desk was dead: he
+                // could be shown a proposal, confirm it, and reach a writer with no corpus.
+                //
+                // OPENED AND WIRED BY `install_correction_desk`, which `provision_memory` also
+                // calls. ONE function, because the boot path and the first-run path have to
+                // produce the same desk wired to the same seams — and two copies of "open it,
+                // hand it to the spine, attach the observer" would drift, with the copy that
+                // drifted being the one a new customer hits in his first five minutes.
+                let correction = match wired.writer {
+                    Some(writer) => install_correction_desk(&mut spine, app, &data_dir, writer),
+                    // NOT A SILENT NO-OP. `wire_company_memory` has already printed the reason
+                    // and, for the no-corpus case, every candidate it looked at — the same
+                    // sentences the read path prints, because it is the same resolution. This
+                    // line says what it MEANS for the desk, so nobody has to join the two facts
+                    // up themselves.
+                    None => {
+                        eprintln!(
+                            "[richos] loro correction desk: CLOSED — {}. Confirming a correction \
+                             will refuse and say so rather than appearing to write.",
+                            match memory_status.state.as_str() {
+                                "none" => "no corpus resolved (candidates listed above)",
+                                "no-compiler" => "a corpus resolved but loro-write.mjs is not installed",
+                                other => other,
+                            }
+                        );
+                        None
+                    }
+                };
+
+                // THE FLYWHEEL'S AUTOMATIC TRIGGER (`spoken.rs` + `staging.rs`). Its log sits
+                // beside the ledger, the intake log and the loro desk, same durability posture
+                // and deliberately NOT in the ledger: a question the CEO has not answered is
+                // not evidence of anything that happened.
+                //
+                // The desk is attached to the SPINE (so every utterance is examined as it is
+                // submitted, with no command typed) and kept in `AppState` as the same `Arc`
+                // (so answering it never waits on the turn lock).
+                let spoken = match CandidateDesk::open(data_dir.join("spoken-corrections.jsonl")) {
+                    Ok(mut desk) => {
+                        // The vocabulary writer. Absent on an ordinary install with no local
+                        // service configured — detection and staging still work, and only the
+                        // CONFIRM step reports that it has nowhere to write. It never claims a
+                        // term was learned when nothing wrote it.
+                        match CliVocabulary::from_env() {
+                            Some(v) => desk.set_vocabulary(Box::new(v)),
+                            None => eprintln!(
+                                "[richos] no RICHOS_SERVICE_BIN — spoken corrections will be recorded \
+                                 and asked, and confirming one will report that there is no vocabulary \
+                                 to write to"
+                            ),
+                        }
+                        let shared = desk.shared();
+                        Some(shared)
+                    }
+                    Err(e) => {
+                        // Refuse rather than pretend, exactly as the loro desk does above: a
+                        // desk that cannot record durably would lose the CEO's correction
+                        // across a relaunch, which is worse than saying so.
+                        eprintln!(
+                            "[richos] spoken-correction desk unavailable, corrections will not be \
+                             recorded: {e}"
+                        );
+                        None
+                    }
+                };
+                // THE SPOKEN TRIGGER, wired at the same seam the belief one is
+                // (`install_correction_desk`): the desk the Tauri commands answer through is
+                // the desk the turn path files into, one `Arc`, so a question raised inside a
+                // two-hour turn is answerable during it.
+                if let Some(desk) = &spoken {
+                    spine.set_candidate_desk(desk.clone());
+                    spine.set_correction_observer(Box::new(TauriCorrectionEmitter {
+                        app: app.clone(),
+                    }));
+
+                    // THE THIRD TRIGGER — heard vs sent (`heard.rs`), the one that watches
+                    // rather than listens, into the SAME desk. Opt-in, and this is the only
+                    // place that decides it.
+                    //
+                    // WHY IT IS NOT ON BY DEFAULT, when the other two are. It measured
+                    // precision 0.972 rather than 1.000 (156 invented pairs,
+                    // `docs/measurements/heard-vs-sent-trigger-2026-08-30/`), and its one false
+                    // positive is a pair that would rewrite an ordinary English word in every
+                    // future dictation. It also fires on an edit the CEO never volunteered —
+                    // he fixed his own text and moved on — so a wrong question here costs more
+                    // than after a sentence he just spoke. Until the defect is repaired in
+                    // `capture.js`'s shared expansion rule where it actually lives, the CEO
+                    // turns this on deliberately or not at all. **No default is a judgement
+                    // this file gets to make on his behalf.**
+                    match std::env::var("RICHOS_HEARD_TRIGGER").as_deref() {
+                        Ok("on") | Ok("1") | Ok("true") => match DictationJournal::from_env() {
+                            Some(j) if j.present() => {
+                                eprintln!(
+                                    "[richos] heard-vs-sent trigger ON — reading the dictation \
+                                     journal at {}",
+                                    j.describe()
+                                );
+                                spine.set_heard_source(Box::new(j));
+                            }
+                            Some(j) => eprintln!(
+                                "[richos] heard-vs-sent trigger was switched on, but there is no \
+                                 dictation journal at {} — the trigger has no \"heard\" side and \
+                                 stays silent. Install the flywheel patch \
+                                 (tools/richos-hud/dictation-flywheel.patch) or point \
+                                 RICHOS_DICTATION_JOURNAL at the journal.",
+                                j.describe()
+                            ),
+                            None => eprintln!(
+                                "[richos] heard-vs-sent trigger was switched on, but no journal \
+                                 location could be resolved (no $HOME and no \
+                                 RICHOS_DICTATION_JOURNAL) — the trigger stays silent"
+                            ),
+                        },
+                        _ => {}
+                    }
+                }
+
+                // THE FEEDBACK CHANNEL'S ONE FILE (`feedback.rs`), beside the ledger, the intake
+                // log and the two correction desks — same durability posture, and deliberately
+                // NOT in the ledger: what the CEO thinks of a session is not evidence of
+                // anything that happened in it.
+                //
+                // ONE FILE, NOT A DIRECTORY, and that is the module's own testable property: a
+                // directory invites a second file beside the first — a spool, an "unsent"
+                // shard, a marker — and `feedback_no_outbound_tests.rs` asserts that recording
+                // produces exactly one file and nothing else.
+                let feedback = match FeedbackStore::open(data_dir.join("feedback.jsonl")) {
+                    Ok(store) => Some(Mutex::new(store)),
+                    Err(e) => {
+                        eprintln!(
+                            "[richos] feedback store unavailable, the feedback surface will refuse \
+                             rather than take an answer it cannot keep: {e}"
+                        );
+                        None
+                    }
+                };
+
+                app.manage(AppState {
+                    swearmeter: swearmeter_host::Service::new(
+                        app.clone(), spine.reader(), control.clone(), card_counts, card_source_seen, &data_dir,
+                    ),
+                    quota: quota.clone(),
+                    chat_readings,
+
+                    work,
+                    quit_confirmed: std::sync::atomic::AtomicBool::new(false),
+                    // The SAME decision the window was built from, carried rather than
+                    // re-derived: two readings of "may this launch take the screen" is two
+                    // answers waiting to disagree.
+                    can_come_back: activation.presentation == activation::Presentation::Regular,
+                    provider_auth: Mutex::new(Default::default()),
+                    account_auth: Mutex::new(None),
+                    front_desk_primed_for: Mutex::new(Default::default()),
+                    reader: spine.reader(),
+                    spine: Mutex::new(spine),
+                    config: Mutex::new(config),
+                    machinery_root,
+                    entity: Mutex::new(boot.entity),
+                    registry_path,
+                    registry_source: registry_load.source,
+                    // PRESENCE, not success. A `RICHOS_ENTITY` that names nothing resolves to
+                    // `None` and short-circuits BEFORE the saved choice — so a CEO who answered
+                    // the picker under one would have his answer written to disk and never read
+                    // again, and be asked at every launch for ever. Keying this on the variable
+                    // being SET means the surface tells him it was decided outside the window and
+                    // names who owns it, instead of silently swallowing his answer.
+                    entity_pinned_by_env: std::env::var_os("RICHOS_ENTITY").is_some(),
+                    entity_source: Mutex::new(boot.source),
+                    nav: Mutex::new(nav_store),
+                    control,
+                    search,
+                    search_socket,
+                    correction: Mutex::new(correction),
+                    spoken,
+                    feedback,
+                    launch: launch_store,
+                    memory: Mutex::new(memory_status),
+                    loro_install: Arc::clone(&loro_install),
+                    loro_provenance,
+                    // KEPT, not re-derived. `provision_memory` opens the correction desk's log
+                    // beside the ledger, and it must be the SAME directory this boot used —
+                    // re-asking `app_data_dir()` in the command would be a second resolution of
+                    // a question already answered, which is the shape of defect this whole
+                    // evening has been about.
+                    data_dir,
+                    // THE SAME CELL THE LEASE FACTORY HOLDS, not a copy of the path. A copy
+                    // would let `run_setup` update one and leave the other pointing at the
+                    // directory the boot failed to find.
+                    engine_dir: engine_cell,
+                    claude_bin: claude_bin_cell.clone(),
+                    boot_engine,
+                });
+                // What onboarding saved before this launch (or before this fix), into his loro.
+                spawn_onboarding_into_loro(app);
+
+                // Resume only after AppState exists: PhoneBridge::new immediately reads
+                // the spine to prime the paired phone's conversation. The window was
+                // created above for first paint. Its commands cannot use the app until
+                // setup completes. The native opening does not attach Home before then.
+                // A persisted pairing resumes without opening a new pairing window.
+                phone_runtime.resume_if_paired(app.clone());
+                app.manage(phone_runtime);
+                richpass_host::start(app.clone());
+                chat_notifications::install(app);
+                chat_list::watch(app.clone());
+                question_host::start(app.clone());
+                swearmeter_host::start(app.clone());
+                rich_files_host::start(app.clone());
+                #[cfg(target_os = "macos")]
+                {
+                    app.manage(Arc::new(writing_host::Host::default()));
+                    start_window_services(app)?;
+                }
+                let intake_app = app.clone();
+                first_frame::after_page(app, move || start_incoming_drain(intake_app));
+                git_name_host::start(app.clone());
+                peer_messages::start(app.clone())?;
+                // After an update, this build's own engine, installed by the app itself (the flag
+                // was set at the first-run setup block above, before the window could ask). The
+                // earlier build's engine serves meanwhile, so the desk below is readied in it; the
+                // sessions that start after the swap start in the new one.
+                if engine_update_now {
+                    update_engine_by_itself(app.clone());
+                }
+                // Readiness starts before the window's setup/navigation reads, with the
+                // selected thread's immutable company scope. Reader snapshots stay available.
+                ready_selected_front_desk(app);
+                spawn_idle_session_retirement(app.clone());
+                // "Keep chat alive": the clock that looks at the chats whose box is checked.
+                chat_cache_host::start(app.clone());
+                // The composer's attachments, in the SAME app-data directory the phone's
+                // attachment desk writes to (`phone/attachments.rs`). No I/O until a file arrives.
+                let attachments_home = app.state::<AppState>().data_dir.clone();
+                app.manage(mac_attachments::MacAttachments::open(&attachments_home));
+                // The Output panel's file commands and preview scheme (PRD §5), over the SAME store
+                // the spine and the work host write, and the published spine for the active thread.
+                // QuickLook renditions go in the app's cache directory (§4.8).
+                let output_cache = app.path().app_cache_dir().unwrap_or_else(|_| attachments_home.join("cache"));
+                let output_reader = app.state::<AppState>().reader.clone();
+                app.manage(output_files::OutputFiles::for_app(output_store, output_reader, &attachments_home, &output_cache));
+                // Bust a bug (round 21): the reports on this Mac, and the loop that sends a waiting
+                // one by itself once it can go, from this launch on.
+                app.manage(bug_report::BugReports::for_app(&attachments_home, &app.package_info().version.to_string()));
+                bug_report::spawn_retry(app.clone());
+                // MEETING NOTES (Granola PRD V4): the microphone watcher, the prompt and the capture.
+                // After AppState exists: a meeting's company is read from the active conversation.
+                #[cfg(target_os = "macos")]
+                meetings::start(app);
+                // DICTATION (plan slice 1): when dictation.json says on, the tool starts as this
+                // app's child, on a thread of its own so first paint never waits for it.
+                #[cfg(target_os = "macos")]
+                {
+                    ensure_voice_state(app);
+                    let link = Arc::new(dictation_app::Link::default());
+                    app.manage(link.clone());
+                    // The Dictation sheet and the Settings row (slice 2) hear the tool through
+                    // `rich://dictation`: its state moved, or key capture answered.
+                    let window = app.clone();
+                    link.set_listener(Box::new(move |message| {
+                        #[cfg(target_os = "macos")]
+                {writing_host::on_message(&window,message);cleaner_host::on_message(&window,message);}
+                        if matches!(message,Some(dictation::ipc::ToolMessage::Writing {..})){return;}
+                        if matches!(message,Some(dictation::ipc::ToolMessage::Cleaner{..})){return;}
+                        if let Err(e) = window.emit(dictation_app::EVENT, dictation_app::event_payload(message)) {
+                            eprintln!("[richos] dictation: the window could not be told: {e}");
+                        }
+                    }));
+                    let host = dictation_app::Host::new(
+                        link,
+                        attachments_home.clone(),
+                        app.package_info().version.to_string(),
+                        Arc::new(AppVoice { app: app.clone() }),
+                    );
+                    app.manage(host.clone());
+                    // The dictation process starts once the page has taken over the splash: a
+                    // second program starting competes for the processor in the first fraction of a
+                    // second (Sage's plan 2026-11-14, rule 3).
+                    first_frame::after_page(app, move || dictation_app::boot(host));
+                }
+
+                // ================================================================
+                // THE UPDATE PATH — last in setup, and last for a reason
+                // ================================================================
+                //
+                // `updates::init` is pure (one `app.manage`, no I/O, no network), so its
+                // position costs first paint nothing — but the LAUNCH CHECK it arms must come
+                // after everything above, because a TLS handshake started before the ledger
+                // has replayed competes with the one thing the CEO is actually waiting for.
+                // The check itself then waits a further three seconds on its own task.
+                //
+                // The selftest branch is `app/scripts/updater-e2e.sh`'s entry point. It runs
+                // the app EXACTLY as it boots — same ledger, same window, same everything —
+                // and then drives the same `check`/`install` functions the two commands drive.
+                // A harness that skipped the boot would be proving a different program.
+                updates::init(app);
+                match updates::selftest_mode() {
+                    Some(mode) => {
+                        eprintln!("[richos] update selftest: {mode}");
+                        updates::spawn_selftest(app.clone(), mode);
+                    }
+                    None => updates::spawn_launch_check(app.clone()),
+                }
+                // THE WORK GATE'S WATCHER (CEO, 2026-09-05). It is what makes the update control
+                // DISAPPEAR while RichOS is doing something and COME BACK when it stops — the
+                // only source that can see workers is a file another process writes, so it has
+                // to be read rather than waited for. Costs a single mutex read per tick in every
+                // state except the two where the CEO has something to act on; see
+                // `updates::spawn_work_watcher`.
+                //
+                // NOT armed under the selftest, deliberately: `updater-e2e.sh` runs headless with
+                // no spine and no lease, and a watcher emitting into a webview that does not
+                // exist would add a moving part to the one harness that proves the signature
+                // refusal.
+                if updates::selftest_mode().is_none() {
+                    updates::spawn_work_watcher(app.clone());
+                    // THE NEWEST yt-dlp (CEO, 2026-10-07: "the most up-to-date version of that tool
+                    // is always available on the user's machine"; media-tools plan §3). Same three-
+                    // second delay as the update check, then every six hours, or every five
+                    // minutes while no copy is installed. Not under the selftest, for the same
+                    // reason as the watcher above.
+                    spawn_media_tools_refresh();
+                }
+
+                // ================================================================
+                // THE END OF RESOLUTION, SAID OUT LOUD
+                // ================================================================
+                //
+                // Everything above this line is this launch answering "where is my
+                // configuration?" — the engine directory, the compute lease, the corpus, both
+                // halves of loro, the company, the four durable stores. Everything below it and
+                // after it is conduct rather than resolution: `spawn_launch_check` sleeps three
+                // seconds and then talks to the network, and the window is already up.
+                //
+                // IT IS HERE SO A CHECK CAN KNOW WHEN TO STOP READING, and that is not a
+                // convenience. `gui-boot.test.sh` boots this binary under launchd's environment
+                // and holds every line it printed to account; without a terminator, "the boot
+                // log" would be "whatever had appeared after N seconds", and a check whose input
+                // depends on a sleep is a check that goes red for no reason on a slow morning
+                // and gets ignored by the third time. The marker makes the boundary a FACT the
+                // program states rather than a duration the harness guesses.
+                //
+                // It is also the honest answer to an operator reading a terminal: the lines
+                // above are all of it, so nothing further is coming and a missing line is
+                // missing rather than late.
+                //
+                // The line itself is said by `boot_marker`: here, or, when the engine check
+                // still owes the first-run setup report, the moment that report has printed.
+                boot_marker(|marker| marker.setup_returned = true);
+                // AND THE FAILURE ALERT STANDS DOWN ON THE SAME LINE, for the reason the marker
+                // above exists at all: this is the program stating where "starting up" ends.
+                // Past it there is a window, the app owns its own surfaces, and a modal system
+                // alert raised by a background thread that panicked would be an interruption
+                // rather than a rescue. The log keeps taking everything either way.
+                startup_alert::disarm();
+                launch_timing::mark_finished();
+                // Every byte of the updated bundle and the engine, once more, late, at background
+                // priority, and only after the page has taken over (`late_check.rs`).
+                let late_engine = app.state::<AppState>().boot_engine.clone();
+                first_frame::after_page(app, move || late_check::spawn_late_full_checks(late_engine));
+                #[cfg(target_os = "macos")]
+                {
+                    let capture_app = app.clone();
+                    first_frame::after_page(app, move || glance_capture_shortcut::restore(capture_app));
+                    first_frame::after_page(app, richfiles_integration::start_window_gestures);
+                }
+                // The first window is up. Optional private starter I/O stays off startup.
+                if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+                    std::thread::spawn(move || {
+                        if let Err(error) = richos_core::machine_settings::create_starter(&home) {
+                            eprintln!("[richos] machine settings starter could not be created: {error}");
+                        }
+                    });
+                }
+                Ok(())
             };
 
-            app.manage(AppState {
-                swearmeter: swearmeter_host::Service::new(
-                    app.handle().clone(), spine.reader(), control.clone(), card_counts, card_source_seen, &data_dir,
-                ),
-                quota: quota.clone(),
-                chat_readings,
-
-                work,
-                quit_confirmed: std::sync::atomic::AtomicBool::new(false),
-                // The SAME decision the window was built from, carried rather than
-                // re-derived: two readings of "may this launch take the screen" is two
-                // answers waiting to disagree.
-                can_come_back: activation.presentation == activation::Presentation::Regular,
-                provider_auth: Mutex::new(Default::default()),
-                account_auth: Mutex::new(None),
-                front_desk_primed_for: Mutex::new(Default::default()),
-                reader: spine.reader(),
-                spine: Mutex::new(spine),
-                config: Mutex::new(config),
-                machinery_root,
-                entity: Mutex::new(boot.entity),
-                registry_path,
-                registry_source: registry_load.source,
-                // PRESENCE, not success. A `RICHOS_ENTITY` that names nothing resolves to
-                // `None` and short-circuits BEFORE the saved choice — so a CEO who answered
-                // the picker under one would have his answer written to disk and never read
-                // again, and be asked at every launch for ever. Keying this on the variable
-                // being SET means the surface tells him it was decided outside the window and
-                // names who owns it, instead of silently swallowing his answer.
-                entity_pinned_by_env: std::env::var_os("RICHOS_ENTITY").is_some(),
-                entity_source: Mutex::new(boot.source),
-                nav: Mutex::new(nav_store),
-                control,
-                search,
-                search_socket,
-                correction: Mutex::new(correction),
-                spoken,
-                feedback,
-                launch: Mutex::new(launch_store),
-                memory: Mutex::new(memory_status),
-                loro_install: Arc::clone(&loro_install),
-                loro_provenance,
-                // KEPT, not re-derived. `provision_memory` opens the correction desk's log
-                // beside the ledger, and it must be the SAME directory this boot used —
-                // re-asking `app_data_dir()` in the command would be a second resolution of
-                // a question already answered, which is the shape of defect this whole
-                // evening has been about.
-                data_dir,
-                // THE SAME CELL THE LEASE FACTORY HOLDS, not a copy of the path. A copy
-                // would let `run_setup` update one and leave the other pointing at the
-                // directory the boot failed to find.
-                engine_dir: engine_cell,
-                claude_bin: claude_bin_cell.clone(),
-                boot_engine,
-            });
-            // What onboarding saved before this launch (or before this fix), into his loro.
-            spawn_onboarding_into_loro(app.handle());
-
-            // Resume only after AppState exists: PhoneBridge::new immediately reads
-            // the spine to prime the paired phone's conversation. The window was
-            // created above for first paint, but setup has not returned to the event
-            // loop yet. Its commands cannot use the app until this setup completes.
-            // A persisted pairing resumes without opening a new pairing window.
-            phone_runtime.resume_if_paired(app.handle().clone());
-            app.manage(phone_runtime);
-            richpass_host::start(app.handle().clone());
-            chat_notifications::install(app.handle());
-            chat_list::watch(app.handle().clone());
-            question_host::start(app.handle().clone());
-            swearmeter_host::start(app.handle().clone());
-            rich_files_host::start(app.handle().clone());
-            #[cfg(target_os = "macos")]
-            {app.manage(Arc::new(writing_host::Host::default()));cleaner_host::start(app.handle())?;cleaner_service::register(app.handle())?;}
-            let intake_app = app.handle().clone();
-            first_frame::after_page(app.handle(), move || start_incoming_drain(intake_app));
-            git_name_host::start(app.handle().clone());
-            peer_messages::start(app.handle().clone())?;
-            // After an update, this build's own engine, installed by the app itself (the flag
-            // was set at the first-run setup block above, before the window could ask). The
-            // earlier build's engine serves meanwhile, so the desk below is readied in it; the
-            // sessions that start after the swap start in the new one.
-            if engine_update_now {
-                update_engine_by_itself(app.handle().clone());
-            }
-            // Readiness starts before the window's setup/navigation reads, with the
-            // selected thread's immutable company scope. Reader snapshots stay available.
-            ready_selected_front_desk(app.handle());
-            spawn_idle_session_retirement(app.handle().clone());
-            // "Keep chat alive": the clock that looks at the chats whose box is checked.
-            chat_cache_host::start(app.handle().clone());
-            // The composer's attachments, in the SAME app-data directory the phone's
-            // attachment desk writes to (`phone/attachments.rs`). No I/O until a file arrives.
-            let attachments_home = app.state::<AppState>().data_dir.clone();
-            app.manage(mac_attachments::MacAttachments::open(&attachments_home));
-            // The Output panel's file commands and preview scheme (PRD §5), over the SAME store
-            // the spine and the work host write, and the published spine for the active thread.
-            // QuickLook renditions go in the app's cache directory (§4.8).
-            let output_cache = app.path().app_cache_dir().unwrap_or_else(|_| attachments_home.join("cache"));
-            let output_reader = app.state::<AppState>().reader.clone();
-            app.manage(output_files::OutputFiles::for_app(output_store, output_reader, &attachments_home, &output_cache));
-            // Bust a bug (round 21): the reports on this Mac, and the loop that sends a waiting
-            // one by itself once it can go, from this launch on.
-            app.manage(bug_report::BugReports::for_app(&attachments_home, &app.package_info().version.to_string()));
-            bug_report::spawn_retry(app.handle().clone());
-            // MEETING NOTES (Granola PRD V4): the microphone watcher, the prompt and the capture.
-            // After AppState exists: a meeting's company is read from the active conversation.
-            #[cfg(target_os = "macos")]
-            meetings::start(app.handle());
-            // DICTATION (plan slice 1): when dictation.json says on, the tool starts as this
-            // app's child, on a thread of its own so first paint never waits for it.
-            #[cfg(target_os = "macos")]
-            {
-                ensure_voice_state(app.handle());
-                let link = Arc::new(dictation_app::Link::default());
-                app.manage(link.clone());
-                // The Dictation sheet and the Settings row (slice 2) hear the tool through
-                // `rich://dictation`: its state moved, or key capture answered.
-                let window = app.handle().clone();
-                link.set_listener(Box::new(move |message| {
-                    #[cfg(target_os = "macos")]
-            {writing_host::on_message(&window,message);cleaner_host::on_message(&window,message);}
-                    if matches!(message,Some(dictation::ipc::ToolMessage::Writing {..})){return;}
-                    if matches!(message,Some(dictation::ipc::ToolMessage::Cleaner{..})){return;}
-                    if let Err(e) = window.emit(dictation_app::EVENT, dictation_app::event_payload(message)) {
-                        eprintln!("[richos] dictation: the window could not be told: {e}");
+            if let Some(complete) = native_startup_complete {
+                let app = app.handle().clone();
+                std::thread::Builder::new().name("richos-launch-initialize".into()).spawn(move || {
+                    // The startup panic hook reports a panic. A worker failure must end
+                    // the process too, just as a failure of synchronous Tauri setup did.
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| finish_startup(&app))) {
+                        Ok(Ok(())) => drop(complete.send(())),
+                        Ok(Err(error)) => {
+                            startup_alert::cannot_start(
+                                &format!("app setup after opening the native splash: {error}"),
+                                "RichOS could not finish preparing its window.",
+                            );
+                            std::process::exit(1);
+                        }
+                        Err(_) => std::process::exit(1),
                     }
-                }));
-                let host = dictation_app::Host::new(
-                    link,
-                    attachments_home.clone(),
-                    app.package_info().version.to_string(),
-                    Arc::new(AppVoice { app: app.handle().clone() }),
-                );
-                app.manage(host.clone());
-                // The dictation process starts once the page has taken over the splash: a
-                // second program starting competes for the processor in the first fraction of a
-                // second (Sage's plan 2026-11-14, rule 3).
-                first_frame::after_page(app.handle(), move || dictation_app::boot(host));
+                })?;
+                Ok(())
+            } else {
+                finish_startup(app.handle())
             }
-
-            // ================================================================
-            // THE UPDATE PATH — last in setup, and last for a reason
-            // ================================================================
-            //
-            // `updates::init` is pure (one `app.manage`, no I/O, no network), so its
-            // position costs first paint nothing — but the LAUNCH CHECK it arms must come
-            // after everything above, because a TLS handshake started before the ledger
-            // has replayed competes with the one thing the CEO is actually waiting for.
-            // The check itself then waits a further three seconds on its own task.
-            //
-            // The selftest branch is `app/scripts/updater-e2e.sh`'s entry point. It runs
-            // the app EXACTLY as it boots — same ledger, same window, same everything —
-            // and then drives the same `check`/`install` functions the two commands drive.
-            // A harness that skipped the boot would be proving a different program.
-            updates::init(app.handle());
-            match updates::selftest_mode() {
-                Some(mode) => {
-                    eprintln!("[richos] update selftest: {mode}");
-                    updates::spawn_selftest(app.handle().clone(), mode);
-                }
-                None => updates::spawn_launch_check(app.handle().clone()),
-            }
-            // THE WORK GATE'S WATCHER (CEO, 2026-09-05). It is what makes the update control
-            // DISAPPEAR while RichOS is doing something and COME BACK when it stops — the
-            // only source that can see workers is a file another process writes, so it has
-            // to be read rather than waited for. Costs a single mutex read per tick in every
-            // state except the two where the CEO has something to act on; see
-            // `updates::spawn_work_watcher`.
-            //
-            // NOT armed under the selftest, deliberately: `updater-e2e.sh` runs headless with
-            // no spine and no lease, and a watcher emitting into a webview that does not
-            // exist would add a moving part to the one harness that proves the signature
-            // refusal.
-            if updates::selftest_mode().is_none() {
-                updates::spawn_work_watcher(app.handle().clone());
-                // THE NEWEST yt-dlp (CEO, 2026-10-07: "the most up-to-date version of that tool
-                // is always available on the user's machine"; media-tools plan §3). Same three-
-                // second delay as the update check, then every six hours, or every five
-                // minutes while no copy is installed. Not under the selftest, for the same
-                // reason as the watcher above.
-                spawn_media_tools_refresh();
-            }
-
-            // ================================================================
-            // THE END OF RESOLUTION, SAID OUT LOUD
-            // ================================================================
-            //
-            // Everything above this line is this launch answering "where is my
-            // configuration?" — the engine directory, the compute lease, the corpus, both
-            // halves of loro, the company, the four durable stores. Everything below it and
-            // after it is conduct rather than resolution: `spawn_launch_check` sleeps three
-            // seconds and then talks to the network, and the window is already up.
-            //
-            // IT IS HERE SO A CHECK CAN KNOW WHEN TO STOP READING, and that is not a
-            // convenience. `gui-boot.test.sh` boots this binary under launchd's environment
-            // and holds every line it printed to account; without a terminator, "the boot
-            // log" would be "whatever had appeared after N seconds", and a check whose input
-            // depends on a sleep is a check that goes red for no reason on a slow morning
-            // and gets ignored by the third time. The marker makes the boundary a FACT the
-            // program states rather than a duration the harness guesses.
-            //
-            // It is also the honest answer to an operator reading a terminal: the lines
-            // above are all of it, so nothing further is coming and a missing line is
-            // missing rather than late.
-            //
-            // The line itself is said by `boot_marker`: here, or, when the engine check
-            // still owes the first-run setup report, the moment that report has printed.
-            boot_marker(|marker| marker.setup_returned = true);
-            // AND THE FAILURE ALERT STANDS DOWN ON THE SAME LINE, for the reason the marker
-            // above exists at all: this is the program stating where "starting up" ends.
-            // Past it there is a window, the app owns its own surfaces, and a modal system
-            // alert raised by a background thread that panicked would be an interruption
-            // rather than a rescue. The log keeps taking everything either way.
-            startup_alert::disarm();
-            launch_timing::mark_finished();
-            // Every byte of the updated bundle and the engine, once more, late, at background
-            // priority, and only after the page has taken over (`late_check.rs`).
-            let late_engine = app.state::<AppState>().boot_engine.clone();
-            first_frame::after_page(app.handle(), move || late_check::spawn_late_full_checks(late_engine));
-            #[cfg(target_os = "macos")]
-            {
-                let capture_app = app.handle().clone();
-                first_frame::after_page(app.handle(), move || glance_capture_shortcut::restore(capture_app));
-                first_frame::after_page(app.handle(), richfiles_integration::start_window_gestures);
-            }
-            // The first window is up. Optional private starter I/O stays off startup.
-            if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-                std::thread::spawn(move || {
-                    if let Err(error) = richos_core::machine_settings::create_starter(&home) {
-                        eprintln!("[richos] machine settings starter could not be created: {error}");
-                    }
-                });
-            }
-            Ok(())
         })
         .plugin(tauri_plugin_updater::Builder::new().build())
         // The Output panel's save sheet (output side-panel PRD §5.4, S6). Run from Rust inside
@@ -4413,6 +4478,7 @@ fn main() {
             richfiles_integration::richfiles_settings,
             richfiles_integration::output_git_available,
             glance_capture_shortcut::glance_capture_status, glance_capture_shortcut::glance_capture_configure,
+            glance_capture_shortcut::glance_capture_open,
             glance_capture_shortcut::glance_workflow_status, glance_capture_shortcut::glance_workflow_configure,
             richfiles_integration::output_git_open, richfiles_integration::output_git_place, richfiles_integration::richfiles_git_chat,
             question_host::answer_question, question_host::question_shown, question_host::open_question_counts,
@@ -4957,8 +5023,10 @@ fn main() {
                         sweeper.run(richos_core::app_cleanup::Moment::Quit).ok();
                     }
                     swearmeter_host::save_on_exit(&state);
-                    if let Err(e) = state.launch.lock().unwrap().note_clean_exit() {
-                        eprintln!("[richos] launch record: could not mark a clean exit: {e}");
+                }
+                if let Some(launch) = handle.try_state::<Arc<Mutex<LaunchStore>>>() {
+                    if let Err(error) = launch.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).note_clean_exit() {
+                        eprintln!("[richos] launch record: could not mark a clean exit: {error}");
                     }
                 }
             }
@@ -4990,6 +5058,10 @@ enum SplashPlayback {
     Fallback {
         #[serde(rename = "elapsedMs")]
         elapsed_ms: u64,
+        #[serde(rename = "nativeCue")]
+        native_cue: bool,
+        #[serde(rename = "startedAtMs")]
+        started_at_ms: Option<u64>,
     },
 }
 
@@ -4998,7 +5070,7 @@ async fn splash_native_finished() -> SplashPlayback {
     #[cfg(target_os = "macos")]
     { splash_player::finished().await }
     #[cfg(not(target_os = "macos"))]
-    { SplashPlayback::Fallback { elapsed_ms: 0 } }
+    { SplashPlayback::Fallback { elapsed_ms: 0, native_cue: false, started_at_ms: None } }
 }
 
 #[richos_command::command]
@@ -5175,8 +5247,12 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
         &thread_id,
     )
     .map_err(|e| e.to_string())?;
+    let states = state.work.assignment_activity(&rows);
     Ok(serde_json::json!({
-        "assignments": rows.iter().map(|row| {
+        "assignments": rows.iter().zip(states).map(|(row, activity)| {
+            use richos_core::assignment::AssignmentState;
+            let status = activity.state;
+            let current_detail = status.filter(|state| *state != AssignmentState::Unknown);
             serde_json::json!({
                 "id": row.id,
                 "title": row.title,
@@ -5195,8 +5271,8 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
                 // It is not an identifier he is ever shown — it never reaches a sentence,
                 // the same way `id` above never does.
                 "turnRef": row.instruction_ledger_ref,
-                "state": row.reported_state().unwrap_or(richos_core::assignment::AssignmentState::Interrupted).as_str(),
-                "detail": row.reported_state().map(|_|row.detail.as_str()),
+                "state": status.unwrap_or(AssignmentState::Interrupted).as_str(),
+                "detail": current_detail.map(|_|row.detail.as_str()),
                 // **THE DETAIL TELLS HIM WHAT TO DO** (sign in, a helper he may stop, an answer
                 // he owes), so Under the hood shows it without Technical view (hunt 57, finding 11).
                 // So does Rich's waiting sentence while a teammate works (review of 3b91f1223).
@@ -10833,7 +10909,7 @@ fn start_native_window(
     start_ordinal: Option<u64>,
     opening: NativeOpening<'_>,
     openings_record: String,
-) -> tauri::Result<()> {
+) -> tauri::Result<tokio::sync::oneshot::Sender<()>> {
     let NativeOpening { pick, worker, bar } = opening;
     let background = first_frame::color(splash_pick::parse_hex(&pick.ground)
         .unwrap_or(first_frame::SPLASH_GROUND));
@@ -10866,9 +10942,13 @@ fn start_native_window(
     let launch_script = launch_init_script(LaunchKind::Fresh, start_ordinal,
         Some((&pick.id, playing, if playing { bar } else { None })));
     let app = app.clone();
+    let (startup_done, startup_ready) = tokio::sync::oneshot::channel();
     tauri::async_runtime::spawn(async move {
         if playing {
             splash_player::wait_for_start().await;
+        }
+        if startup_ready.await.is_err() {
+            return;
         }
         let main = app.clone();
         if let Err(error) = app.run_on_main_thread(move || {
@@ -10896,7 +10976,7 @@ fn start_native_window(
             eprintln!("[richos] native splash: Home attachment could not reach the main thread ({error})");
         }
     });
-    Ok(())
+    Ok(startup_done)
 }
 
 /// WHAT THE PAGE KNOWS ABOUT THIS START BEFORE ANY COMMAND CAN ANSWER: the curtain decides in the
@@ -11446,16 +11526,17 @@ fn second_window_openings(app: &AppHandle) -> String {
 /// left it at. It is a `SecondWindow` launch: nothing begins, no opening screen, no count
 /// (`launch.rs:149-151`) — this is a window coming back on a run that never stopped, which is exactly what that kind is for.
 fn reopen_window(app: &AppHandle) {
-    if let Some(window) = conversation_window(app) {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-        return;
-    }
     let Some(config) = app.config().app.windows.first().cloned() else {
         eprintln!("[richos] no window could be reopened: this build declares none");
         return;
     };
+    // During a native opening the window already exists before its WebView.
+    if let Some(window) = app.get_window(&config.label) {
+        drop(window.show());
+        drop(window.unminimize());
+        drop(window.set_focus());
+        return;
+    }
     let data_dir = app
         .try_state::<AppState>()
         .map(|state| state.data_dir.clone())

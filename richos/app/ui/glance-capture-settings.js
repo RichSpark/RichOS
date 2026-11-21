@@ -1,55 +1,16 @@
-/* RichOS registers the optional shortcut. RichGlance opens the native capture overlay. */
+/* The rail page and Settings sheet control the same RichGlance preferences. */
 (function () {
   "use strict";
-  const settings = window.RichSettings, bridge = window.RichBridge;
+  const settings = window.RichSettings;
+  const bridge = window.RichBridge;
   if (!settings || !bridge) return;
 
-  let view, sheet, toggle, record, feedback, saved, keycaps, keyHint, summary, card;
-  let workflow, workflowBusy = false;
-  let listening = false, busy = false;
-
-  function paintWorkflow() {
-    if (!sheet) return;
-    const open = sheet.querySelector("#richglance-open-editor");
-    const copy = sheet.querySelector("#richglance-copy");
-    const history = sheet.querySelector("#richglance-history");
-    for (const button of [open, copy, history]) button.disabled = !workflow || workflowBusy;
-    open.setAttribute("aria-pressed", String(workflow?.opensEditor === true));
-    copy.setAttribute("aria-pressed", String(workflow?.opensEditor !== true));
-    history.setAttribute("aria-checked", String(workflow?.keepsHistory === true));
-    history.closest(".dict-card").classList.toggle("is-on", workflow?.keepsHistory === true);
-    sheet.querySelector("#richglance-history-summary").textContent = workflow?.keepsHistory
-      ? "On. Originals and editable marks stay on this Mac for seven days."
-      : "Off. Turn on to keep screenshots and editable marks for seven days.";
-  }
-
-  async function loadWorkflow() {
-    try {
-      workflow = await bridge.invoke("glance_workflow_status");
-      paintWorkflow();
-    } catch (error) {
-      sheet.querySelector("#richglance-workflow-feedback").textContent = String(error);
-    }
-  }
-
-  async function updateWorkflow(opensEditor, keepsHistory) {
-    if (workflowBusy) return;
-    workflowBusy = true;
-    const message = sheet.querySelector("#richglance-workflow-feedback");
-    message.textContent = "";
-    paintWorkflow();
-    try {
-      workflow = await bridge.invoke("glance_workflow_configure", { opensEditor, keepsHistory });
-      message.textContent = "Saved.";
-    } catch (error) {
-      message.textContent = String(error);
-    } finally {
-      workflowBusy = false;
-      paintWorkflow();
-      if (!sheet.hidden) sheet.querySelector(keepsHistory !== null ? "#richglance-history"
-        : opensEditor ? "#richglance-open-editor" : "#richglance-copy").focus();
-    }
-  }
+  const page = document.getElementById("glance-page");
+  const call = (command, args = {}) => bridge.invoke(command, args);
+  const surfaces = [];
+  let view, workflow, sheet, sheetControls;
+  let shortcutBusy = false, workflowBusy = false;
+  let workflowRead = 0;
 
   function shortcutLabel(shortcut) {
     return (shortcut.control ? "⌃" : "") + (shortcut.option ? "⌥" : "") +
@@ -58,49 +19,203 @@
   }
 
   function paint() {
-    if (!view) return;
     const row = document.getElementById("set-richglance-capture-state");
-    if (row) row.textContent = !view.enabled ? "Off" : view.registered ? shortcutLabel(view.shortcut) : "Shortcut unavailable";
-    if (!sheet) return;
-    toggle.setAttribute("aria-checked", String(view.enabled));
-    card.classList.toggle("is-on", view.registered);
-    toggle.disabled = busy;
-    record.disabled = busy;
-    summary.textContent = !view.enabled ? "Off. Capture… is always in RichGlance’s File menu."
-      : view.registered ? `On. Press ${shortcutLabel(view.shortcut)} in any app to start a capture.`
-        : "Shortcut unavailable. Choose another combination.";
-    record.textContent = listening ? "Cancel" : "Change";
-    record.setAttribute("aria-label", listening ? "Cancel recording a capture shortcut" : "Change capture shortcut");
-    keyHint.textContent = listening ? "Press the new shortcut. Esc to cancel."
-      : view.enabled ? "Starts a capture on the display under your pointer."
-        : "Used when Capture from any app is on.";
-    keycaps.replaceChildren(...[...(listening ? "?" : shortcutLabel(view.shortcut))].map(text => {
-      const key = document.createElement("kbd");
-      key.className = "dict-key";
-      key.style.cssText = "width:36px;height:38px;align-items:center;justify-content:center;padding:0";
-      key.textContent = text;
-      return key;
-    }));
+    if (row && view) {
+      row.textContent = !view.enabled ? "Off" : view.registered ? shortcutLabel(view.shortcut) : "Shortcut unavailable";
+    }
+    for (const surface of surfaces) surface.paint();
   }
 
-  async function update(enabled, shortcut) {
-    const replacing = listening;
-    busy = true;
-    listening = false;
-    feedback.textContent = "";
-    saved.hidden = true;
-    paint();
+  async function loadWorkflow(surface) {
+    if (workflowBusy) return;
+    const ticket = ++workflowRead;
     try {
-      view = await bridge.invoke("glance_capture_configure", { enabled, shortcut });
-      saved.hidden = false;
-    } catch (error) {
-      feedback.textContent = String(error);
-      listening = replacing && !sheet.hidden;
-    } finally {
-      busy = false;
+      const status = await call("glance_workflow_status");
+      if (ticket !== workflowRead) return;
+      workflow = status;
       paint();
-      if (replacing && !sheet.hidden) record.focus();
+    } catch (error) {
+      if (ticket === workflowRead) surface.message(error);
     }
+  }
+
+  function bind(root, ids) {
+    const el = name => root.querySelector("#" + ids[name]);
+    const onPage = root === page;
+    const toggle = el("toggle"), record = el("record"), feedback = el("feedback");
+    const saved = onPage ? el("saved") : root.querySelector(".dict-saved");
+    const keycaps = el("keycaps"), keyHint = el("keyHint"), summary = el("summary");
+    const open = el("open"), copy = el("copy"), history = el("history"), historySummary = el("historySummary");
+    const confirmation = el("confirmation"), cancel = el("cancel"), remove = el("remove");
+    const message = el("message"), shortcut = el("shortcut");
+    let listening = false;
+
+    function paintSurface() {
+      for (const button of [open, copy, history, remove]) button.disabled = !workflow || workflowBusy;
+      open.setAttribute("aria-pressed", String(workflow?.opensEditor === true));
+      copy.setAttribute("aria-pressed", String(workflow?.opensEditor !== true));
+      history.setAttribute("aria-checked", String(workflow?.keepsHistory === true));
+      history.closest(".dict-card")?.classList.toggle("is-on", workflow?.keepsHistory === true);
+      if (workflow?.keepsHistory) {
+        historySummary.textContent = workflow.keepsForever
+          ? "On. Originals and editable marks stay on this Mac until you delete them."
+          : "On. Originals and editable marks stay on this Mac for seven days.";
+      } else {
+        historySummary.textContent = workflow?.keepsForever
+          ? "Off. Turn on to keep screenshots and editable marks until you delete them."
+          : "Off. Turn on to keep screenshots and editable marks for seven days.";
+      }
+      toggle.disabled = record.disabled = !view || shortcutBusy;
+      if (!view) return;
+      toggle.setAttribute("aria-checked", String(view.enabled));
+      toggle.closest(".dict-card")?.classList.toggle("is-on", view.registered);
+      const label = shortcutLabel(view.shortcut);
+      summary.textContent = !view.enabled ? "Off. Capture… is always in RichGlance’s File menu."
+        : view.registered ? `On. Press ${label} in any app to start a capture.`
+          : "Shortcut unavailable. Choose another combination.";
+      record.textContent = listening ? "Cancel" : "Change";
+      record.setAttribute("aria-label", listening ? "Cancel recording a capture shortcut" : "Change capture shortcut");
+      keyHint.textContent = listening ? "Press the new shortcut. Esc to cancel."
+        : view.enabled ? "Starts a capture on the display under your pointer."
+          : "Used when Capture from any app is on.";
+      keycaps.classList.toggle("is-listening", listening);
+      keycaps.replaceChildren(...[...(listening ? "?" : label)].map(text => {
+        const key = document.createElement("kbd");
+        key.className = onPage ? "gp-key" : "dict-key";
+        if (!onPage) key.style.cssText = "width:36px;height:38px;align-items:center;justify-content:center;padding:0";
+        key.textContent = text;
+        return key;
+      }));
+      if (shortcut) {
+        const keys = document.createElement("kbd");
+        keys.textContent = label;
+        shortcut.replaceChildren(...(view.enabled && view.registered
+          ? ["or press ", keys, " in any app"]
+          : ["Turn on Capture from any app to start one with a shortcut"]));
+      }
+    }
+
+    function setText(node, text) {
+      node.textContent = text;
+      node.hidden = !text;
+    }
+
+    function reset() {
+      listening = false;
+      confirmation.hidden = true;
+      saved.hidden = true;
+      setText(feedback, "");
+      setText(message, "");
+    }
+
+    async function updateShortcut(enabled, keys) {
+      if (!view || shortcutBusy) return;
+      const replacing = listening;
+      listening = false;
+      shortcutBusy = true;
+      setText(feedback, "");
+      setText(saved, "Saving…");
+      paint();
+      try {
+        view = await call("glance_capture_configure", { enabled, shortcut: keys });
+        setText(saved, "Saved.");
+      } catch (error) {
+        setText(saved, "");
+        setText(feedback, String(error));
+        listening = replacing && !root.hidden;
+      } finally {
+        shortcutBusy = false;
+        paint();
+        if (replacing && !root.hidden) record.focus();
+      }
+    }
+
+    async function updateWorkflow(opensEditor, keepsHistory, returnFocus) {
+      if (!workflow || workflowBusy) return;
+      workflowBusy = true;
+      ++workflowRead;
+      setText(message, "Saving…");
+      paint();
+      try {
+        workflow = await call("glance_workflow_configure", { opensEditor, keepsHistory });
+        setText(onPage ? saved : message, "Saved.");
+        if (onPage) setText(message, "");
+      } catch (error) {
+        setText(message, String(error));
+      } finally {
+        workflowBusy = false;
+        paint();
+        if (!root.hidden && document.activeElement === document.body) returnFocus.focus();
+      }
+    }
+
+    toggle.addEventListener("click", () => updateShortcut(!view.enabled, view.shortcut));
+    record.addEventListener("click", () => {
+      listening = !listening;
+      setText(feedback, "");
+      saved.hidden = true;
+      if (listening) record.focus();
+      paint();
+    });
+    record.addEventListener("blur", () => {
+      if (!listening || shortcutBusy) return;
+      listening = false;
+      setText(feedback, "");
+      paint();
+    });
+    copy.addEventListener("click", () => updateWorkflow(false, null, copy));
+    open.addEventListener("click", () => updateWorkflow(true, null, open));
+    history.addEventListener("click", () => {
+      if (!workflow.keepsHistory) updateWorkflow(null, true, history);
+      else {
+        confirmation.hidden = false;
+        cancel.focus();
+      }
+    });
+    cancel.addEventListener("click", () => { confirmation.hidden = true; history.focus(); });
+    remove.addEventListener("click", () => {
+      confirmation.hidden = true;
+      updateWorkflow(null, false, history);
+    });
+
+    root.addEventListener("keydown", event => {
+      if (event.key === "Escape" && (listening || !confirmation.hidden || !onPage)) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (listening) {
+          listening = false;
+          setText(feedback, "");
+          paint();
+        } else if (!confirmation.hidden) cancel.click();
+        else close();
+        return;
+      }
+      if (event.key === "Tab") {
+        if (onPage) return;
+        const buttons = [...root.querySelectorAll("button:not(:disabled)")].filter(button => !button.closest("[hidden]"));
+        if (document.activeElement === (event.shiftKey ? buttons[0] : buttons.at(-1))) {
+          event.preventDefault();
+          (event.shiftKey ? buttons.at(-1) : buttons[0])?.focus();
+        }
+        return;
+      }
+      if (!listening) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.repeat) return;
+      if (!/^(Key[A-Z]|Digit[0-9])$/.test(event.code)) return;
+      if ([event.ctrlKey, event.altKey, event.shiftKey, event.metaKey].filter(Boolean).length < 2) {
+        setText(feedback, "Use two or more modifiers and a letter or number.");
+        return;
+      }
+      updateShortcut(view.enabled, { code: event.code, control: event.ctrlKey, option: event.altKey,
+        shift: event.shiftKey, command: event.metaKey });
+    }, true);
+
+    const surface = { paint: paintSurface, reset, message: text => setText(message, String(text)) };
+    surfaces.push(surface);
+    surface.paint();
+    return surface;
   }
 
   function build() {
@@ -169,88 +284,20 @@
         </div>
       </section>`;
     document.body.appendChild(sheet);
-    toggle = sheet.querySelector("#richglance-capture-on");
-    record = sheet.querySelector("#richglance-capture-record");
-    feedback = sheet.querySelector("#richglance-capture-feedback");
-    card = sheet.querySelector(".dict-card");
-    saved = sheet.querySelector(".dict-saved");
-    keycaps = sheet.querySelector("#richglance-capture-keys");
-    keyHint = sheet.querySelector("#richglance-capture-key-hint");
-    summary = sheet.querySelector("#richglance-capture-summary");
     sheet.querySelector(".dict-close").addEventListener("click", close);
     sheet.addEventListener("click", event => { if (event.target === sheet) close(); });
-    toggle.addEventListener("click", () => update(!view.enabled, view.shortcut));
-    record.addEventListener("click", () => {
-      listening = !listening;
-      feedback.textContent = "";
-      saved.hidden = true;
-      paint();
+    sheetControls = bind(sheet, {
+      toggle: "richglance-capture-on", record: "richglance-capture-record", feedback: "richglance-capture-feedback",
+      keycaps: "richglance-capture-keys", keyHint: "richglance-capture-key-hint",
+      summary: "richglance-capture-summary", open: "richglance-open-editor", copy: "richglance-copy",
+      history: "richglance-history", historySummary: "richglance-history-summary", confirmation: "richglance-history-confirm",
+      cancel: "richglance-keep-history", remove: "richglance-remove-history", message: "richglance-workflow-feedback",
     });
-    record.addEventListener("blur", () => {
-      if (!listening) return;
-      listening = false;
-      feedback.textContent = "";
-      paint();
-    });
-    sheet.querySelector("#richglance-copy").addEventListener("click", () => updateWorkflow(false, null));
-    sheet.querySelector("#richglance-open-editor").addEventListener("click", () => updateWorkflow(true, null));
-    const history = sheet.querySelector("#richglance-history");
-    const confirmation = sheet.querySelector("#richglance-history-confirm");
-    const cancel = sheet.querySelector("#richglance-keep-history");
-    history.addEventListener("click", () => {
-      if (!workflow?.keepsHistory) updateWorkflow(null, true);
-      else {
-        confirmation.hidden = false;
-        cancel.focus();
-      }
-    });
-    cancel.addEventListener("click", () => { confirmation.hidden = true; history.focus(); });
-    sheet.querySelector("#richglance-remove-history").addEventListener("click", () => {
-      confirmation.hidden = true;
-      updateWorkflow(null, false);
-    });
-    sheet.addEventListener("keydown", handleKey, true);
-    paintWorkflow();
-  }
-
-  function handleKey(event) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      if (listening) {
-        listening = false;
-        feedback.textContent = "";
-        paint();
-      } else if (!sheet.querySelector("#richglance-history-confirm").hidden) {
-        sheet.querySelector("#richglance-keep-history").click();
-      } else close();
-      return;
-    }
-    if (event.key === "Tab") {
-      const buttons = [...sheet.querySelectorAll("button:not(:disabled)")].filter(button => !button.closest("[hidden]"));
-      const boundary = event.shiftKey ? buttons[0] : buttons.at(-1);
-      if (document.activeElement === boundary) {
-        event.preventDefault();
-        (event.shiftKey ? buttons.at(-1) : buttons[0])?.focus();
-      }
-      return;
-    }
-    if (!listening) return;
-    event.preventDefault();
-    event.stopPropagation();
-    if (event.repeat || !/^(Key[A-Z]|Digit[0-9])$/.test(event.code)) return;
-    if ([event.ctrlKey, event.altKey, event.shiftKey, event.metaKey].filter(Boolean).length < 2) {
-      feedback.textContent = "Use two or more modifiers and a letter or number.";
-      return;
-    }
-    update(view.enabled, { code: event.code, control: event.ctrlKey, option: event.altKey,
-      shift: event.shiftKey, command: event.metaKey });
   }
 
   function close() {
-    listening = false;
     sheet.hidden = true;
-    sheet.querySelector("#richglance-history-confirm").hidden = true;
+    sheetControls.reset();
     document.getElementById("set-btn")?.focus();
   }
 
@@ -258,17 +305,83 @@
     settings.close();
     build();
     sheet.hidden = false;
-    feedback.textContent = "";
-    saved.hidden = true;
+    sheetControls.reset();
     paint();
     sheet.querySelector(".dict-close").focus();
-    loadWorkflow();
+    loadWorkflow(sheetControls);
   }
 
-  bridge.invoke("glance_capture_status").then(status => {
-    if (status?.available) {
-      view = status;
-      settings.registerGlanceCapture({ open, paint });
+  function registerPage() {
+    if (!page) return;
+    const $ = id => document.getElementById(id);
+    const surface = bind(page, {
+      toggle: "gp-shortcut", record: "gp-change", feedback: "gp-key-error", saved: "gp-saved",
+      keycaps: "gp-keys", keyHint: "gp-key-hint", summary: "gp-shortcut-summary", shortcut: "gp-cap",
+      open: "gp-after-edit", copy: "gp-after-copy", history: "gp-history", historySummary: "gp-history-summary",
+      confirmation: "gp-history-confirm", cancel: "gp-history-keep", remove: "gp-history-remove", message: "gp-workflow-status",
+    });
+    const viewer = $("gp-viewer");
+    const viewerStatus = $("gp-viewer-status");
+    const viewerCount = $("gp-viewer-count");
+    let viewerState, viewerBusy = false;
+    async function readViewer(enabled = null) {
+      if (viewerBusy) return;
+      viewerBusy = true;
+      viewer.disabled = true;
+      viewerStatus.textContent = enabled === null ? "" : "Checking image viewer choices with macOS…";
+      viewerStatus.hidden = !viewerStatus.textContent;
+      try {
+        viewerState = await call("richfiles_settings", { option: enabled === null ? null : "pictures", enabled });
+        viewer.setAttribute("aria-checked", String(viewerState.pictures));
+        viewerCount.hidden = !viewerState.pictures || !viewerState.pictureFormats;
+        if (!viewerCount.hidden) {
+          viewerCount.textContent = `RichGlance opens ${viewerState.picturesOpened} of ${viewerState.pictureFormats} formats.`;
+        }
+        viewerStatus.textContent = viewerState.message || "";
+      } catch (error) {
+        viewerStatus.textContent = String(error);
+      } finally {
+        viewerBusy = false;
+        viewer.disabled = !viewerState;
+        viewerStatus.hidden = !viewerStatus.textContent;
+      }
     }
+    viewer.addEventListener("click", () => readViewer(!viewerState.pictures));
+    window.addEventListener("focus", () => { if (!page.hidden) readViewer(); });
+
+    function external(button, command, args, progress) {
+      button.addEventListener("click", async () => {
+        if (button.getAttribute("aria-disabled") === "true") return;
+        button.setAttribute("aria-disabled", "true");
+        surface.message(progress);
+        try {
+          await call(command, args);
+          surface.message("");
+        } catch (error) {
+          surface.message(error);
+        } finally {
+          button.removeAttribute("aria-disabled");
+        }
+      });
+    }
+    external($("gp-capture"), "glance_capture_open", {}, "Opening capture…");
+    external($("gp-richfiles"), "richfiles_open", { imageViewerSettings: true }, "Opening RichFiles Settings…");
+
+    window.RichNavRail.registerToolPage("glance", "RichGlance", page, {
+      onShow() {
+        paint();
+        loadWorkflow(surface);
+        readViewer();
+      },
+      onHide: surface.reset,
+    });
+    $("nr-glance").hidden = false;
+  }
+
+  call("glance_capture_status").then(status => {
+    if (!status?.available) return;
+    view = status;
+    settings.registerGlanceCapture({ open, paint });
+    registerPage();
   }).catch(() => {});
 })();

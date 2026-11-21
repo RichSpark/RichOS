@@ -112,6 +112,7 @@ public struct RichFilesScenes: Scene {
 public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @Published private(set) var requestID = UUID()
     private var pending: [URL] = []
+    private(set) var imageViewerSettingsRequested = false
     private var handoffs: [UUID] = []
     private var openedHandoffs: Set<UUID> = []
     private var openedInitialBrowser = false
@@ -159,13 +160,17 @@ public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, Observab
     public func application(_ application: NSApplication, open urls: [URL]) {
         pending.append(contentsOf: urls.filter(\.isFileURL))
         for url in urls {
-            if let id = WorkspaceHandoff.ticketID(from: url),
+            if url.absoluteString == "richfiles-workspace://settings/image-viewer" {
+                imageViewerSettingsRequested = true
+            } else if let id = WorkspaceHandoff.ticketID(from: url),
                !openedHandoffs.contains(id), !handoffs.contains(id), WorkspaceHandoff.hasPendingTicket(id) {
                 handoffs.append(id)
             }
         }
         requestID = UUID()
     }
+
+    func imageViewerSettingsOpened() { imageViewerSettingsRequested = false }
 
     func takePending() -> [URL] {
         defer { pending.removeAll() }
@@ -200,7 +205,7 @@ public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, Observab
 enum BrowserCommand: Codable, Hashable {
     case open, rename, trash, preview, address, search, back, forward, up, refresh, revealFolder
     case selectAll, copy, cut, paste, undo, redo, newFolder, newTab, closeTab, properties, workspaces, diskUsage
-    case duplicates, checksum, compareFolders, settings
+    case duplicates, checksum, compareFolders, settings, imageViewerSettings
     case copyPath, actionPalette, addToShelf, fileShelf, splitView, switchPane
     case grid(Int, Int, Bool)
 }
@@ -312,7 +317,14 @@ struct RichFilesSettings: View {
     @State private var page = Page.general
     @State private var display = BrowserPreferences()
 
-    private enum Page: String, CaseIterable, Identifiable {
+    init(workspace: WindowWorkspace, windowSize: CGSize, initialPage: Page = .general, close: @escaping () -> Void) {
+        self.workspace = workspace
+        self.windowSize = windowSize
+        self.close = close
+        _page = State(initialValue: initialPage)
+    }
+
+    enum Page: String, CaseIterable, Identifiable {
         case general = "General"
         case keyboard = "Keyboard"
         case association = "Default file manager"
