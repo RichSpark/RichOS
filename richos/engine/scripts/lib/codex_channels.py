@@ -698,6 +698,9 @@ def position(source, saved):
     return offset
 
 
+LIVE_LEGACY_SPOOL = Path("codex-watch/live.jsonl")
+
+
 def scan(state):
     """One next record per connection. No position is written by the scanner."""
     state = Path(state)
@@ -713,28 +716,14 @@ def scan(state):
             source = p / "to-rich.jsonl"
             legacy = c.get("legacy_folder")
             if legacy:
-                if c.get("preserves_legacy_outbox"):
-                    outbox = Path(legacy) / "to-codex.md"
-                    if outbox.is_file():
-                        e = event(p, c, outbox, 0, 0)
-                        e["record"] = dict(version=VERSION, message_id="legacy-outbox", kind="legacy_notice",
-                            text="Rich's previous shared Codex handoffs are preserved at %s. "
-                                 "Use the original record to reconcile unfinished handoffs with their current owners. "
-                                 "Do not redispatch historical tasks automatically." % outbox)
-                        events.append(e)
-                raw = Path(legacy) / "to-rich.md"
-                boundary = c.get("legacy_boundary", 0)
-                if not c.get("legacy_live") and raw.exists() and raw.stat().st_size > boundary:
-                    e = event(p, c, raw, boundary, boundary)
-                    e["record"] = dict(version=VERSION, message_id="legacy-tail", kind="legacy_notice",
-                        text="Unframed legacy input remains preserved at %s after byte %s. Use the migration handoff and re-send unanswered requests on dedicated pairs; do not judge or execute fragments." % (raw, boundary))
-                    events.append(e)
                 if not c.get("imports_legacy_spool"):
                     continue
-                source = state / "codex-watch" / "pending.jsonl"
+                # The pre-cutover spool and archive notices stay on disk outside delivery.
+                source = state / LIVE_LEGACY_SPOOL
                 if not source.exists():
                     continue
-            pos = state / "codex-watch" / "accepted" / (c["connection_id"] + ".json")
+            suffix = ".live.json" if legacy else ".json"
+            pos = state / "codex-watch" / "accepted" / (c["connection_id"] + suffix)
             try:
                 saved = load(pos)
                 offset = position(source, saved)
@@ -751,8 +740,9 @@ def scan(state):
                     if not isinstance(text, str):
                         raise ValueError("Invalid preserved legacy spool record")
                     e = event(p, c, source, offset, f.tell())
-                    e["record"] = dict(version=VERSION, message_id="legacy-" + hashlib.sha256(
-                        (identity(source) + ":" + str(offset)).encode()).hexdigest(), text=text, kind="legacy_import")
+                    e["record"] = dict(version=VERSION, message_id="legacy-live-" + hashlib.sha256(
+                        (e["source_identity"] + ":" + str(offset)).encode()).hexdigest(),
+                        text=text, kind="legacy_live")
                     events.append(e)
             else:
                 for start, end, row in records(source, offset):

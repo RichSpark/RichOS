@@ -77,10 +77,10 @@ class Walk:
         return self.sh('kill -0 %d 2>/dev/null && echo alive || true' % pid) == 'alive'
 
     def offsets_inode(self):
-        return self.sh('stat -f %i ' + shlex.quote(self.watch + '/watch/app-host/offsets.json') + ' 2>/dev/null || true')
+        return self.sh('stat -f %i ' + shlex.quote(self.watch + '/watch/app-host/live-offsets.json') + ' 2>/dev/null || true')
 
     def pending(self):
-        return self.sh('cat ' + shlex.quote(self.watch + '/pending.jsonl') + ' 2>/dev/null || true')
+        return self.sh('cat ' + shlex.quote(self.watch + '/live.jsonl') + ' 2>/dev/null || true')
 
     def logs(self):
         return self.sh('cat ' + shlex.quote(self.payload) + '/app.log ' + shlex.quote(self.payload)

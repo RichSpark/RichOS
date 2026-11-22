@@ -59,14 +59,13 @@ Both review watchers use the same framed READY reader and deliver review results
 on the originating pair. Existing work, review and landing authorization still
 apply.
 
-An upgrade preserves the old Markdown files and any prior frozen legacy
-association. The app and terminal keep reading the old incoming files for
-Codex chats that still use them. The saved incoming spool imports into its owning conversation
-with deterministic receipt IDs, checking archived inboxes for existing
-deliveries. The old outgoing file remains accessible with a migration handoff
-and a reference in the app. It has no per-task delivery receipts. Reconcile an
-unfinished task with its original request and current owner before dispatching
-it. Unframed tails remain available for recovering complete requests.
+An upgrade preserves the old Markdown files, saved spool and any prior frozen
+legacy association. On the first start with the new app cursor, the watcher
+starts at the end of each existing incoming Markdown file. Subsequent appends
+use a separate live spool and deterministic receipt IDs. Archive contents and
+migration notices stay available on disk without waking Stu. The old outgoing
+file contains the migration handoff. Reconcile an unfinished task with its
+original request and current owner before resending it on a dedicated pair.
 
 RichDoctor includes the watcher's last routing state in its Configuration
 collection. It reads the bounded `engine-state/codex-watch/health.json`

@@ -240,7 +240,7 @@ env = dict(os.environ, CODEX_WATCH_POLL_SECONDS="0.2", CODEX_WATCH_STATE_DIR=sta
            CODEX_WATCH_CHANNELS=channel)
 for key in ("RICHOS_WATCH_HOST", "RICHOS_CODEX_CHANNEL_STATE"):
     env.pop(key, None)
-offsets = os.path.join(state, "app-host", "offsets.json")
+offsets = os.path.join(state, "app-host", "live-offsets.json")
 
 def ino():
     try:

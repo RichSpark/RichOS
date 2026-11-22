@@ -254,34 +254,14 @@ fn sync_observation(file:&std::fs::File,scope:&StatusToolScope,role:&str,message
     result
 }
 
-/// One-time migration check: the old active router could have saved this in ANY inbox.
-pub fn legacy_channel_saved(state:&Path,text:&str)->Result<bool,String> {
-    let root=state.join("messages");
-    if !root.exists() {return Ok(false)}
-    for company in std::fs::read_dir(root).map_err(|e|e.to_string())? {
-        let company=company.map_err(|e|e.to_string())?;
-        if !company.file_type().map_err(|e|e.to_string())?.is_dir() {continue}
-        for thread in std::fs::read_dir(company.path()).map_err(|e|e.to_string())? {
-            let path=thread.map_err(|e|e.to_string())?.path().join("stu.jsonl");
-            let file=match read_inbox(&path) {Ok(f)=>f,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>continue,Err(e)=>return Err(e.to_string())};
-            #[cfg(unix)] {
-                use std::os::fd::AsRawFd;
-                // lock-busy: retain the legacy import; the next normal channel scan retries it.
-                if unsafe {libc::flock(file.as_raw_fd(),libc::LOCK_EX|libc::LOCK_NB)}!=0 {return Err(std::io::Error::last_os_error().to_string())}
-            }
-            if find_record(&mut BufReader::new(&file),|m|Ok(m.from=="codex-watch" && (m.text==text ||
-                m.text.strip_prefix("Pre-cutover legacy observation; verify the complete original request before acting.\n")==Some(text))))?.is_some() {
-                file.sync_all().map_err(|e|e.to_string())?;
-                let mut parent=path.parent();
-                while let Some(dir)=parent.filter(|dir|dir.starts_with(state)) {
-                    std::fs::File::open(dir).and_then(|f|f.sync_all()).map_err(|e|e.to_string())?;
-                    if dir==state {break} parent=dir.parent();
-                }
-                return Ok(true)
-            }
-        }
-    }
-    Ok(false)
+/// An earlier app may have staged an archive row in Stu's inbox before the upgrade.
+fn archived_codex_input(message: &Message) -> bool {
+    message.from == "codex-watch" && message.bridge.as_ref().is_some_and(|reference| {
+        reference.connection_id.starts_with("legacy-") &&
+            (matches!(reference.message_id.as_str(), "legacy-outbox" | "legacy-tail") ||
+                reference.message_id.strip_prefix("legacy-").is_some_and(|hash|
+                    hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())))
+    })
 }
 
 /// Stu's Claude account is being switched (`account_switch`: something of his still runs on the
@@ -570,7 +550,9 @@ pub fn pending_after(scope:&StatusToolScope,role:&str,after:u64)->Result<Option<
         let offset=offset.parse::<u64>().map_err(|_|"Invalid unfinished input identity")?;
         if role=="stu" {
             let message=input_at(&path,offset)?;
-            if message.handoff && handoff_finished(scope,&message)?{acknowledge(scope,role,offset)?;retired=true;continue}
+            if archived_codex_input(&message) || (message.handoff && handoff_finished(scope,&message)?) {
+                acknowledge(scope,role,offset)?;retired=true;continue
+            }
         }
         if offset<=accepted && offset>after{unfinished=Some(unfinished.map_or(offset,|old:u64|old.min(offset)));}
     }
@@ -591,7 +573,9 @@ pub fn pending_after(scope:&StatusToolScope,role:&str,after:u64)->Result<Option<
         if cursor["accepted"].get(through.to_string()).is_some() && cursor["active"].get(format!("peer:{through}")).is_none(){continue}
         let message:Message=serde_json::from_str(&line).map_err(|e|e.to_string())?;
         sync_observation(reader.get_ref(),scope,role,&message)?;
-        if role=="stu" && message.handoff && handoff_finished(scope,&message)?{acknowledge(scope,role,through)?;continue}
+        if role=="stu" && (archived_codex_input(&message) || (message.handoff && handoff_finished(scope,&message)?)) {
+            acknowledge(scope,role,through)?;continue
+        }
         return Ok(Some((message,through)))
     }
 }
@@ -613,7 +597,7 @@ pub(crate) fn undelivered(scope:&StatusToolScope,role:&str)->Result<bool,String>
         if count==0 || !line.ends_with('\n'){return Ok(false)}through+=count as u64;
         if cursor["accepted"].get(through.to_string()).is_some(){continue}
         let message:Message=serde_json::from_str(&line).map_err(|e|e.to_string())?;
-        if role=="stu" && message.handoff && handoff_finished(scope,&message)?{continue}
+        if role=="stu" && (archived_codex_input(&message) || (message.handoff && handoff_finished(scope,&message)?)) {continue}
         return Ok(true)
     }
 }

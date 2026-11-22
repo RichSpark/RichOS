@@ -337,7 +337,7 @@ class Channels(unittest.TestCase):
         self.assertEqual(c.connection(self.connect(locator=p))[1]["thread_id"], "chat-a")
         self.assertIn(b"EVERY unanswered request", handoff)
 
-    def test_later_legacy_association_cannot_move_the_preserved_spool(self):
+    def test_later_legacy_association_cannot_move_the_live_spool(self):
         first, later = c.root() / "old-a", c.root() / "old-b"
         for folder in (first, later):
             c.mkdir(folder)
@@ -347,11 +347,13 @@ class Channels(unittest.TestCase):
         spool = Path(self.a["state_root"]) / "codex-watch/pending.jsonl"
         c.mkdir(spool.parent)
         spool.write_text(json.dumps("Saved old observation") + "\n")
+        self.assertEqual(c.scan(self.a["state_root"]), ([], []))
+        spool.with_name("live.jsonl").write_text(json.dumps("New observation") + "\n")
         events, errors = c.scan(self.a["state_root"])
         self.assertFalse(errors)
-        imported = [e for e in events if e["record"]["kind"] == "legacy_import"]
-        self.assertEqual(len(imported), 1)
-        self.assertEqual(imported[0]["connection"]["thread_id"], self.a["thread_id"])
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["record"]["kind"], "legacy_live")
+        self.assertEqual(events[0]["connection"]["thread_id"], self.a["thread_id"])
 
     def test_missing_legacy_endpoint_holds_without_reactivating_markdown(self):
         import codex_watch
@@ -517,19 +519,29 @@ c.send(locator, ident, 'recover original request')
         c.designate(self.a, [old])
         p, _ = c.legacy_owner(old)
         self.assertIn("EVERY unanswered request", (old / "to-codex.md").read_text())
-        events, errors = c.scan(self.a["state_root"])
-        self.assertFalse(errors)
-        self.assertEqual([e["record"]["kind"] for e in events], ["legacy_notice"])
+        self.assertEqual(c.scan(self.a["state_root"]), ([], []))
         with (old / "to-rich.md").open("a") as f:
             f.write("a second newline fragment\n")
-        self.assertEqual(c.scan(self.a["state_root"])[0][0]["record"], events[0]["record"])
+        self.assertEqual(c.scan(self.a["state_root"]), ([], []))
 
-    def test_legacy_spool_is_automatically_bound_and_retained(self):
+    def test_upgrade_skips_legacy_history_but_delivers_new_appends(self):
         old = self.root / "legacy"
+        old.mkdir()
+        raw = old / "to-rich.md"
+        raw.write_text("## Old entry\nOld archived message\n" * 250)
+        outgoing = old / "to-codex.md"
+        outgoing.write_text("Old Rich handoff, preserved in place.\n")
         state = Path(self.a["state_root"])
+        watch = state / "codex-watch/watch"
+        legacy_offset = {str(raw): dict(offset=0, inode=raw.stat().st_ino, seen=raw.stat().st_size)}
+        c.save(watch / "app-host/offsets.json", legacy_offset)
+        c.save(watch / "last-told.json", legacy_offset)
+        spool = state / "codex-watch/pending.jsonl"
+        entry = json.dumps("Saved before cutover") + "\n"
+        spool.write_text(entry * 250)
         environment = dict(RICHOS_CODEX_CHANNEL_STATE=str(state),
-                           CODEX_WATCH_STATE_DIR=str(state / "codex-watch/watch"),
-                           CODEX_WATCH_CHANNELS=str(old / "to-rich.md"))
+                           CODEX_WATCH_STATE_DIR=str(watch),
+                           CODEX_WATCH_CHANNELS=str(raw))
         def monitor_output():
             alive = iter([True, True, True, False])
             output = io.StringIO()
@@ -541,32 +553,38 @@ c.send(locator, ident, 'recover original request')
                 self.assertEqual(watcher.run_host_loop(), 0)
                 self.assertEqual(tick.call_count, 2, "the real host loop must have polled")
             return output.getvalue()
-        self.assertEqual(monitor_output(), "", "nothing to migrate")
-        old.mkdir()
-        outgoing = old / "to-codex.md"
-        outgoing.write_text("Old Rich handoff, preserved in place.\n")
-        spool = state / "codex-watch/pending.jsonl"
-        spool.parent.mkdir(parents=True, exist_ok=True)
-        entry = json.dumps("Saved before cutover") + "\n"
-        spool.write_text(entry)
-        events = [json.loads(line) for line in monitor_output().splitlines()]
-        self.assertEqual(events, [dict(type="automatic"), dict(type="automatic")])
+        self.assertEqual(monitor_output(), "", "history alone should not request a destination")
+        self.assertEqual(c.load(watch / "app-host/live-offsets.json")[str(raw)]["offset"], raw.stat().st_size)
         health = state / "codex-watch/health.json"
-        self.assertTrue(c.load(health)["waiting"])
         c.save(c.root() / "automatic.json", self.a)
-        events = [json.loads(line) for line in monitor_output().splitlines()]
-        imports = [event for event in events if event["record"]["kind"] == "legacy_import"]
-        self.assertTrue(imports)
-        self.assertEqual({event["connection"]["thread_id"] for event in imports}, {"chat-a"})
-        self.assertEqual({event["record"]["text"] for event in imports}, {"Saved before cutover"})
-        notices = [event for event in events if event["record"]["message_id"] == "legacy-outbox"]
-        self.assertTrue(notices)
-        self.assertEqual({event["source"] for event in notices}, {str(outgoing)})
+        c.associate_legacy(self.a, [old])
+        _, endpoint = c.legacy_owner(old)
+        receipt = state / "codex-watch/accepted" / (endpoint["connection_id"] + ".json")
+        c.save(receipt, dict(through=len(entry), source_identity=c.identity(spool)))
+        self.assertEqual(monitor_output(), "", "a partially consumed archive should stay quiet")
         self.assertTrue(outgoing.read_text().startswith("Old Rich handoff, preserved in place.\n"))
-        self.assertEqual(spool.read_text(), entry)
+        self.assertEqual(spool.read_text(), entry * 250)
+        self.assertEqual(c.load(watch / "app-host/offsets.json"), legacy_offset)
         self.assertEqual(outgoing.read_text().count("## RICHOS CHANNEL MIGRATION"), 1)
         self.assertEqual(set(c.load(health)), {"at_ms", "waiting", "held"})
         self.assertFalse(c.load(health)["waiting"])
+        with raw.open("a") as f:
+            f.write("## New entry\nNew Codex message\n")
+        emitted = [json.loads(line) for line in monitor_output().splitlines()]
+        self.assertEqual([row["type"] for row in emitted], ["legacy_append"])
+        self.assertIn("New Codex message", emitted[0]["text"])
+        self.assertNotIn("Old archived message", emitted[0]["text"])
+        # The native watcher stores the live append before the next scan.
+        (state / c.LIVE_LEGACY_SPOOL).write_text(json.dumps(emitted[0]["text"]) + "\n")
+        events, errors = c.scan(state)
+        self.assertFalse(errors)
+        self.assertEqual([row["record"]["kind"] for row in events], ["legacy_live"])
+        self.assertEqual(events[0]["record"]["text"], emitted[0]["text"])
+        self.assertEqual(events[0]["connection"]["thread_id"], "chat-a")
+        c.save(receipt.with_suffix(".live.json"),
+               dict(through=events[0]["through"], source_identity=events[0]["source_identity"]))
+        self.assertEqual(c.scan(state), ([], []))
+        self.assertEqual(c.load(receipt)["through"], len(entry))
 
     def test_one_managed_receiver_is_fenced_and_process_death_releases_ownership(self):
         p = self.connect(self.a)
