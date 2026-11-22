@@ -59,7 +59,7 @@ fn main() {
             .file("../native/notifications/chat.m")
             .flag("-fobjc-arc")
             .compile("richos_chat_notifications");
-        for framework in ["UserNotifications", "AppKit", "AVFoundation", "CoreMedia", "CoreVideo", "QuartzCore"] {
+        for framework in ["UserNotifications", "AppKit", "AudioToolbox", "AVFoundation", "CoreAudio", "CoreMedia", "CoreVideo", "QuartzCore"] {
             println!("cargo::rustc-link-lib=framework={framework}");
         }
     }

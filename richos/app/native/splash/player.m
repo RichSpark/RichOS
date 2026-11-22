@@ -1,5 +1,7 @@
 // Present the whole authored timeline in the app's own window.
 #import <AppKit/AppKit.h>
+#import <AudioToolbox/AudioToolbox.h>
+#import <CoreAudio/HostTime.h>
 #import <AVFoundation/AVFoundation.h>
 #import <CoreMedia/CoreMedia.h>
 #import <QuartzCore/QuartzCore.h>
@@ -27,10 +29,58 @@ typedef enum {
     SoundOutputReady,
 } SoundOutcome;
 
-// The audio queue owns the output from preparation through the end of the cue.
-@interface RichSplashCue : NSObject
-@property(nonatomic, strong) AVAudioEngine *engine;
-@property(nonatomic, strong) AVAudioPlayerNode *node;
+typedef struct {
+    const float *channels[2];
+    uint32_t frames;
+    double ticksPerFrame;
+    atomic_uint_fast64_t start;
+    atomic_uint progress;
+    atomic_bool late;
+} RichSplashPCM;
+
+static OSStatus renderCue(void *context, AudioUnitRenderActionFlags *flags, const AudioTimeStamp *timestamp,
+                          UInt32 bus, UInt32 frames, AudioBufferList *buffers) {
+    RichSplashPCM *pcm = context;
+    for (UInt32 i = 0; i < buffers->mNumberBuffers; i++) {
+        AudioBuffer buffer = buffers->mBuffers[i];
+        if (buffer.mData) memset(buffer.mData, 0, buffer.mDataByteSize);
+    }
+
+    uint64_t start = atomic_load_explicit(&pcm->start, memory_order_acquire);
+    uint32_t progress = atomic_load_explicit(&pcm->progress, memory_order_relaxed);
+    if (!start || progress == pcm->frames || !(timestamp->mFlags & kAudioTimeStampHostTimeValid) ||
+        buffers->mNumberBuffers != 2 || atomic_load_explicit(&pcm->late, memory_order_relaxed)) return noErr;
+    for (UInt32 i = 0; i < 2; i++) {
+        AudioBuffer buffer = buffers->mBuffers[i];
+        if (!buffer.mData || buffer.mDataByteSize / sizeof(float) < frames) return noErr;
+    }
+    UInt32 before = 0;
+    if (progress == 0) {
+        if (timestamp->mHostTime < start) {
+            double offset = ceil((start - timestamp->mHostTime) / pcm->ticksPerFrame);
+            if (offset >= frames) return noErr;
+            before = (UInt32)offset;
+        } else if ((timestamp->mHostTime - start) / pcm->ticksPerFrame > frames) {
+            // The first audible sample must be within one hardware render buffer of its cue.
+            atomic_store_explicit(&pcm->late, true, memory_order_release);
+            return noErr;
+        }
+    }
+    UInt32 count = MIN(frames - before, pcm->frames - progress);
+    for (UInt32 channel = 0; channel < 2; channel++) {
+        float *output = buffers->mBuffers[channel].mData;
+        memcpy(output + before, pcm->channels[channel] + progress, count * sizeof(float));
+    }
+    atomic_store_explicit(&pcm->progress, progress + count, memory_order_release);
+    return noErr;
+}
+
+// The output unit renders silence while the window is built. The real-time
+// callback reads the decoded cue and the video anchor without a lock.
+@interface RichSplashCue : NSObject {
+    RichSplashPCM _pcm;
+    AudioUnit _unit;
+}
 @property(nonatomic, strong) AVAudioPCMBuffer *buffer;
 @property(nonatomic, strong) dispatch_queue_t queue;
 @property(nonatomic) RichSplashAudio report;
@@ -44,9 +94,18 @@ typedef enum {
     self = [super init];
     if (!self) return nil;
     self.report = report;
+    atomic_init(&_pcm.start, 0);
+    atomic_init(&_pcm.progress, 0);
+    atomic_init(&_pcm.late, false);
     self.queue = dispatch_queue_create("com.richos.splash.sound",
         dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0));
-    dispatch_async(self.queue, ^{ [self prepare:path]; });
+    dispatch_async(self.queue, ^{
+        @try {
+            [self prepare:path];
+        } @catch (NSException *exception) {
+            [self clearOutput];
+        }
+    });
     return self;
 }
 
@@ -55,38 +114,38 @@ typedef enum {
     if (file.length <= 0 || file.length > UINT32_MAX) return;
     AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:file.processingFormat
                                                            frameCapacity:(AVAudioFrameCount)file.length];
-    if (!buffer || ![file readIntoBuffer:buffer error:NULL] || buffer.frameLength != file.length) return;
+    if (!buffer || ![file readIntoBuffer:buffer error:NULL] || buffer.frameLength != file.length ||
+        buffer.format.channelCount != 2 || buffer.format.isInterleaved || !buffer.floatChannelData) return;
 
-    // Prepare an output while AppKit constructs the window. The inactive node
-    // initially feeds silence, and only the video clock may authorize playback.
-    @try {
-        AVAudioEngine *engine = [AVAudioEngine new];
-        AVAudioPlayerNode *node = [AVAudioPlayerNode new];
-        [engine attachNode:node];
-        [engine connect:node to:engine.mainMixerNode format:buffer.format];
-        if (![engine startAndReturnError:NULL]) return;
-        self.engine = engine;
-        self.node = node;
-        self.buffer = buffer;
-    } @catch (NSException *exception) {
+    AudioComponentDescription description = {kAudioUnitType_Output, kAudioUnitSubType_DefaultOutput,
+                                             kAudioUnitManufacturer_Apple, 0, 0};
+    AudioComponent component = AudioComponentFindNext(NULL, &description);
+    if (!component || AudioComponentInstanceNew(component, &_unit) != noErr) return;
+
+    self.buffer = buffer;
+    _pcm.channels[0] = buffer.floatChannelData[0];
+    _pcm.channels[1] = buffer.floatChannelData[1];
+    _pcm.frames = buffer.frameLength;
+    _pcm.ticksPerFrame = AudioGetHostClockFrequency() / buffer.format.sampleRate;
+    AURenderCallbackStruct callback = {renderCue, &_pcm};
+    const AudioStreamBasicDescription *format = buffer.format.streamDescription;
+    if (AudioUnitSetProperty(_unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0,
+                             format, sizeof(*format)) != noErr ||
+        AudioUnitSetProperty(_unit, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, 0,
+                             &callback, sizeof(callback)) != noErr ||
+        AudioUnitInitialize(_unit) != noErr || AudioOutputUnitStart(_unit) != noErr) {
+        [self clearOutput];
         return;
     }
     if (self.report) self.report(SoundOutputReady);
 }
 
 - (void)clearOutput {
-    AVAudioEngine *engine = self.engine;
-    self.engine = nil;
-    self.node = nil;
+    if (!_unit) return;
+    AudioOutputUnitStop(_unit);
+    AudioComponentInstanceDispose(_unit);
+    _unit = NULL;
     self.buffer = nil;
-    [engine stop];
-}
-
-- (void)finish:(SoundOutcome)outcome {
-    // Completion and the timeout may both arrive. Only the first may report.
-    if (!self.engine) return;
-    [self clearOutput];
-    if (self.report) self.report(outcome);
 }
 
 - (void)cancel {
@@ -94,40 +153,25 @@ typedef enum {
 }
 
 - (void)playAt:(CMTime)time {
+    atomic_store_explicit(&_pcm.start, CMClockConvertHostTimeToSystemUnits(time), memory_order_release);
     dispatch_async(self.queue, ^{
-        if (!self.engine) {
+        if (!self->_unit) {
             if (self.report) self.report(SoundPrepareFailed);
             return;
         }
         double lead = CMTimeGetSeconds(CMTimeSubtract(time, CMClockGetTime(CMClockGetHostTimeClock())));
-        if (lead <= 0 || !self.engine.isRunning) {
-            [self finish:lead <= 0 ? SoundDeadlineMissed : SoundScheduleRefused];
-            return;
-        }
-
         double duration = self.buffer.frameLength / self.buffer.format.sampleRate;
-        dispatch_queue_t queue = self.queue;
-        __weak RichSplashCue *weak = self;
-        @try {
-            [self.node scheduleBuffer:self.buffer completionCallbackType:AVAudioPlayerNodeCompletionDataPlayedBack
-                   completionHandler:^(AVAudioPlayerNodeCompletionCallbackType type) {
-                // Stopping an engine from its completion callback can deadlock.
-                dispatch_async(queue, ^{
-                    RichSplashCue *owner = weak;
-                    [owner finish:owner.engine.isRunning ? SoundFinished : SoundInterrupted];
-                });
-            }];
-            [self.node playAtTime:[AVAudioTime timeWithHostTime:CMClockConvertHostTimeToSystemUnits(time)]];
-        } @catch (NSException *exception) {
-            // The output can disappear between the running check and play.
-            [self finish:SoundScheduleRefused];
-            return;
-        }
-
-        // Keep the cue alive after the video view has gone away.
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((lead + duration + 2.0) * NSEC_PER_SEC)),
-                       queue, ^{ [self finish:SoundCompletionTimedOut]; });
         if (self.report) self.report(SoundScheduled);
+        // Leave the unit alive independently of the splash view through the
+        // device's final buffer and allow for output and route-change latency.
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((MAX(lead, 0) + duration + 1.0) * NSEC_PER_SEC)),
+                       self.queue, ^{
+            uint32_t rendered = atomic_load_explicit(&self->_pcm.progress, memory_order_acquire);
+            bool late = atomic_load_explicit(&self->_pcm.late, memory_order_acquire);
+            [self clearOutput];
+            if (self.report) self.report(late ? SoundDeadlineMissed :
+                                        rendered == self->_pcm.frames ? SoundFinished : SoundInterrupted);
+        });
     });
 }
 @end
