@@ -41,8 +41,6 @@ struct BrowserView: View {
     @State private var sheet: BrowserSheet?
     @State private var transfersVisible = false
     @State private var feedback = ""
-    @State private var prefixText = ""
-    @State private var prefixTime: TimeInterval = 0
     @State private var listRows = 12
     @State private var iconColumns = 4
     @State private var detailsViewport = DetailsViewport()
@@ -52,6 +50,7 @@ struct BrowserView: View {
     @State private var preparingAction = false
     @State private var rowFrames: [URL: CGRect] = [:]
     @State private var fileColumnFrame: CGRect = .null
+    @State private var columnWidths: [URL: CGFloat] = [:]
     @State private var selectionRectangle: CGRect?
     @State private var folderReveal: FolderTreeReveal?
     @State private var commandOwner = UUID()
@@ -140,7 +139,7 @@ struct BrowserView: View {
                                    controlFocused: controlFocused == true,
                                    shortcuts: BrowserShortcut.load(shortcutData),
                                    activate: { workspace.select(side) },
-                                   perform: perform, prefix: selectPrefix))
+                                   perform: perform, prefix: { model.typeToSelect($0) }))
         .onAppear { workspace.setCommands(for: side, owner: commandOwner, handler: perform) }
         .onDisappear { workspace.clearCommands(for: side, owner: commandOwner) }
         .onChange(of: model.tabs.map(\.folder)) { _ in sessionChanged() }
@@ -154,10 +153,6 @@ struct BrowserView: View {
             focus = nil
             suggestions = []
             feedback = ""
-            model.selection.rangeAnchor = nil
-            model.selection.moveCursor(to: nil)
-            prefixText = ""
-            prefixTime = 0
         }
         .background {
             observeSelection { selection in
@@ -753,20 +748,24 @@ struct BrowserView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    private enum ColumnScrollTarget { case currentDivider }
+
     private var columnBrowser: some View {
         GeometryReader { geometry in
             let path = model.breadcrumbs
-            let currentWidth = max(240, min(350, geometry.size.width - (path.count > 1 ? 186 : 0)))
+            let currentWidth = columnWidths[model.folder]
+                ?? max(260, min(440, geometry.size.width - (path.count > 1 ? 226 : 0)))
             ScrollViewReader { columns in
                 ScrollView(.horizontal) {
                     LazyHStack(spacing: 0) {
                         ForEach(Array(zip(path.dropLast(), path.dropFirst())), id: \.0) { folder, child in
+                            let width = columnWidths[folder] ?? 225
                             AncestorColumn(folder: folder, child: child, showHidden: model.showHidden,
                                            revision: actions.mutationRevision, model: model)
                                 .equatable()
                                 .focusedValue(\.browserControl, true)
-                                .frame(width: 185).id(folder)
-                            Divider()
+                                .frame(width: width).id(folder)
+                            columnDivider(for: folder, width: width)
                         }
                         VStack(alignment: .leading, spacing: 0) {
                             Text(model.folder.lastPathComponent).font(textSize.font(size: 13).weight(.semibold)).lineLimit(1).padding(8)
@@ -808,14 +807,28 @@ struct BrowserView: View {
                             Color.clear.preference(key: FileColumnFrameKey.self,
                                                    value: geometry.frame(in: .named("richfiles-items")))
                         })
-                        .id(model.folder)
+                        columnDivider(for: model.folder, width: currentWidth)
+                            .id(ColumnScrollTarget.currentDivider)
                         Spacer(minLength: 0)
                     }.frame(minWidth: geometry.size.width, maxHeight: .infinity)
                 }
-                .onAppear { columns.scrollTo(model.folder, anchor: .trailing) }
-                .onChange(of: model.folder) { columns.scrollTo($0, anchor: .trailing) }
+                .onAppear { columns.scrollTo(ColumnScrollTarget.currentDivider, anchor: .trailing) }
+                .onChange(of: model.folder) { _ in
+                    columns.scrollTo(ColumnScrollTarget.currentDivider, anchor: .trailing)
+                }
             }
         }.accessibilityLabel("Column view").accessibilityIdentifier("file-columns")
+    }
+
+    private func columnDivider(for folder: URL, width: CGFloat) -> some View {
+        BrowserColumnDivider(folderName: folder.path == "/" ? "Computer" : folder.lastPathComponent,
+                             width: width) { next in
+            if columnWidths[folder] == nil, columnWidths.count >= 128,
+               let old = columnWidths.keys.first(where: { !model.breadcrumbs.contains($0) }) {
+                columnWidths.removeValue(forKey: old)
+            }
+            columnWidths[folder] = next
+        }
     }
 
     private var gallery: some View {
@@ -1387,6 +1400,7 @@ struct BrowserView: View {
     }
 
     private func select(_ entry: FileEntry, modifiers: NSEvent.ModifierFlags, scroll: Bool = false) {
+        model.resetTypeSelection()
         if modifiers.contains(.shift), let anchor = model.selection.rangeAnchor,
            let start = model.entries.firstIndex(where: { $0.url == anchor }),
            let end = model.entries.firstIndex(where: { $0.url == entry.url }) {
@@ -1425,19 +1439,6 @@ struct BrowserView: View {
         let index = current.map { max(0, min(model.entries.count - 1, $0 + step)) } ?? 0
         select(model.entries[index], modifiers: extend ? .shift : [], scroll: true)
         return true
-    }
-
-    private func selectPrefix(_ character: String) -> Bool {
-        let now = ProcessInfo.processInfo.systemUptime
-        prefixText = now - prefixTime < 0.8 ? prefixText + character : character
-        prefixTime = now
-        if let entry = model.entries.first(where: {
-            $0.name.range(of: prefixText, options: [.anchored, .caseInsensitive]) != nil
-        }) {
-            select(entry, modifiers: [], scroll: true)
-            return true
-        }
-        return false
     }
 
     private func viewportObserver(_ geometry: GeometryProxy, mode: BrowserViewMode) -> ([URL: CGRect]) -> Void {
@@ -1515,12 +1516,7 @@ struct BrowserView: View {
     }
 
     private func chooseApplication(_ entry: FileEntry) {
-        Task {
-            do {
-                let apps = try await Task.detached { try WorkspaceServices.applications(for: entry.url) }.value
-                sheet = .openWith(entry, apps)
-            } catch { feedback = error.localizedDescription }
-        }
+        sheet = .openWith(entry)
     }
 
     private func requestRename(_ entry: FileEntry) {
@@ -1545,7 +1541,7 @@ struct BrowserView: View {
         let name = directory ? "New Folder" : "New File" + (ext.map { "." + $0 } ?? "")
         let folder = model.folder
         let tab = model.currentTabID
-        guard model.currentVolume?.supportsExclusiveRename == true else {
+        guard !directory, model.currentVolume?.supportsExclusiveRename == true else {
             sheet = .name(NameRequest(source: nil, folder: destination.url, directory: directory, name: name,
                                       expectedFolder: destination.identity))
             return
@@ -1773,14 +1769,20 @@ struct BrowserView: View {
                 if let source = request.source { actions.rename(source, to: name) }
                 else if let template = request.template { actions.create(from: template, named: name) }
                 else {
-                    actions.create(in: request.folder, named: name, directory: request.directory,
-                                   expectedFolder: request.expectedFolder)
+                    let tab = model.currentTabID
+                    actions.create(from: request, named: name) { item in
+                        guard model.folder == request.folder, model.currentTabID == tab,
+                              workspace.active == side, sheet == nil else { return }
+                        model.selectCreatedItem(item)
+                        model.selection.rangeAnchor = item.url
+                        model.selection.moveCursor(to: item.url, scrolling: true)
+                    }
                 }
                 sheet = nil
             }
         case .properties(let entry): PropertiesSheet(entry: entry)
         case .preview(let entry): PreviewSheet(entry: entry)
-        case .openWith(let entry, let apps): OpenWithSheet(entry: entry, apps: apps)
+        case .openWith(let entry): OpenWithSheet(entry: entry)
         case .archive(let catalog): ArchiveBrowserSheet(catalog: catalog, changed: model.refresh)
         case .createZip(let sources, let destination):
             ZipCreateSheet(sources: sources, destination: destination, changed: model.refresh)
@@ -1950,6 +1952,7 @@ private struct AncestorColumn: View, Equatable {
                                 }.padding(5).contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .help(entry.name)
                             .background(current ? Color.accentColor.opacity(0.25) : .clear,
                                         in: RoundedRectangle(cornerRadius: 4))
                             .accessibilityAddTraits(current ? .isSelected : [])

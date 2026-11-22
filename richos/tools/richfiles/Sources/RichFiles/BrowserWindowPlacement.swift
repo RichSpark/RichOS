@@ -12,6 +12,16 @@ final class BrowserWindowPlacement {
         let index: Int
 
         fileprivate var key: String { "richfiles.windowFrame.v2.\(family.rawValue).\(index)" }
+        fileprivate var layoutKey: String { "richfiles.windowLayout.v1.\(family.rawValue).\(index)" }
+    }
+
+    struct Layout: Codable, Equatable {
+        var sidebarWidth: CGFloat = 264
+        var paneRatio: CGFloat = 0.5
+
+        var valid: Bool {
+            (150...340).contains(sidebarWidth) && (0.25...0.75).contains(paneRatio)
+        }
     }
 
     static let legacyKey = "richfiles.primaryWindowFrame"
@@ -35,6 +45,18 @@ final class BrowserWindowPlacement {
     }
 
     func release(_ slot: Slot) { occupied.remove(slot) }
+
+    func savedLayout(for slot: Slot) -> Layout {
+        guard let data = defaults.data(forKey: slot.layoutKey),
+              let layout = try? JSONDecoder().decode(Layout.self, from: data), layout.valid else { return Layout() }
+        return layout
+    }
+
+    func saveLayout(_ layout: Layout, in slot: Slot) {
+        guard occupied.contains(slot), layout.valid, layout != savedLayout(for: slot),
+              let data = try? JSONEncoder().encode(layout) else { return }
+        defaults.set(data, forKey: slot.layoutKey)
+    }
 
     func savedFrame(for slot: Slot) -> NSRect? {
         guard let value = defaults.string(forKey: slot.key) else { return nil }

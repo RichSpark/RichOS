@@ -171,6 +171,7 @@ public enum DirectoryReader {
         showHidden: Bool = false,
         query: FileQuery = FileQuery(),
         content: TextContentQuery? = nil,
+        firstBatchSize: Int = 128,
         isCancelled: () -> Bool = { false },
         receive: ([FileEntry]) -> Void
     ) throws -> ScanReport {
@@ -214,6 +215,7 @@ public enum DirectoryReader {
 
         var batch: [FileEntry] = []
         batch.reserveCapacity(128)
+        var batchSize = min(128, max(1, firstBatchSize))
         while true {
             if isCancelled() { throw CancellationError() }
             guard let value = enumerator.nextObject() as? URL else { break }
@@ -255,10 +257,11 @@ public enum DirectoryReader {
             }
             report.matched += 1
             batch.append(entry)
-            if batch.count == 128 {
+            if batch.count == batchSize {
                 if isCancelled() { throw CancellationError() }
                 receive(batch)
                 batch.removeAll(keepingCapacity: true)
+                batchSize = 128
             }
         }
         if let rootError { throw rootError }
@@ -346,8 +349,10 @@ public struct FileSort: Equatable, Sendable {
             order = compare(left.modified ?? .distantPast, right.modified ?? .distantPast)
         }
         if order != .orderedSame { return order == (ascending ? .orderedAscending : .orderedDescending) }
-        let nameOrder = left.name.localizedStandardCompare(right.name)
-        if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
+        if column != .name {
+            let nameOrder = left.name.localizedStandardCompare(right.name)
+            if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
+        }
         return left.url.path.utf8.lexicographicallyPrecedes(right.url.path.utf8)
     }
 

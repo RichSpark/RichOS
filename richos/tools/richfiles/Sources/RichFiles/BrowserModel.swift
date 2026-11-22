@@ -244,6 +244,11 @@ final class BrowserModel: ObservableObject {
     private var scanID: UUID?
     private var navigationTask: Task<Void, Never>?
     private var navigationID: UUID?
+    private var navigationStarted: TimeInterval?
+    private var awaitingVisibleRows: (id: UUID, started: TimeInterval)?
+    private var selectionPrefix = ""
+    private var prefixTime: TimeInterval = 0
+    private var prefixPending = false
     private var volumeTask: Task<Void, Never>?
     private var volumeChanges: AnyCancellable?
     private var disconnectedMounts: Set<String> = []
@@ -317,9 +322,39 @@ final class BrowserModel: ObservableObject {
         scrollAnchor = item.url
     }
 
+    func resetTypeSelection() {
+        selectionPrefix = ""
+        prefixPending = false
+    }
+
+    @discardableResult
+    func typeToSelect(_ characters: String, at time: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
+        selectionPrefix = time - prefixTime < 0.8 ? selectionPrefix + characters : characters
+        prefixTime = time
+        prefixPending = true
+        applyTypeSelection()
+        return true
+    }
+
+    private func applyTypeSelection() {
+        // Partial batches are sorted but do not yet contain every possible first match.
+        guard prefixPending, !openingFolder, !busy else { return }
+        prefixPending = false
+        guard let entry = entries.first(where: {
+            $0.name.range(of: selectionPrefix, options: [.anchored, .caseInsensitive, .diacriticInsensitive]) != nil
+        }) else { return }
+        selected = [entry.url]
+        selection.rangeAnchor = entry.url
+        selection.moveCursor(to: entry.url, scrolling: true)
+        scrollAnchor = entry.url
+    }
+
     func recordViewport(_ firstItem: URL, in folder: URL, tab: UUID, mode: BrowserViewMode) {
-        guard !busy, viewMode == mode, self.folder == folder, currentTabID == tab else { return }
-        firstVisibleItem = firstItem
+        guard !openingFolder, viewMode == mode, self.folder == folder, currentTabID == tab else { return }
+        if awaitingVisibleRows != nil, entries.contains(where: { $0.url == firstItem }) {
+            finishVisibleRows(.complete, confirmed: 1)
+        }
+        if !busy { firstVisibleItem = firstItem }
     }
 
     func goUp() {
@@ -629,6 +664,7 @@ final class BrowserModel: ObservableObject {
         cancelNavigation()
         let id = UUID()
         navigationID = id
+        navigationStarted = ProcessInfo.processInfo.systemUptime
         openingFolder = true
         navigationTask = Task { [weak self] in
             let worker = Task.detached(priority: .userInitiated) { try resolve() }
@@ -640,11 +676,14 @@ final class BrowserModel: ObservableObject {
                 self.navigationID = nil
                 self.openingFolder = false
                 self.completeNavigation(direction, to: url)
+                self.navigationStarted = nil
             } catch {
                 guard !Task.isCancelled, let self, self.navigationID == id else { return }
                 self.navigationID = nil
                 self.openingFolder = false
+                self.navigationStarted = nil
                 self.status = error.localizedDescription
+                self.resetTypeSelection()
             }
         }
     }
@@ -686,7 +725,9 @@ final class BrowserModel: ObservableObject {
     }
 
     private func cancelNavigation() {
+        resetTypeSelection()
         navigationID = nil
+        navigationStarted = nil
         navigationTask?.cancel()
         openingFolder = false
     }
@@ -714,6 +755,8 @@ final class BrowserModel: ObservableObject {
     }
 
     private func restore(_ visit: Visit, revealing item: URL? = nil) {
+        selection.rangeAnchor = nil
+        selection.moveCursor(to: nil)
         folder = visit.folder
         if let index = tabs.firstIndex(where: { $0.id == currentTabID }) {
             tabs[index].folder = folder
@@ -749,6 +792,7 @@ final class BrowserModel: ObservableObject {
     }
 
     private func load(restoring selection: [String: SelectionTarget] = [:]) {
+        finishVisibleRows(.cancelled)
         scanTask?.cancel()
         firstVisibleItem = nil
         let id = UUID()
@@ -764,6 +808,7 @@ final class BrowserModel: ObservableObject {
             status = "Reconnect the volume, then refresh this folder."
             return
         }
+        awaitingVisibleRows = (id, navigationStarted ?? ProcessInfo.processInfo.systemUptime)
         busy = true
         if contentQuery != nil {
             status = "Searching file contents…"
@@ -789,8 +834,17 @@ final class BrowserModel: ObservableObject {
                 self.busy = false
                 self.status = error.localizedDescription
                 self.selectionToRestore.removeAll()
+                self.resetTypeSelection()
+                self.finishVisibleRows(.unavailable)
             }
         }
+    }
+
+    private func finishVisibleRows(_ outcome: RichFilesDiagnostics.Outcome, confirmed: Int = 0) {
+        guard let sample = awaitingVisibleRows else { return }
+        awaitingVisibleRows = nil
+        RichFilesDiagnostics.record(.listingVisible, id: sample.id, outcome: outcome,
+                                    started: sample.started, total: entries.count, confirmed: confirmed)
     }
 
     private func setSelection(_ selection: Set<URL>) {
@@ -799,7 +853,7 @@ final class BrowserModel: ObservableObject {
         settingSelection = false
     }
 
-    private func apply(_ update: ListingUpdate) {
+    func apply(_ update: ListingUpdate) {
         entries = update.entries
         if !selectionToRestore.isEmpty {
             let available = entries.compactMap { entry -> URL? in
@@ -820,7 +874,9 @@ final class BrowserModel: ObservableObject {
         currentVolume = update.volume
         selectionToRestore.removeAll()
         busy = false
+        applyTypeSelection()
         let label = searchActive ? "results" : "items"
+        if entries.isEmpty { finishVisibleRows(.complete) }
         let unavailable = report.inaccessible == 0 ? "" : " · \(report.inaccessible) unavailable"
         let coverage = report.contentCoverage.map {
             " · \($0.searchedFiles) files read · \($0.skippedItems) items or folders unsearched"
@@ -828,7 +884,7 @@ final class BrowserModel: ObservableObject {
         status = "\(report.matched) \(label)\(coverage)\(unavailable)"
     }
 
-    private struct ListingUpdate: Sendable {
+    struct ListingUpdate: Sendable {
         let entries: [FileEntry]
         var report: ScanReport?
         var volume: VolumeInfo?
@@ -855,6 +911,7 @@ final class BrowserModel: ObservableObject {
                     }
                     let report = try DirectoryReader.scan(
                         folder, scope: scope, showHidden: showHidden, query: query, content: content,
+                        firstBatchSize: scope == .folder && content == nil ? 16 : 128,
                         isCancelled: { Task.isCancelled }
                     ) { batch in
                         pending.append(contentsOf: batch)

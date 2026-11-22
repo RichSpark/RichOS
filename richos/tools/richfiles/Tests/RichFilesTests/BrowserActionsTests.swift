@@ -5,6 +5,27 @@ import XCTest
 @testable import RichFilesCore
 
 final class BrowserActionsTests: XCTestCase {
+    @MainActor
+    func testConfirmingDefaultNewFolderNameCreatesTheNextAvailableFolder() async throws {
+        try await withFixture { _, destination, board in
+            let existing = try FileOperations.createFolder(in: destination, named: "New Folder")
+            let request = NameRequest(source: nil, folder: destination, directory: true, name: "New Folder")
+            let actions = BrowserActions(pasteboard: board)
+            let finished = expectation(description: "Folder action finished")
+            let observer = actions.$busy.dropFirst().filter { !$0 }.prefix(1).sink { _ in finished.fulfill() }
+            defer { observer.cancel() }
+
+            var created: FileReference?
+            actions.create(from: request, named: request.name) { created = $0 }
+            await fulfillment(of: [finished], timeout: 5)
+
+            XCTAssertEqual(created?.url.lastPathComponent, "New Folder (2)")
+            XCTAssertEqual(try FileReference(url: existing.url).identity, existing.identity)
+            XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: destination.path)),
+                           ["New Folder", "New Folder (2)"])
+        }
+    }
+
     func testStallDeadlineFollowsProgressEvenWhenCopyIsSlow() {
         let item = URL(fileURLWithPath: "/fixture/slow.txt")
         var transfer = BrowserTransfer(destination: item.deletingLastPathComponent(), move: false, total: 2)
