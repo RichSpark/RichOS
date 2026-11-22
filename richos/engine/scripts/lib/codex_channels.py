@@ -360,8 +360,13 @@ def codex_binary():
 
 
 def run_codex(binary, path, marker, state, prompt):
-    command = [binary, "exec", "--json", "--skip-git-repo-check",
-               "--sandbox", "workspace-write", "--add-dir", str(path)]
+    _, target = connection(path)
+    command = [binary, "exec", "--json", "--skip-git-repo-check"]
+    if target["entity_id"] == TERMINAL:
+        # The local Rich terminal delegates branch creation and builds on the SSD.
+        command += ["--sandbox", "danger-full-access"]
+    else:
+        command += ["--sandbox", "workspace-write", "--add-dir", str(path)]
     if session := state.get("session_id"):
         command += ["resume", component(session)]
     # A file avoids a pipe deadlock if a large prompt and early JSON events
