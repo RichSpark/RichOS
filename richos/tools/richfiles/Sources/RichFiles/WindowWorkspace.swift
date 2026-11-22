@@ -134,8 +134,7 @@ struct WindowBrowserView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("richfiles.sidebarVisible") private var sidebarVisible = true
-    @State private var sidebarWidth: CGFloat = 264
-    @State private var paneRatio: CGFloat = 0.5
+    @State private var paneLayout = BrowserWindowPlacement.Layout()
     @AppStorage("richfiles.restoreSession") private var restoreSession = false
     @AppStorage("richfiles.lastBrowserSession.v1") private var lastBrowserSession = Data()
     @SceneStorage("richfiles.browserSession.v1") private var savedSession: Data?
@@ -232,20 +231,22 @@ struct WindowBrowserView: View {
 
     private var browserLayout: some View {
         GeometryReader { geometry in
-            let layout = BrowserWindowLayout(sidebarWidth: sidebarWidth, paneRatio: paneRatio)
+            let layout = BrowserWindowLayout(sidebarWidth: paneLayout.sidebarWidth, paneRatio: paneLayout.paneRatio)
             layout {
                 pane(workspace.primary, side: .primary, size: geometry.size)
                 if workspace.isSplit, let second = workspace.secondary {
                     pane(second, side: .secondary, size: geometry.size)
-                    BrowserPaneDivider(name: "Split pane divider") { position in
+                    BrowserPaneDivider(name: "Split pane divider", resize: { position in
                         let side = sidebarVisible ? layout.sidebarWidth(in: geometry.size.width) + BrowserWindowLayout.gutter : 0
                         let width = max(1, geometry.size.width - side - BrowserWindowLayout.gutter)
-                        paneRatio = min(0.75, max(0.25, (position - side) / width))
-                    }
+                        paneLayout.paneRatio = min(0.75, max(0.25, (position - side) / width))
+                    }, finished: savePaneLayout)
                     .layoutValue(key: BrowserLayoutKey.self, value: .splitDivider)
                 }
                 if sidebarVisible {
-                    BrowserPaneDivider(name: "Sidebar divider") { sidebarWidth = $0 }
+                    BrowserPaneDivider(name: "Sidebar divider", resize: {
+                        paneLayout.sidebarWidth = min(340, max(150, $0))
+                    }, finished: savePaneLayout)
                         .layoutValue(key: BrowserLayoutKey.self, value: .sidebarDivider)
                 }
             }
@@ -299,6 +300,7 @@ struct WindowBrowserView: View {
             releasePlacement()
             if let placementFamily, let window {
                 let slot = openRequests.windowPlacement.claim(placementFamily, preferred: savedPlacementSlot)
+                paneLayout = openRequests.windowPlacement.savedLayout(for: slot)
                 openRequests.windowPlacement.restore(slot, to: window)
                 placementSlot = slot
                 savedPlacementSlot = slot.index
@@ -319,8 +321,16 @@ struct WindowBrowserView: View {
     }
 
     private func releasePlacement() {
-        if let slot = placementSlot { openRequests.windowPlacement.release(slot) }
+        if let slot = placementSlot {
+            savePaneLayout()
+            openRequests.windowPlacement.release(slot)
+        }
         placementSlot = nil
+    }
+
+    private func savePaneLayout() {
+        guard let slot = placementSlot else { return }
+        openRequests.windowPlacement.saveLayout(paneLayout, in: slot)
     }
 
     private func acceptHandoff(_ id: UUID) {

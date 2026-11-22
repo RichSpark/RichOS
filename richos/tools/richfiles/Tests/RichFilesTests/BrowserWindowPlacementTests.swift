@@ -4,6 +4,28 @@ import XCTest
 
 final class BrowserWindowPlacementTests: XCTestCase {
     @MainActor
+    func testEachWindowSlotRestoresItsOwnPaneSizes() throws {
+        let domain = "RichFiles.WindowLayoutTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let placement = BrowserWindowPlacement(defaults: defaults)
+        let first = placement.claim(.browser, preferred: -1)
+        let second = placement.claim(.browser, preferred: -1)
+        let firstLayout = BrowserWindowPlacement.Layout(sidebarWidth: 200, paneRatio: 0.35)
+        let secondLayout = BrowserWindowPlacement.Layout(sidebarWidth: 310, paneRatio: 0.65)
+        placement.saveLayout(firstLayout, in: first)
+        placement.saveLayout(secondLayout, in: second)
+        placement.release(second)
+        let reopened = placement.claim(.browser, preferred: -1)
+        XCTAssertEqual(reopened, second)
+        XCTAssertEqual(placement.savedLayout(for: reopened), secondLayout)
+        let nextLaunch = BrowserWindowPlacement(defaults: defaults)
+        XCTAssertEqual(nextLaunch.savedLayout(for: nextLaunch.claim(.browser, preferred: 0)), firstLayout)
+        XCTAssertEqual(nextLaunch.savedLayout(for: nextLaunch.claim(.browser, preferred: 1)), secondLayout)
+        XCTAssertEqual(nextLaunch.savedLayout(for: nextLaunch.claim(.folder, preferred: 0)), .init())
+    }
+
+    @MainActor
     func testClosedSecondaryWindowKeepsItsOwnFrameAcrossReopenAndRelaunch() throws {
         let domain = "RichFiles.WindowPlacementTests.\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))

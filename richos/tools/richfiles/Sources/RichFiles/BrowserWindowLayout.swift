@@ -65,6 +65,7 @@ struct BrowserWindowLayout: Layout {
 struct BrowserPaneDivider: View {
     let name: String
     let resize: (CGFloat) -> Void
+    var finished: () -> Void = {}
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
@@ -73,7 +74,8 @@ struct BrowserPaneDivider: View {
             .overlay { Rectangle().fill(palette.line).frame(width: 1) }
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 2, coordinateSpace: .named("richfiles-window"))
-                .onChanged { resize($0.location.x) })
+                .onChanged { resize($0.location.x) }
+                .onEnded { _ in finished() })
             .accessibilityLabel(name)
     }
 }
