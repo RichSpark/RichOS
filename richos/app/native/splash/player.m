@@ -24,30 +24,22 @@ typedef enum {
     SoundFinished,
     SoundInterrupted,
     SoundCompletionTimedOut,
+    SoundOutputReady,
 } SoundOutcome;
 
 // Sound is owned by the launch cue even after the native window is removed.
-@interface RichSplashCue : NSObject <AVAudioPlayerDelegate>
-@property(nonatomic, strong) AVAudioPlayer *audio;
-@property(nonatomic, strong) dispatch_queue_t queue;
+@interface RichSplashCue : NSObject
+@property(nonatomic, strong) AVAudioEngine *engine;
 @property(nonatomic) RichSplashAudio report;
 @end
 
 @implementation RichSplashCue
 - (void)finish:(SoundOutcome)outcome {
-    if (!self.audio) return;
-    self.audio.delegate = nil;
-    [self.audio stop];
-    self.audio = nil;
+    AVAudioEngine *engine = self.engine;
+    if (!engine) return;
+    self.engine = nil;
+    [engine stop];
     if (self.report) self.report(outcome);
-}
-
-- (void)audioPlayerDidFinishPlaying:(AVAudioPlayer *)audio successfully:(BOOL)success {
-    dispatch_async(self.queue, ^{ [self finish:success ? SoundFinished : SoundInterrupted]; });
-}
-
-- (void)audioPlayerDecodeErrorDidOccur:(AVAudioPlayer *)audio error:(NSError *)error {
-    dispatch_async(self.queue, ^{ [self finish:SoundInterrupted]; });
 }
 @end
 
@@ -59,33 +51,63 @@ static void scheduleCue(NSString *path, double length, CMTime anchor, RichSplash
             if (report) report(SoundDisabled);
             return;
         }
-        AVAudioPlayer *audio = [[AVAudioPlayer alloc] initWithContentsOfURL:[NSURL fileURLWithPath:path] error:nil];
-        if (![audio prepareToPlay]) {
+        AVAudioFile *file = [[AVAudioFile alloc] initForReading:[NSURL fileURLWithPath:path] error:NULL];
+        if (file.length <= 0 || file.length > UINT32_MAX) {
+            if (report) report(SoundPrepareFailed);
+            return;
+        }
+        AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:file.processingFormat
+                                                               frameCapacity:(AVAudioFrameCount)file.length];
+        if (!buffer || ![file readIntoBuffer:buffer error:NULL] || buffer.frameLength != file.length) {
             if (report) report(SoundPrepareFailed);
             return;
         }
 
-        // Start the cue 130 ms before the bar lands, 800 ms from the end.
-        NSTimeInterval deviceTime = audio.deviceCurrentTime;
-        double elapsed = CMTimeGetSeconds(CMTimeSubtract(CMClockGetTime(CMClockGetHostTimeClock()), anchor));
-        double lead = length - 0.930 - elapsed;
-        if (lead <= 0) {
-            if (report) report(SoundDeadlineMissed);
+        // Open the output while the video runs. The inactive player node feeds
+        // silence until the authored host time, through the same output graph.
+        AVAudioEngine *engine = [AVAudioEngine new];
+        AVAudioPlayerNode *node = [AVAudioPlayerNode new];
+        [engine attachNode:node];
+        [engine connect:node to:engine.mainMixerNode format:buffer.format];
+        if (![engine startAndReturnError:NULL]) {
+            if (report) report(SoundPrepareFailed);
             return;
         }
-        RichSplashCue *cue = [RichSplashCue new];
-        cue.audio = audio;
-        cue.queue = queue;
-        cue.report = report;
-        audio.delegate = cue;
-        if (![audio playAtTime:deviceTime + lead]) {
-            if (report) report(SoundScheduleRefused);
+        if (report) report(SoundOutputReady);
+
+        // Start the cue 130 ms before the bar lands, 800 ms from the end.
+        CMTime cueTime = CMTimeAdd(anchor, CMTimeMakeWithSeconds(length - 0.930, 1000));
+        double lead = CMTimeGetSeconds(CMTimeSubtract(cueTime, CMClockGetTime(CMClockGetHostTimeClock())));
+        if (lead <= 0 || !engine.isRunning) {
+            [engine stop];
+            if (report) report(lead <= 0 ? SoundDeadlineMissed : SoundScheduleRefused);
             return;
         }
 
-        // Keep the cue alive until the delegate completes it. The guard also
-        // releases the device if a detached output never sends a callback.
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((lead + audio.duration + 2.0) * NSEC_PER_SEC)),
+        RichSplashCue *cue = [RichSplashCue new];
+        cue.engine = engine;
+        cue.report = report;
+        __weak RichSplashCue *weak = cue;
+        [node scheduleBuffer:buffer completionCallbackType:AVAudioPlayerNodeCompletionDataPlayedBack
+           completionHandler:^(AVAudioPlayerNodeCompletionCallbackType type) {
+            // Stopping an engine from its completion callback can deadlock.
+            dispatch_async(queue, ^{
+                RichSplashCue *owner = weak;
+                [owner finish:owner.engine.isRunning ? SoundFinished : SoundInterrupted];
+            });
+        }];
+        @try {
+            [node playAtTime:[AVAudioTime timeWithHostTime:CMClockConvertHostTimeToSystemUnits(cueTime)]];
+        } @catch (NSException *exception) {
+            // The output can disappear between the running check and play.
+            [cue finish:SoundScheduleRefused];
+            return;
+        }
+
+        // Keep the cue alive until the device has played the buffer. Allow the
+        // output to go away without delivering its callback.
+        double duration = buffer.frameLength / buffer.format.sampleRate;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((lead + duration + 2.0) * NSEC_PER_SEC)),
                        queue, ^{ [cue finish:SoundCompletionTimedOut]; });
         if (report) report(SoundScheduled);
     });

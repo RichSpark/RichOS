@@ -116,6 +116,7 @@ extern "C" fn on_audio_outcome(code: i32) {
         5 => "audio cue completed",
         6 => "audio cue interrupted",
         7 => "audio cue completion timed out",
+        8 => "audio output ready",
         _ => return,
     };
     crate::launch_timing::note_native_splash_outcome(outcome);
