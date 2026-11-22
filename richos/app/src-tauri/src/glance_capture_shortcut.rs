@@ -202,26 +202,71 @@ mod workflow {
 }
 
 #[cfg(target_os = "macos")]
-pub fn restore(_app: tauri::AppHandle) {
-    tauri::async_runtime::spawn_blocking(|| {
-        if mac::application().is_some_and(|app| mac::command(&app, &["restore"]).is_err()) {
-            eprintln!("[RichGlance] could not restore the capture shortcut");
-        }
-    });
+pub fn restore(app: tauri::AppHandle) {
+    let observer_app = app.clone();
+    drop(app.run_on_main_thread(move || mac::observe_helper_exit(observer_app)));
+    mac::restore(app);
 }
 
 #[cfg(target_os = "macos")]
 mod mac {
     use super::{Preference, ShortcutStatus};
+    use objc2::{class, msg_send, runtime::{AnyObject, Bool}};
     use ring::rand::{SecureRandom, SystemRandom};
     use std::fs::{self, DirBuilder, OpenOptions};
     use std::io::Write;
     use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
     use std::path::{Path, PathBuf};
     use std::process::Command;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
+    use tauri::{AppHandle, Emitter};
 
-    pub(super) fn application() -> Option<PathBuf> {
+    static RESTORING: AtomicBool = AtomicBool::new(false);
+    const STATUS_CHANGED: &str = "rich://glance-capture-status-changed";
+
+    pub(super) fn restore(app: AppHandle) {
+        if RESTORING.swap(true, Ordering::AcqRel) { return; }
+        tauri::async_runtime::spawn_blocking(move || {
+            if let Some(native) = application() {
+                if command(&native, &["restore"]).is_err() {
+                    eprintln!("[RichGlance] could not restore the capture shortcut");
+                }
+                drop(app.emit(STATUS_CHANGED, ()));
+            }
+            RESTORING.store(false, Ordering::Release);
+        });
+    }
+
+    /// AppKit owns the observer for the process lifetime. A stopped login
+    /// item can need a session shortcut even while RichOS has no open window.
+    pub(super) fn observe_helper_exit(app: AppHandle) {
+        objc2::rc::autoreleasepool(|_| unsafe {
+            let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+            let center: *mut AnyObject = msg_send![workspace, notificationCenter];
+            let name: *mut AnyObject = msg_send![class!(NSString), stringWithUTF8String:
+                c"NSWorkspaceDidTerminateApplicationNotification".as_ptr()];
+            let block = block2::RcBlock::new(move |notice: *mut AnyObject| {
+                if notice.is_null() { return; }
+                let info: *mut AnyObject = msg_send![notice, userInfo];
+                if info.is_null() { return; }
+                let key: *mut AnyObject = msg_send![class!(NSString), stringWithUTF8String:
+                    c"NSWorkspaceApplicationKey".as_ptr()];
+                let stopped: *mut AnyObject = msg_send![info, objectForKey: key];
+                if stopped.is_null() { return; }
+                let bundle: *mut AnyObject = msg_send![stopped, bundleIdentifier];
+                if bundle.is_null() { return; }
+                let helper: *mut AnyObject = msg_send![class!(NSString), stringWithUTF8String:
+                    c"app.richos.richglance.capture-helper".as_ptr()];
+                let matches: Bool = msg_send![bundle, isEqualToString: helper];
+                if matches.as_bool() { restore(app.clone()); }
+            });
+            let _: *mut AnyObject = msg_send![center, addObserverForName: name,
+                object: std::ptr::null::<AnyObject>(), queue: std::ptr::null::<AnyObject>(), usingBlock: &*block];
+        });
+    }
+
+    fn application() -> Option<PathBuf> {
         let executable = std::env::current_exe().ok()?;
         let contents = executable.parent()?.parent()?;
         if contents.file_name()? != "Contents" { return None; }
@@ -242,7 +287,7 @@ mod mac {
         command(&app, &["configure", &settings])
     }
 
-    pub(super) fn command(app: &Path, arguments: &[&str]) -> Result<ShortcutStatus, String> {
+    fn command(app: &Path, arguments: &[&str]) -> Result<ShortcutStatus, String> {
         let output = Command::new(app.join("Contents/MacOS/RichGlance")).arg("--capture-helper")
             .args(arguments).output().map_err(|_| "RichGlance Capture could not start.")?;
         if !output.status.success() {

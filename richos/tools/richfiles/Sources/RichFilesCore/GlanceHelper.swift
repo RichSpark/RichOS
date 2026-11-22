@@ -109,11 +109,12 @@ public enum GlanceHelper {
 
     public struct Response: Codable {
         public var registered: Bool
+        public var session: Bool
         public var error: String?
 
-        public init(registered: Bool, error: String? = nil) {
+        public init(registered: Bool, session: Bool) {
             self.registered = registered
-            self.error = error
+            self.session = session
         }
     }
 

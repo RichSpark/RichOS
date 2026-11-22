@@ -43,7 +43,14 @@ enum GlanceHelperControl {
                     let lock = try store.lock("settings")
                     defer { try? lock?.close() }
                     let preferences = try store.read().preferences
-                    if preferences.enabled && !preferences.background { _ = try startSessionIfNeeded() }
+                    let loginEnabled = service.status == .enabled
+                    if shouldRunSession(preferences, loginEnabled: loginEnabled) {
+                        _ = try startSessionIfNeeded()
+                    } else if preferences.background && loginEnabled {
+                        if try !waitForHelper(), shouldRunSession(preferences, loginEnabled: service.status == .enabled) {
+                            _ = try startSessionIfNeeded()
+                        }
+                    }
                 }
                 result = try status()
             case let values where values.count == 2 && values[0] == "configure":
@@ -59,6 +66,10 @@ enum GlanceHelperControl {
             exit(EXIT_FAILURE)
         }
         return true
+    }
+
+    static func shouldRunSession(_ preferences: GlanceHelper.Preferences, loginEnabled: Bool) -> Bool {
+        preferences.enabled && (!preferences.background || !loginEnabled)
     }
 
     static func status() throws -> Status {
@@ -92,7 +103,7 @@ enum GlanceHelperControl {
         let original = try store.read().preferences
         var next = original
         change(&next)
-        if !original.background && next.enabled { _ = try startSessionIfNeeded() }
+        if shouldRunSession(next, loginEnabled: service.status == .enabled) { _ = try startSessionIfNeeded() }
         let command = GlanceHelper.Request(.configure, preferences: next)
         if try store.send(command) == nil { try store.write(next) }
         return try status()
@@ -118,20 +129,23 @@ enum GlanceHelperControl {
         }
 
         if enabled {
-            if !original.background { try stopSession() }
-            try store.write(original.settingBackground(true, firstUse: record.firstUse))
+            try stopSession()
+            let next = original.settingBackground(true, firstUse: record.firstUse)
+            try store.write(next)
             do {
                 try item.register()
             } catch {
                 if item.status != .requiresApproval {
                     try store.restore(record)
-                    if original.enabled && !original.background { _ = try? startSessionIfNeeded() }
+                    if shouldRunSession(original, loginEnabled: item.status == .enabled) { _ = try? startSessionIfNeeded() }
                     logger.error("login-item action=enable outcome=failed")
                     throw GlanceHelper.Problem("macOS could not enable RichGlance Capture. Check Login Items in System Settings.")
                 }
             }
             if item.status == .enabled { _ = try waitForHelper() }
+            else if shouldRunSession(next, loginEnabled: false) { _ = try startSessionIfNeeded() }
         } else {
+            try stopSession()
             try store.write(original.settingBackground(false, firstUse: false))
             if item.status == .enabled || item.status == .requiresApproval {
                 do { try item.unregister() }
@@ -150,9 +164,9 @@ enum GlanceHelperControl {
     }
 
     private static func stopSession() throws {
-        if try store.send(.init(.stopSession)) != nil {
-            guard try waitForStop() else { throw GlanceHelper.Problem("RichGlance Capture is still closing. Try again.") }
-        }
+        guard try store.send(.init(.status))?.session == true else { return }
+        _ = try store.send(.init(.stopSession))
+        guard try waitForStop() else { throw GlanceHelper.Problem("RichGlance Capture is still closing. Try again.") }
     }
 
     private static func waitForStop() throws -> Bool {

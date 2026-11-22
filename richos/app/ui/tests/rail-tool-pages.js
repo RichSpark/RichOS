@@ -5,28 +5,36 @@ const { loadPlaywright, createRun, assert, assertEqual, UI_DIR,
   leaveHome, shellSettled, flushFrames, captureSettled, publishShot, SHOT_DIR } = require("./lib/harness");
 const contrast = require("./lib/contrast");
 
-async function open(browser, theme, available = true, delayTools = false) {
+async function open(browser, theme, available = true, delayTools = false, shortcutStarting = false) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
-  await page.addInitScript(({ theme, available, delayTools }) => {
+  await page.addInitScript(({ theme, available, delayTools, shortcutStarting }) => {
     localStorage.setItem("richos-theme", theme);
     localStorage.setItem("richos-font-scale", "100");
     localStorage.setItem("richos-mock-config", JSON.stringify({ theme, font_scale: 100, user_name: "Alex Booster" }));
     window.__RICHOS_MOCK_PRESET__ = { richFiles: true, meetingNotes: { available: !delayTools } };
     const state = {
-      shortcut: { available, enabled: false, registered: false,
+      shortcut: { available, enabled: shortcutStarting, registered: false,
         shortcut: { code: "KeyC", control: true, shift: true, option: false, command: false } },
       workflow: { opensEditor: false, keepsHistory: false },
       viewer: { pictures: false },
     };
     const calls = [];
     window.glanceCalls = calls;
+    let shortcutListener;
+    window.finishGlanceHelper = () => {
+      state.shortcut.registered = true;
+      return shortcutListener?.({ payload: null });
+    };
     let bridge;
     Object.defineProperty(window, "RichBridge", {
       configurable: true,
       get: () => bridge,
       set(value) {
         const invoke = value.invoke.bind(value);
-        bridge = { ...value, async invoke(command, args) {
+        bridge = { ...value, listen(event, callback) {
+          if (event === "rich://glance-capture-status-changed") shortcutListener = callback;
+          return value.listen(event, callback);
+        }, async invoke(command, args) {
           if (command.startsWith("glance_") || command === "richfiles_settings" || command === "richfiles_open") {
             calls.push({ command, args });
           }
@@ -52,7 +60,7 @@ async function open(browser, theme, available = true, delayTools = false) {
         } };
       },
     });
-  }, { theme, available, delayTools });
+  }, { theme, available, delayTools, shortcutStarting });
   await page.clock.setFixedTime(new Date("2026-11-21T09:00:00Z"));
   await page.goto("file://" + path.join(UI_DIR, "index.html"));
   await leaveHome(page);
@@ -198,6 +206,19 @@ async function main() {
       const withoutBrief = await centers();
       assertEqual(withoutBrief.selected, withGlance.selected);
       assert(Math.abs(withoutBrief.selected - withoutBrief.bar) <= 1, "the bar follows when RichBrief disappears");
+    } finally {
+      await page.close();
+    }
+  });
+
+  await run.check("the Settings row updates when the session shortcut finishes starting", async () => {
+    const page = await open(browser, "light", true, false, true);
+    try {
+      await page.click("#set-btn");
+      const row = page.locator("#set-richglance-capture-state");
+      await row.filter({ hasText: "Shortcut unavailable" }).waitFor();
+      await page.evaluate(() => window.finishGlanceHelper());
+      assertEqual(await row.textContent(), "⌃⇧C");
     } finally {
       await page.close();
     }

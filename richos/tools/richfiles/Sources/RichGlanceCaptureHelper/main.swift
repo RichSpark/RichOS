@@ -43,7 +43,7 @@ final class CaptureHelper: NSObject, NSApplicationDelegate {
             RichFilesDiagnostics.flush()
         }
         do {
-            lease = try store.lock("owner", nonblocking: true)
+            lease = try claimOwner()
             guard lease != nil else {
                 logger.info("start outcome=another-owner")
                 NSApp.terminate(nil)
@@ -61,6 +61,20 @@ final class CaptureHelper: NSObject, NSApplicationDelegate {
             logger.error("start outcome=unavailable")
             NSApp.terminate(nil)
         }
+    }
+
+    private func claimOwner() throws -> FileHandle? {
+        if let owner = try store.lock("owner", nonblocking: true) { return owner }
+        // Re-enabling the login item in System Settings can start it while the
+        // temporary RichOS session still owns the shortcut.
+        guard session == nil, try store.send(.init(.status))?.session == true else { return nil }
+        _ = try store.send(.init(.stopSession))
+        let end = ProcessInfo.processInfo.systemUptime + 2
+        repeat {
+            if let owner = try store.lock("owner", nonblocking: true) { return owner }
+            Thread.sleep(forTimeInterval: 0.05)
+        } while ProcessInfo.processInfo.systemUptime < end
+        return nil
     }
 
     private func observeWorkspace() {
@@ -114,7 +128,7 @@ final class CaptureHelper: NSObject, NSApplicationDelegate {
 
     private func reply(to data: Data) -> Data? {
         guard data.count < 2048, let request = try? JSONDecoder().decode(GlanceHelper.Request.self, from: data) else { return nil }
-        var response = GlanceHelper.Response(registered: hotkey != nil)
+        var response = GlanceHelper.Response(registered: hotkey != nil, session: session != nil)
         do {
             switch request.action {
             case .status:

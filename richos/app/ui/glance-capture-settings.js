@@ -33,7 +33,12 @@
     try {
       const status = await call("glance_capture_status");
       if (ticket !== shortcutRead || shortcutBusy || !status?.available) return;
+      const first = !view;
       view = status;
+      if (first) {
+        settings.registerGlanceCapture({ open, paint });
+        registerPage();
+      }
       paint();
     } catch {}
   }
@@ -418,10 +423,5 @@
     $("nr-glance").hidden = false;
   }
 
-  call("glance_capture_status").then(status => {
-    if (!status?.available) return;
-    view = status;
-    settings.registerGlanceCapture({ open, paint });
-    registerPage();
-  }).catch(() => {});
+  bridge.listen("rich://glance-capture-status-changed", refreshShortcut).then(refreshShortcut, refreshShortcut);
 })();
