@@ -25,7 +25,6 @@ enum BrowserSheet: Identifiable {
     case openWith(FileEntry, WorkspaceApplications)
     case archive(ArchiveCatalog)
     case createZip([FileReference], BrowserTransferDestination)
-    case diskUsage(URL)
     case checksum(FileReference)
     case duplicates(URL)
     case compare(URL)
@@ -43,7 +42,6 @@ enum BrowserSheet: Identifiable {
         case .openWith: return "openWith"
         case .archive: return "zip"
         case .createZip: return "createZip"
-        case .diskUsage: return "diskUsage"
         case .checksum: return "checksum"
         case .duplicates: return "duplicates"
         case .compare: return "compare"
@@ -497,79 +495,6 @@ struct DuplicateSheet: View {
                     report = try await readStorage {
                         try StorageAnalysis.duplicates(in: requested, isCancelled: { Task.isCancelled })
                     }
-                } catch {
-                    if !Task.isCancelled { problem = error.localizedDescription }
-                }
-            }
-    }
-}
-
-@MainActor
-struct DiskUsageSheet: View {
-    let root: URL
-    let openFolder: (URL) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.colorScheme) private var scheme
-    @State private var folder: URL
-    @State private var report: DiskUsageReport?
-    @State private var problem = ""
-
-    init(folder: URL, openFolder: @escaping (URL) -> Void) {
-        root = folder
-        self.openFolder = openFolder
-        _folder = State(initialValue: folder)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Disk Usage").font(.headline)
-            Text(folder.path).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
-            if let report {
-                Text("\(formattedBytes(report.allocatedBytes)) allocated")
-                List(report.rows) { row in
-                    HStack {
-                        if row.isFolder {
-                            Button { folder = row.url } label: {
-                                Label(row.url.lastPathComponent, systemImage: "folder").lineLimit(1)
-                            }.buttonStyle(.plain)
-                        } else {
-                            Label(row.url.lastPathComponent, systemImage: "doc").lineLimit(1)
-                        }
-                        Spacer(minLength: 10)
-                        Text(formattedBytes(row.allocatedBytes)).monospacedDigit()
-                            .help("\(formattedBytes(row.logicalBytes)) of file contents")
-                    }
-                }.accessibilityLabel("Items sorted by allocated size")
-                if report.unavailable > 0 || report.otherVolumes > 0 {
-                    Text("\(report.unavailable) items unavailable. \(report.otherVolumes) other mounts skipped.")
-                        .font(.caption).foregroundStyle(BrowserPalette(scheme).hint)
-                }
-                Text("Files that share disk blocks may count toward more than one folder.")
-                    .font(.caption).foregroundStyle(BrowserPalette(scheme).hint)
-            } else if !problem.isEmpty {
-                Text(problem).foregroundStyle(.secondary)
-                Spacer()
-            } else {
-                ProgressView("Measuring files…")
-                Spacer()
-            }
-            HStack {
-                Button("Parent Folder") { folder = folder.deletingLastPathComponent() }
-                    .disabled(folder.path == root.path)
-                Button("Open in Browser") { openFolder(folder); dismiss() }
-                Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
-            }
-        }.padding(16).frame(width: 570, height: 420)
-            .task(id: folder) {
-                let requested = folder
-                report = nil
-                problem = ""
-                do {
-                    let result = try await readStorage {
-                        try StorageAnalysis.diskUsage(in: requested, isCancelled: { Task.isCancelled })
-                    }
-                    if !Task.isCancelled { report = result }
                 } catch {
                     if !Task.isCancelled { problem = error.localizedDescription }
                 }

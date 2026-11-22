@@ -14,6 +14,7 @@ final class WindowWorkspace: ObservableObject {
     @Published private(set) var secondary: BrowserModel?
     @Published private(set) var isSplit = false
     @Published private(set) var active = BrowserPaneSide.primary
+    @Published var cleanupFolder: URL?
     private let defaults: UserDefaults
     private var commands: [BrowserPaneSide: (owner: UUID, run: (BrowserCommand) -> Bool)] = [:]
 
@@ -64,7 +65,8 @@ final class WindowWorkspace: ObservableObject {
 
     @discardableResult
     func perform(_ command: BrowserCommand) -> Bool {
-        commands[active]?.run(command) ?? false
+        guard cleanupFolder == nil else { return false }
+        return commands[active]?.run(command) ?? false
     }
 
     func sessionData() -> Data? {
@@ -164,8 +166,22 @@ struct WindowBrowserView: View {
     }
 
     var body: some View {
-        GitBrowserSplit(git: workspace.git) {
-            browserLayout
+        ZStack {
+            GitBrowserSplit(git: workspace.git) { browserLayout }
+                .opacity(workspace.cleanupFolder == nil ? 1 : 0)
+                .allowsHitTesting(workspace.cleanupFolder == nil)
+                .accessibilityHidden(workspace.cleanupFolder != nil)
+            if let folder = workspace.cleanupFolder {
+                DiskCleanupView(folder: folder, actions: actions, volumes: workspace.activeModel.volumes, close: {
+                    workspace.cleanupFolder = nil
+                }, openInBrowser: { url, directory in
+                    workspace.cleanupFolder = nil
+                    if directory { workspace.activeModel.openFolder(url) }
+                    else { workspace.activeModel.revealFile(url) }
+                }, titleChanged: { title in
+                    if let number = nativeWindowNumber { NSApp.window(withWindowNumber: number)?.title = title }
+                })
+            }
         }
         .modifier(BrowserAppearance(setsWindowAppearance: true))
         .background { BrowserWindowReference(report: attachWindow) }
@@ -191,12 +207,19 @@ struct WindowBrowserView: View {
         .onAppear(perform: appear)
         .onChange(of: workspace.isSplit) { _ in saveSession(rememberWindow: true) }
         .onChange(of: workspace.active) { _ in saveSession(rememberWindow: true) }
+        .onChange(of: workspace.cleanupFolder) { folder in
+            if folder == nil, let number = nativeWindowNumber {
+                updateTitle(of: NSApp.window(withWindowNumber: number), folder: workspace.activeModel.folder)
+            }
+        }
         .onReceive(workspace.activeModel.$folder) { _ in
             // The folder publisher fires before its model stores the value.
             // A handoff restores the folder and Git selection together.
             Task { @MainActor in
                 let folder = workspace.activeModel.folder
-                if let number = nativeWindowNumber { updateTitle(of: NSApp.window(withWindowNumber: number), folder: folder) }
+                if workspace.cleanupFolder == nil, let number = nativeWindowNumber {
+                    updateTitle(of: NSApp.window(withWindowNumber: number), folder: folder)
+                }
                 workspace.git.follow(folder)
             }
         }
@@ -260,7 +283,7 @@ struct WindowBrowserView: View {
 
     private func pane(_ model: BrowserModel, side: BrowserPaneSide, size: CGSize) -> some View {
         BrowserView(model: model, workspace: workspace, side: side, windowSize: size, actions: actions,
-                    acceptsKeyboard: { workspace.active == side },
+                    acceptsKeyboard: { workspace.active == side && workspace.cleanupFolder == nil },
                     sessionChanged: { saveSession(rememberWindow: true) })
     }
 
@@ -327,6 +350,7 @@ struct WindowBrowserView: View {
             }
         }
         let folders = openRequests.takePending()
+        if !folders.isEmpty { workspace.cleanupFolder = nil }
         if folders.count == 1, let location = folders.first {
             if location.hasDirectoryPath || (try? location.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
                 workspace.activeModel.openFolder(location)
