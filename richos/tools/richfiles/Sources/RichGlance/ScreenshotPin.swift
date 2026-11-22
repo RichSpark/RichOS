@@ -150,6 +150,7 @@ private final class PinSurface: NSView {
     let picture: NSImageView
     private let bar = ScreenshotSurface(.floating, radius: 9, outline: true)
     private let caption = screenshotLabel("Opacity")
+    private let grip = NSView()
     var header: [NSView] = [] { didSet { header.forEach(bar.addSubview) } }
     var pictureWidth: CGFloat = 1 { didSet { needsLayout = true } }
     var startWidth: CGFloat = 1
@@ -162,6 +163,11 @@ private final class PinSurface: NSView {
         self.picture = picture
         super.init(frame: .zero)
         addSubview(picture)
+        addSubview(grip)
+        grip.wantsLayer = true
+        grip.layer?.backgroundColor = NSColor.white.cgColor
+        grip.layer?.borderColor = NSColor.black.cgColor
+        grip.layer?.borderWidth = 1
         addSubview(bar)
         bar.addSubview(caption)
         setAccessibilityLabel("Pinned image controls")
@@ -179,6 +185,7 @@ private final class PinSurface: NSView {
         caption.textColor = ScreenshotEditorPalette(self).ink
         caption.frame = CGRect(x: 10, y: 12, width: 62, height: 22)
         picture.frame = CGRect(x: 0, y: 46, width: pictureWidth, height: bounds.height - 46)
+        grip.frame = CGRect(x: max(0, pictureWidth - 18), y: bounds.height - 18, width: 18, height: 18)
         let frames = [(75.0, 83.0), (163.0, 49.0), (217.0, 93.0), (316.0, 110.0), (432.0, 52.0)]
         for (view, frame) in zip(header, frames) { view.frame = CGRect(x: frame.0, y: 7, width: frame.1, height: 32) }
         (header[safe: 1] as? NSTextField)?.textColor = ScreenshotEditorPalette(self).ink
@@ -188,14 +195,6 @@ private final class PinSurface: NSView {
         let local = convert(point, from: superview)
         if local.y >= 46 { return picture.frame.contains(local) ? self : nil }
         return super.hitTest(point)
-    }
-
-    override func draw(_ dirtyRect: CGRect) {
-        let grip = CGRect(x: max(0, pictureWidth - 12), y: bounds.height - 12, width: 12, height: 12)
-        NSColor.white.setFill()
-        grip.fill()
-        NSColor.black.setStroke()
-        NSBezierPath(rect: grip).stroke()
     }
 
     override func mouseDown(with event: NSEvent) {

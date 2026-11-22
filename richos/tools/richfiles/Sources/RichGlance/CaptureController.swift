@@ -44,8 +44,8 @@ final class CaptureController: NSObject, NSWindowDelegate {
     private let preferredAction: ScreenshotStore.Action?
     private let pinImage: (ScreenshotDocument) -> Void
     private let openEditor: (ScreenshotDocument) -> Void
-    private let repeatsRegion: Bool
-    private let copiesText: Bool
+    let repeatsRegion: Bool
+    let copiesText: Bool
     private var repeatSeed: ScreenshotRepeatTarget?
     private var repeatSize: CGSize?
     private weak var previousWindow: NSWindow?
@@ -53,6 +53,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
     private var display: Display?
     private var acquisition: Task<Void, Never>?
     private var overlay: CaptureWindow?
+    private var repeatFlash: NSPanel?
     private var surfaces: [Surface] = []
     private var mode = CaptureMode.region
     private var candidates: [CaptureFrame.WindowTarget] = []
@@ -210,6 +211,8 @@ final class CaptureController: NSObject, NSWindowDelegate {
                 }
                 var document = ScreenshotDocument(original: cropped, scale: display.scale)
                 document.repeatTarget = ScreenshotRepeatTarget(id: document.id, display: display.identifier, pixels: crop, scale: display.scale)
+                await flashRegion(crop, on: display)
+                guard !Task.isCancelled, !isFinished else { return }
                 publish(document, route: .editor, started: started)
             } catch {
                 guard !Task.isCancelled, !isFinished else { return }
@@ -217,6 +220,30 @@ final class CaptureController: NSObject, NSWindowDelegate {
                 start()
             }
         }
+    }
+
+    private func flashRegion(_ crop: CGRect, on display: Display) async {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let frame = CGRect(x: display.frame.minX + crop.minX / display.scale,
+                           y: display.frame.maxY - crop.maxY / display.scale,
+                           width: crop.width / display.scale, height: crop.height / display.scale)
+        let flash = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        flash.isOpaque = false
+        flash.backgroundColor = .clear
+        flash.hasShadow = false
+        flash.ignoresMouseEvents = true
+        flash.level = .floating
+        if let view = flash.contentView {
+            view.wantsLayer = true
+            view.layer?.backgroundColor = NSColor.systemYellow.withAlphaComponent(0.10).cgColor
+            view.layer?.borderColor = NSColor.systemYellow.cgColor
+            view.layer?.borderWidth = 2
+        }
+        repeatFlash = flash
+        flash.orderFrontRegardless()
+        try? await Task.sleep(for: .milliseconds(130))
+        flash.orderOut(nil)
+        repeatFlash = nil
     }
 
     func cancel() { stop(.cancelled) }
@@ -970,6 +997,8 @@ final class CaptureController: NSObject, NSWindowDelegate {
         isFinished = true
         let performedCapture = scrolling?.reviewWindow?.isVisible == true || countdown != nil
         acquisition?.cancel()
+        repeatFlash?.orderOut(nil)
+        repeatFlash = nil
         acquisition = nil
         keyLoss?.cancel()
         NotificationCenter.default.removeObserver(self)

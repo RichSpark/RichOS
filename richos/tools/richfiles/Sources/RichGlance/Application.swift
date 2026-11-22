@@ -108,13 +108,14 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
             DispatchQueue.global(qos: .utility).async { _ = try? store.entries() }
         }
         let arguments = CommandLine.arguments
-        guard captureLaunch, arguments.count >= 4, arguments[2] == "--retry-screen-recording",
+        guard captureLaunch, arguments.count >= 5, arguments[2] == "--retry-screen-recording",
               let originPID = pid_t(arguments[3]), capture == nil else { return }
-        if arguments.count == 5 {
+        if arguments.count == 6 {
             captureLaunch = false
-            open(URL(fileURLWithPath: arguments[4]), activate: originPID == 0)
+            open(URL(fileURLWithPath: arguments[5]), activate: originPID == 0)
         }
-        beginCapture(originPID: originPID > 0 ? originPID : nil)
+        beginCapture(originPID: originPID > 0 ? originPID : nil,
+                     repeatsRegion: arguments[4] == "again", copiesText: arguments[4] == "text")
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
@@ -309,6 +310,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let helper = Process()
         helper.executableURL = executable
         var arguments = ["--reopen-after-screen-recording", String(getpid()), String(originPID ?? 0)]
+        arguments.append(session.copiesText ? "text" : session.repeatsRegion ? "again" : "capture")
         if let file = viewer?.file { arguments.append(file.path) }
         helper.arguments = arguments
         do {
@@ -335,7 +337,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 try? await Task.sleep(for: .milliseconds(25))
             }
             let configuration = NSWorkspace.OpenConfiguration()
-            configuration.activates = arguments[2] == "0" && arguments.count == 4
+            configuration.activates = arguments[2] == "0" && arguments.count == 5
             configuration.addsToRecentItems = false
             configuration.arguments = ["--capture-request", "--retry-screen-recording"] + arguments.dropFirst(2)
             do {

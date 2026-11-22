@@ -4043,6 +4043,7 @@ if (window.RichAttachments) {
       else inputEl.focus({ preventScroll: true });
     };
     try {
+      if (homeIsUp()) window.RichHome.hide("glance-attachment");
       if (payload.thread) {
         await openThread(payload.thread);
         await add(payload.thread);
