@@ -39,6 +39,7 @@ FRAME_LIMIT = 256 * 1024
 AUTOMATIC = "_automatic"
 TERMINAL = "_terminal"
 DISPATCH_LOCATOR = "RICHOS_CODEX_DISPATCH_LOCATOR"
+DISPATCH_ATTEMPT = "RICHOS_CODEX_DISPATCH_ATTEMPT"
 
 
 def root():
@@ -465,7 +466,7 @@ def run_codex(binary, path, marker, state, prompt):
     with tempfile.TemporaryFile(mode="w+b") as source:
         source.write(prompt.encode())
         source.seek(0)
-        env = dict(os.environ, **{DISPATCH_LOCATOR: str(path)})
+        env = dict(os.environ, **{DISPATCH_LOCATOR: str(path), DISPATCH_ATTEMPT: state["attempt_id"]})
         quota_failed = False
         with subprocess.Popen([*command, "-"], stdin=source, stdout=subprocess.PIPE, text=True, env=env) as child:
             for line in child.stdout:
@@ -488,6 +489,16 @@ def run_codex(binary, path, marker, state, prompt):
             return child.wait(), quota_failed
 
 
+def run_dispatch_attempt(binary, path, marker, state, prompt, recovering):
+    state["attempt_id"] = uuid.uuid4().hex
+    state.pop("exit_code", None)
+    save(marker, state)
+    if recovering and state.get("session_id"):
+        prompt = ("Continue the pending RichOS task in this chat. "
+                  "Check prior progress before repeating any effects. Pending request follows.\n\n" + prompt)
+    return run_codex(binary, path, marker, state, prompt)
+
+
 def dispatch(locator, resume=False):
     """Start one Codex chat or deliver queued Rich messages to that exact chat."""
     path, context = rich_task(locator)
@@ -500,8 +511,10 @@ def dispatch(locator, resume=False):
             if not state.get("session_id") and not state.get("exit_code"):
                 raise ValueError("The initial Codex launch did not report a session ID")
             offset = position(journal, state)
-            if receipt.exists() and offset:
-                offset = max(offset, position(journal, load(receipt)))
+            if state.get("exit_code") == 0 and offset and receipt.exists():
+                acknowledged = load(receipt)
+                if acknowledged.get("attempt_id") == state.get("attempt_id"):
+                    offset = max(offset, position(journal, acknowledged))
         else:
             if marker.exists():
                 raise ValueError("This handoff was already dispatched; resume its existing Codex chat")
@@ -526,6 +539,8 @@ def dispatch(locator, resume=False):
                 break
         if not pending:
             return 0
+        state["through"] = offset
+        recovering = resume and state.get("exit_code") != 0
         if not resume:
             save(marker, state)
         prompt = (handoff(path) + "\n\n" if offset else "") + "\n\n".join(pending)
@@ -540,17 +555,14 @@ def dispatch(locator, resume=False):
             reading, outcome = check_codex_quota(binary)
             preflight_ms = round((time.monotonic() - started) * 1000)
             quota_notice(path, reading, outcome)
-            code, quota_failed = run_codex(binary, path, marker, state, prompt)
+            code, quota_failed = run_dispatch_attempt(binary, path, marker, state, prompt, recovering)
             if code and quota_failed and outcome == "none":
                 updated, retry_outcome = check_codex_quota(binary, expected_account=reading.account)
                 if updated is not None:
                     reading = updated
                 if retry_outcome in ("reset", "alreadyRedeemed"):
                     quota_notice(path, updated, retry_outcome)
-                    if state.get("session_id"):
-                        prompt = ("Continue the pending RichOS task in this chat after the Codex quota interruption. "
-                                  "Check prior progress before repeating any effects. Pending request follows.\n\n" + prompt)
-                    code, quota_failed = run_codex(binary, path, marker, state, prompt)
+                    code, quota_failed = run_dispatch_attempt(binary, path, marker, state, prompt, recovering=True)
         except (OSError, ValueError) as error:
             diagnostic(path, error)
             code = 1
@@ -571,7 +583,7 @@ def dispatch(locator, resume=False):
             pass
         if code:
             reason = "at a quota limit" if quota_failed else "before completing the handoff"
-            summary = reading.summary() if reading else "Codex usage is unavailable."
+            summary = reading.summary() if reading else "Codex usage is unavailable"
             resume_command = shlex.join(helper_command() + ["resume", "--locator", str(path)])
             dispatch_notice(path, f"Codex stopped {reason} (exit {code}). {summary}. "
                             f"The work is still pending. To resume, run `{resume_command}` from the work directory.")
@@ -702,18 +714,23 @@ def read(locator, direction="to-codex", offset=0, scope=None):
 
 
 def acknowledge_dispatch_read(path, offset, through):
-    # The running Codex turn inherits its locator. Rich and other readers
-    # can inspect the journal without consuming messages for that turn.
+    # Only the running attempt can acknowledge reads. A failed attempt's
+    # receipt cannot advance the next dispatch, even after a successful retry.
     if os.environ.get(DISPATCH_LOCATOR) != path or through <= offset:
         return
     p = Path(path)
     source = p / "to-codex.jsonl"
     with locked(p / "dispatch-read.lock"):
+        state = load(p / "dispatch.json")
+        attempt = state.get("attempt_id")
+        if state.get("exit_code") is not None or os.environ.get(DISPATCH_ATTEMPT) != attempt:
+            return
         receipt = p / "dispatch-read.json"
-        seen = position(source, load(receipt)) if receipt.exists() else 0
-        delivered = position(source, load(p / "dispatch.json"))
+        previous = load(receipt) if receipt.exists() else {}
+        seen = position(source, previous) if previous.get("attempt_id") == attempt else 0
+        delivered = position(source, state)
         if offset <= max(seen, delivered) and through > seen:
-            save(receipt, dict(source_identity=identity(source), through=through))
+            save(receipt, dict(source_identity=identity(source), through=through, attempt_id=attempt))
 
 
 def associate_legacy(scope, legacy_folders, *, designate=False):

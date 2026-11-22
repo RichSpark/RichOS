@@ -199,6 +199,49 @@ else:
             self.assertEqual(c.dispatch(pair), 0)
         self.assertEqual([row[0] for row in calls()], ["reset", "exec"])
 
+    def test_manual_resume_warns_started_chat_to_check_prior_progress(self):
+        calls = self.quota_fixture(resets=0, fail=True)
+        pair = self.connect(self.a)
+        self.assertEqual(c.dispatch(pair), 1)
+        self.assertEqual(c.dispatch(pair, resume=True), 1)
+        self.assertIn("quota-session", calls()[1][1])
+        self.assertIn("Check prior progress before repeating any effects.", calls()[1][2])
+
+    def test_failed_followup_replays_even_after_codex_acknowledged_reading_it(self):
+        pair = self.connect(self.a)
+        prompts = []
+        followup = "Retry this correction after the limit"
+        late = "Deliver this later correction too"
+
+        def run(binary, path, marker, state, prompt):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                state["session_id"] = "fixture-session"
+                c.save(marker, state)
+            if len(prompts) == 2:
+                c.send(pair, "late", late, scope=self.a)
+                env = {"RICHOS_CODEX_DISPATCH_LOCATOR": pair,
+                       "RICHOS_CODEX_DISPATCH_ATTEMPT": state.get("attempt_id", "")}
+                with mock.patch.dict(os.environ, env):
+                    c.acknowledge_dispatch_read(pair, 0, c.read(pair)["through"])
+                self.assertTrue((Path(pair) / "dispatch-read.json").is_file())
+                return 1, True
+            return 0, False
+
+        with mock.patch.object(c, "codex_binary", return_value="fixture"), \
+             mock.patch.object(c, "check_codex_quota", return_value=(None, "unavailable")), \
+             mock.patch.object(c, "run_codex", run):
+            self.assertEqual(c.dispatch(pair), 0)
+            c.send(pair, "follow-up", followup, scope=self.a)
+            self.assertEqual(c.dispatch(pair, resume=True), 1)
+            self.assertEqual(c.dispatch(pair, resume=True), 0)
+            self.assertEqual(c.dispatch(pair, resume=True), 0)
+
+        self.assertEqual(len(prompts), 3)
+        self.assertIn(followup, prompts[2])
+        self.assertIn(late, prompts[2])
+        self.assertNotIn("Exact user task", prompts[2])
+
     def test_codex_continues_under_credit_billing_without_banked_resets(self):
         calls = self.quota_fixture(resets=0)
         pair = self.connect(self.a)
@@ -370,7 +413,8 @@ else:
                 state["session_id"] = "initial-chat"
                 c.save(marker, state)
                 c.send(pair, "already-read", before, scope=self.a)
-                child = dict(os.environ, RICHOS_CODEX_DISPATCH_LOCATOR=pair)
+                child = dict(os.environ, RICHOS_CODEX_DISPATCH_LOCATOR=pair,
+                             RICHOS_CODEX_DISPATCH_ATTEMPT=state.get("attempt_id", ""))
                 cli = [sys.executable, "-B", c.__file__, "read", "--locator", pair]
                 rows = json.loads(subprocess.check_output(cli, env=child))["records"]
                 self.assertEqual(rows[-1]["text"], before)

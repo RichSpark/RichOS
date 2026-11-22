@@ -52,6 +52,9 @@ Codex can draw from eligible credits. If a known usage-limit failure occurs
 during a turn, RichOS rechecks the account and can retry once after a
 confirmed banked reset in the same Codex chat. A failed dispatch preserves the
 request and reports the outcome and resume command on its original connection.
+A read receipt can advance queued follow-ups only after that Codex turn
+succeeds. When a failed turn already has a chat, both retry paths ask it to
+check earlier progress before repeating work.
 Codex second reviews continue to use their existing Claude fallback.
 
 RichDoctor's Configuration collection includes the last completed dispatch
