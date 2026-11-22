@@ -58,8 +58,10 @@ final class BrowserModelTests: XCTestCase {
         try await waitForListing(model, at: child)
         XCTAssertEqual(model.folder.path, child.standardizedFileURL.path)
         XCTAssertFalse(model.openingFolder)
-        XCTAssertEqual(model.selected, [model.folder.appendingPathComponent(match.lastPathComponent)])
-        XCTAssertEqual(model.selection.scrollToItem, model.folder.appendingPathComponent(match.lastPathComponent))
+        let expected = try FileReference(url: match).identity
+        let selected = try model.selected.map { try FileReference(url: $0).identity }
+        XCTAssertEqual(selected, [expected])
+        XCTAssertEqual(try FileReference(url: XCTUnwrap(model.selection.scrollToItem)).identity, expected)
     }
 
     func testCustomShortcutsKeepSystemKeysAndOtherActionsAvailable() throws {
