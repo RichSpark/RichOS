@@ -6,6 +6,22 @@ import XCTest
 
 @MainActor
 final class ScreenshotWorkflowTests: XCTestCase {
+    func testPinnedImageControlsFitTheirFullLabels() throws {
+        let pin = ScreenshotPin(image: try fixture(), anchoredAt: nil, captureID: nil)
+        defer { pin.close() }
+        let surface = try XCTUnwrap(pin.contentView)
+        surface.layoutSubtreeIfNeeded()
+        let buttons = surface.subviews.flatMap { view in view.subviews.compactMap { $0 as? ScreenshotButton } }
+        XCTAssertEqual(buttons.map(\.title), ["Actual Size", "Click Through", "Close"])
+        for button in buttons {
+            XCTAssertGreaterThanOrEqual(button.frame.width, button.naturalWidth(), button.title)
+            XCTAssertLessThanOrEqual(button.frame.maxX, surface.bounds.width, button.title)
+        }
+        for (left, right) in zip(buttons, buttons.dropFirst()) {
+            XCTAssertLessThan(left.frame.maxX, right.frame.minX)
+        }
+    }
+
     func testEditMenuLetsTheFocusedResponderHandleTextShortcuts() async throws {
         let menu = Application.makeEditMenu()
         let commands: [(String, String, String, NSEvent.ModifierFlags)] = [
