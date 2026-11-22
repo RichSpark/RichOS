@@ -106,15 +106,18 @@ struct ScreenshotDocument {
     var edits: ScreenshotEdits
     var repeatTarget: ScreenshotRepeatTarget?
     var screenRect: CGRect?
+    var redactedGeneration: UUID?
 
     init(original: CGImage, scale: CGFloat, kind: ScreenshotKind = .region,
-         id: UUID = UUID(), created: Date = Date(), name: String? = nil, edits: ScreenshotEdits? = nil) {
+         id: UUID = UUID(), created: Date = Date(), name: String? = nil, edits: ScreenshotEdits? = nil,
+         redactedGeneration: UUID? = nil) {
         self.id = id
         self.created = created
         self.original = original
         self.scale = max(1, scale)
         self.kind = kind
         self.name = name
+        self.redactedGeneration = redactedGeneration
         self.edits = edits ?? ScreenshotEdits(crop: CGRect(x: 0, y: 0, width: original.width, height: original.height))
     }
 

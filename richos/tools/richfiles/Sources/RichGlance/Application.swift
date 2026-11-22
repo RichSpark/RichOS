@@ -453,6 +453,10 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         editor.capture = { [weak self] in self?.beginCapture(originPID: nil, fromEditor: true) }
         editor.captureAgain = { [weak self] in self?.captureAgain() }
         editor.pinImage = { [weak self] image, id in self?.pin(image, frame: nil, captureID: id) }
+        editor.discardedOriginal = { [weak self] id in
+            for pin in self?.pins.filter({ $0.captureID == id }) ?? [] { pin.close() }
+            if self?.lastRegionDocument?.id == id { self?.lastRegionDocument = nil }
+        }
         editor.closed = { [weak self, weak previousWindow] in
             guard let self else { return }
             self.editor = nil

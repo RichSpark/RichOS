@@ -4,12 +4,14 @@ enum ScreenshotShelfAction: String, CaseIterable {
     case text = "Copy Text"
     case pin = "Pin to Screen"
     case compare = "Compare"
+    case keepRedacted = "Keep Only Redacted Copy…"
 }
 
 @MainActor
 final class ScreenshotRecents: NSView {
     var open: ((ScreenshotStore.Entry) -> Void)?
     var action: ((ScreenshotShelfAction, ScreenshotStore.Entry) -> Void)?
+    var drag: ((ScreenshotStore.Entry) -> (URL, NSImage)?)?
     var remove: ((ScreenshotStore.Entry) -> Void)?
     var hide: (() -> Void)?
     var clearAll: (() -> Void)?
@@ -109,6 +111,7 @@ final class ScreenshotRecents: NSView {
             let card = ScreenshotShelfCard(entry)
             card.button.onPress = { [weak self] in self?.open?(entry) }
             card.delete.onPress = { [weak self] in self?.remove?(entry) }
+            card.button.dragImage = { [weak self] in self?.drag?(entry) }
             card.more.onPress = { [weak card] in card?.showMenu() }
             card.action = { [weak self] in self?.action?($0, entry) }
             row.addSubview(card)
@@ -323,7 +326,8 @@ private final class ScreenshotShelfCard: NSView {
         button.action = #selector(ScreenshotShelfEntryButton.pressed)
         let name = entry.name ?? (entry.kind == .scrolling ? "Scrolling screenshot" : "\(entry.kind.title) screenshot")
         let crop = entry.edits.crop
-        let held = entry.redactions > 0 ? "Holds the original under \(entry.redactions) \(entry.redactions == 1 ? "redaction" : "redactions")"
+        let held = entry.redactedGeneration != nil && entry.redactions == 0 ? "Holds only the redacted copy"
+            : entry.redactions > 0 ? "Holds the original under \(entry.redactions) \(entry.redactions == 1 ? "redaction" : "redactions")"
             : edited ? "Holds the original and your marks" : "Holds the original"
         let tooltip = "\(name)\n\(entry.kind.title) · \(Int(crop.width)) × \(Int(crop.height)) px · \(entry.created.formatted(date: .abbreviated, time: .shortened))\n\(held)"
         button.toolTip = tooltip
@@ -366,7 +370,7 @@ private final class ScreenshotShelfCard: NSView {
 
     func showMenu() {
         let menu = NSMenu()
-        for action in ScreenshotShelfAction.allCases {
+        for action in ScreenshotShelfAction.allCases where action != .keepRedacted || entry.redactions > 0 {
             let row = menu.addItem(withTitle: action.rawValue, action: #selector(runAction(_:)), keyEquivalent: "")
             row.target = self
             row.representedObject = action.rawValue
@@ -431,6 +435,10 @@ private final class ScreenshotShelfCard: NSView {
         screenshotSymbol(entry.kind.symbol, color: ink)?.draw(in: CGRect(x: left, y: 94, width: 16, height: 16))
         label.draw(with: CGRect(x: left + 19, y: 92, width: textWidth, height: 21),
                    options: [.truncatesLastVisibleLine, .usesLineFragmentOrigin])
+        if entry.redactedGeneration != nil {
+            screenshotSymbol("checkmark.shield", color: p.gold)?.draw(
+                in: CGRect(x: thumbnail.maxX - 20, y: thumbnail.minY + 4, width: 17, height: 17))
+        }
         if edited {
             p.gold.setFill()
             NSBezierPath(ovalIn: CGRect(x: left + 23 + textWidth, y: 99, width: 7, height: 7)).fill()
@@ -439,9 +447,50 @@ private final class ScreenshotShelfCard: NSView {
 }
 
 @MainActor
-private final class ScreenshotShelfEntryButton: NSButton {
+private final class ScreenshotShelfEntryButton: NSButton, NSDraggingSource {
     var onPress: (() -> Void)?
     var focusChanged: (() -> Void)?
+    var dragImage: (() -> (URL, NSImage)?)?
+    private var draggedFile: URL?
+
+    override func mouseDown(with event: NSEvent) {
+        guard let window, let dragImage else { super.mouseDown(with: event); return }
+        window.makeFirstResponder(self)
+        let anchor = event.locationInWindow
+        while let next = window.nextEvent(matching: [.leftMouseUp, .leftMouseDragged]) {
+            if next.type == .leftMouseUp {
+                if bounds.contains(convert(next.locationInWindow, from: nil)) { pressed() }
+                return
+            }
+            let point = next.locationInWindow
+            guard hypot(point.x - anchor.x, point.y - anchor.y) >= 5 else { continue }
+            guard let (url, image) = dragImage() else { return }
+            draggedFile = url
+            let drag = NSDraggingItem(pasteboardWriter: url as NSURL)
+            let local = convert(point, from: nil)
+            drag.setDraggingFrame(CGRect(x: local.x - 65, y: local.y - 40, width: 130, height: 80), contents: image)
+            beginDraggingSession(with: [drag], event: next, source: self)
+            return
+        }
+    }
+
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        .copy
+    }
+
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        if let file = draggedFile {
+            let folder = file.deletingLastPathComponent()
+            if operation.isEmpty { try? FileManager.default.removeItem(at: folder) }
+            else {
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .seconds(900)) {
+                    try? FileManager.default.removeItem(at: folder)
+                }
+            }
+        }
+        draggedFile = nil
+    }
+
     @objc func pressed() { onPress?() }
     override func draw(_ dirtyRect: NSRect) {}
     override var acceptsFirstResponder: Bool { isEnabled }

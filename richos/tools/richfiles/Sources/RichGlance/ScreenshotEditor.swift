@@ -25,11 +25,13 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
     var capture: (() -> Void)?
     var captureAgain: (() -> Void)?
     var pinImage: ((CGImage, UUID) -> Void)?
+    var discardedOriginal: ((UUID) -> Void)?
     private var comparison: ScreenshotCompareView?
     private var incomingBaselines: [UUID: ScreenshotDocument] = [:]
     private let moreButton = ScreenshotButton("More", symbol: "ellipsis")
     private let searchField = NSSearchField()
     private let searchStatus = screenshotLabel()
+    private let keepRedactedButton = ScreenshotButton("Keep Only Redacted Copy…", symbol: "checkmark.shield")
     private var search: Task<Void, Never>?
     private var copyTextTask: Task<Void, Never>?
     private var searchMatches: [UUID: [ScreenshotText.Line]] = [:]
@@ -230,7 +232,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
         emptyMessage.maximumNumberOfLines = 3
         toast.addSubview(toastText)
         toast.isHidden = true
-        for view in [shelfToggle, searchField, searchStatus, openNewCapture, privacy, zoomModes, zoomOutButton, zoomReadout, zoomInButton] { bottom.addSubview(view) }
+        for view in [shelfToggle, searchField, searchStatus, openNewCapture, privacy, keepRedactedButton, zoomModes, zoomOutButton, zoomReadout, zoomInButton] { bottom.addSubview(view) }
 
         newCapture.onPress = { [weak self] in self?.startCapture() }
         againButton.onPress = { [weak self] in self?.captureAgain?() }
@@ -247,6 +249,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
         saveButton.onPress = { [weak self] in self?.saveImage() }
         shelfToggle.onPress = { [weak self] in self?.toggleShelf() }
         openNewCapture.onPress = { [weak self] in self?.openNextCapture() }
+        keepRedactedButton.onPress = { [weak self] in self?.keepCurrentRedacted() }
         zoomModes.changed = { [weak self] in self?.setZoom($0 == 0 ? .fit : .actual) }
         zoomOutButton.onPress = { [weak self] in self?.changeZoom(direction: -1) }
         zoomInButton.onPress = { [weak self] in self?.changeZoom(direction: 1) }
@@ -260,6 +263,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
         reveal.onPress = { [weak self] in self?.canvas?.revealSelection(); self?.focusPicture() }
         shelf.open = { [weak self] in self?.open($0) }
         shelf.action = { [weak self] action, entry in self?.perform(action, for: entry) }
+        shelf.drag = { [weak self] in self?.makeDrag($0) }
         shelf.remove = { [weak self] in self?.deleteCapture($0) }
         shelf.hide = { [weak self] in self?.setShelf(false); self?.window.makeFirstResponder(self?.shelfToggle) }
         shelf.clearAll = { [weak self] in self?.clearAll() }
@@ -303,7 +307,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
         changingDocument = true
         persistSoon?.cancel()
         let previous = canvas
-        if let previous, entries.contains(where: { $0.id == previous.document.id }) {
+        if let previous, previous.document.id != document?.id, entries.contains(where: { $0.id == previous.document.id }) {
             sessions[previous.document.id] = EditingSession(edits: previous.document.edits, revisions: previous.revisions,
                                                             zoom: zoom, autoZoom: autoZoom,
                                                             scrollPosition: scroll.contentView.bounds.origin)
@@ -518,7 +522,50 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
         let menu = NSMenu()
         menu.addItem(withTitle: "Copy Text", action: #selector(copyCurrentText), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Pin to Screen", action: #selector(pinCurrentImage), keyEquivalent: "").target = self
+        if let document = canvas?.document, document.hasRedactions, entries.contains(where: { $0.id == document.id }) {
+            menu.addItem(.separator())
+            menu.addItem(withTitle: keepRedactedButton.title, action: #selector(keepCurrentRedacted), keyEquivalent: "").target = self
+        }
         menu.popUp(positioning: nil, at: CGPoint(x: 0, y: moreButton.bounds.maxY), in: moreButton)
+    }
+
+    @objc private func keepCurrentRedacted() {
+        canvas?.finishCallout()
+        if let document = canvas?.document { keepRedacted(document) }
+    }
+
+    private func keepRedacted(_ document: ScreenshotDocument) {
+        guard document.hasRedactions, entries.contains(where: { $0.id == document.id }) else { return }
+        let crop = document.crop
+        let count = document.edits.marks.filter { $0.tool == .redact }.count
+        let marks = document.edits.marks.count
+        confirm("Keep only the redacted copy?",
+                detail: "RichGlance will keep one flat picture, \(Int(crop.width)) × \(Int(crop.height)) px, with \(count) redacted \(count == 1 ? "area" : "areas") covered. It will discard the original, \(marks) editable \(marks == 1 ? "mark" : "marks") and this capture’s undo history. This cannot be undone.",
+                action: "Discard Original and Keep Redacted Copy", restore: { [weak self] in self?.focusPicture() }) { [weak self] in
+            guard let self else { return }
+            let started = ProcessInfo.processInfo.systemUptime
+            do {
+                let clean = try store.keepOnlyRedacted(document)
+                discardedOriginal?(document.id)
+                copyTextTask?.cancel()
+                search?.cancel()
+                cachedText.removeValue(forKey: document.id)
+                sessions.removeValue(forKey: document.id)
+                if canvas?.document.id == document.id { install(clean) }
+                else {
+                    if comparison?.beforeID == document.id { endCompare() }
+                    refreshShelf()
+                }
+                announce("Holds only the redacted copy.")
+                RichFilesDiagnostics.record(.glanceRedactedCopy, id: UUID(), outcome: .complete, started: started,
+                                            total: 1, confirmed: 1)
+            } catch {
+                refreshShelf()
+                announce("Could not replace the retained capture. Reopen it to check its current state.")
+                RichFilesDiagnostics.record(.glanceRedactedCopy, id: UUID(), outcome: .issues, started: started,
+                                            total: 1, confirmed: 0)
+            }
+        }
     }
 
     @objc private func pinCurrentImage() {
@@ -531,6 +578,23 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
         else { announce("This image could not be pinned.") }
     }
 
+    private func makeDrag(_ entry: ScreenshotStore.Entry) -> (URL, NSImage)? {
+        if canvas?.document.id == entry.id { canvas?.finishCallout() }
+        let start = ProcessInfo.processInfo.systemUptime
+        do {
+            guard let document = savedDocument(entry.id), let preview = ScreenshotRenderer.thumbnail(document) else {
+                throw CocoaError(.fileNoSuchFile)
+            }
+            let file = try ScreenshotDrag.write(document)
+            RichFilesDiagnostics.record(.glanceShare, id: UUID(), outcome: .complete, started: start, total: 1, confirmed: 1)
+            return (file, NSImage(cgImage: preview, size: .zero))
+        } catch {
+            announce("Could not prepare this capture for dragging.")
+            RichFilesDiagnostics.record(.glanceShare, id: UUID(), outcome: .issues, started: start, total: 1, confirmed: 0)
+            return nil
+        }
+    }
+
     private func perform(_ action: ScreenshotShelfAction, for entry: ScreenshotStore.Entry) {
         if canvas?.document.id == entry.id { canvas?.finishCallout() }
         guard let document = savedDocument(entry.id) else { announce("This capture is no longer available."); return }
@@ -538,6 +602,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
         case .text: copyText(document)
         case .pin: pinDocument(document)
         case .compare: beginCompare(document)
+        case .keepRedacted: keepRedacted(document)
         }
     }
 
@@ -947,7 +1012,9 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
         }
         let hasEdits = canvas?.hasChanges == true
         window.isDocumentEdited = hasEdits
-        edited.isHidden = !hasEdits
+        let isRedactedCopy = document?.redactedGeneration != nil
+        edited.stringValue = isRedactedCopy ? "Redacted copy" : "Edited"
+        edited.isHidden = !hasEdits && !isRedactedCopy
         for (item, button) in toolButtons {
             button.isEnabled = document != nil && comparison == nil
             button.isSelected = document != nil && item == tool
@@ -976,6 +1043,9 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
                 : "Copy and Save make one flat picture of what is inside the frame. Your marks and the original stay on this Mac."
         } else {
             privacy.stringValue = "Captures stay on this Mac."
+        }
+        if document?.redactedGeneration != nil, document?.hasRedactions == false {
+            privacy.stringValue = "Holds only the redacted copy."
         }
         privacy.toolTip = privacy.stringValue
 
@@ -1111,8 +1181,14 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
         let nextWidth = min(openNewCapture.naturalWidth(), max(0, zoomModes.frame.minX - nextX - 6))
         openNewCapture.frame = CGRect(x: nextX, y: 6, width: nextWidth, height: 34)
         let privacyX = (openNewCapture.isHidden ? nextX : openNewCapture.frame.maxX) + 8
-        privacy.isHidden = width <= 900
-        privacy.frame = CGRect(x: privacyX, y: 13, width: max(0, width - 271 - privacyX), height: 22)
+        let available = max(0, width - 271 - privacyX)
+        let canKeepRedacted = canvas.map { value in
+            value.document.hasRedactions && entries.contains(where: { $0.id == value.document.id })
+        } ?? false
+        keepRedactedButton.isHidden = !canKeepRedacted || available < keepRedactedButton.naturalWidth()
+        keepRedactedButton.frame = CGRect(x: privacyX, y: 6, width: keepRedactedButton.naturalWidth(), height: 34)
+        privacy.isHidden = width <= 900 || !keepRedactedButton.isHidden
+        privacy.frame = CGRect(x: privacyX, y: 13, width: available, height: 22)
     }
 
     private func labelWidth(_ field: NSTextField) -> CGFloat {
