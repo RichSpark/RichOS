@@ -67,6 +67,7 @@ null speaker, so nothing is heard:
 --suite legacy checks that running pre-contract suite applications are left alone.
 --suite restore checks that both RichFiles windows and the RichGlance viewer return
 with their exact placements and that new processes report the new build.
+--suite editor verifies the screenshot editor restores without taking keyboard focus.
 --suite busy adds a cross-volume RichFiles copy, requires the old process to defer
 and verifies the completed copy before accepting the restart.
 
@@ -442,16 +443,19 @@ return resultRows as text
                   'Destination window', 30)
         self.suite_ax('RichFiles', 'set position of (first window whose name begins with "Source") to {55, 100}\n'
                                   'set position of (first window whose name begins with "Destination") to {520, 210}')
-        self.g('open -a ' + q(GLANCE) + ' ' + q(self.source + '/Suite-Walk.bmp'))
+        image_argument = '' if self.a.suite == 'editor' else ' ' + q(self.source + '/Suite-Walk.bmp')
+        self.g('open -a ' + q(GLANCE) + image_argument)
         glance_pid = self.wait(lambda: next(iter(self.suite_pids('RichGlance')), None), 'RichGlance', 30)
         self.owned['RichGlance-before'] = glance_pid
-        self.wait(lambda: len(self.windows('RichGlance')) == 1, 'the RichGlance image window', 30)
+        self.wait(lambda: len(self.windows('RichGlance')) == 1, 'the RichGlance window', 30)
         self.facts['suite_windows'] = {name: self.windows(name) for name in ('RichFiles', 'RichGlance')}
         if self.a.suite != 'legacy':
             for name, pid in (('RichFiles', files_pid), ('RichGlance', glance_pid)):
                 self.wait(lambda: self.running_build(name, pid, self.facts['version_before']),
                           name + ' to report the original running version', 30)
         self.shot('suite-before.png')
+        if self.a.suite == 'editor':
+            self.suite_ax('RichOS', 'set frontmost to true')
         return {'pids': {name: self.owned[name + '-before'] for name in self.facts['suite_windows']},
                 'windows': self.facts['suite_windows']}
 
@@ -526,6 +530,12 @@ keystroke "v" using command down
                               name + ' to restore the same windows and positions', 45)
             report[name] = {'old_pid': old, 'pid': pid, 'windows': after,
                             'running': self.running_build(name, pid, self.a.update_version)}
+        if self.a.suite == 'editor':
+            foreground = self.osascript('tell application "System Events" to return bundle identifier '
+                                       'of first application process whose frontmost is true')
+            if foreground != 'com.richos.app':
+                raise StepFailed('The editor restore changed foreground ownership to ' + foreground)
+            report['foreground'] = foreground
         self.shot('suite-after.png')
         return report
 
@@ -758,7 +768,7 @@ def main():
     p.add_argument('--stage-tool', type=Path, help="reinstall: the updater crate's guest-stage example")
     p.add_argument('--bundle-archive', type=Path, help='reinstall: the build under test as an update archive')
     p.add_argument('--bundle-version', help="reinstall: that archive's version")
-    p.add_argument('--suite', choices=('legacy', 'restore', 'busy'),
+    p.add_argument('--suite', choices=('legacy', 'restore', 'busy', 'editor'),
                    help='verify suite windows and process builds across the restart')
     a = p.parse_args()
     if a.suite and a.scenario != 'restart':

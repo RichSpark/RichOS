@@ -148,11 +148,16 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
         refresh()
     }
 
-    func show() {
+    func show(activate: Bool = true) {
         if !window.isVisible {
             let visible = (NSScreen.main ?? window.screen)?.visibleFrame ?? window.frame
             window.setContentSize(CGSize(width: min(1360, visible.width - 32), height: min(810, visible.height - 28)))
             window.center()
+        }
+        if !activate {
+            window.orderFront(nil)
+            refresh()
+            return
         }
         if #available(macOS 14, *) { NSApp.activate() }
         else { NSApp.activate(ignoringOtherApps: true) }

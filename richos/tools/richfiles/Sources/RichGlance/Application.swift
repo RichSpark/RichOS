@@ -179,7 +179,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 guard let entry = try? screenshotStore.entries().first(where: { $0.id == id }) else { return nil }
                 return try? screenshotStore.load(entry)
             }
-            showEditor(document, origin: nil, previousWindow: viewer?.window)
+            showEditor(document, origin: nil, previousWindow: viewer?.window, activate: false)
             if let window = editor?.window { placement.apply(to: window) }
         }
         if let placement = state.settings {
@@ -514,11 +514,11 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func showEditor(_ document: ScreenshotDocument?, origin: NSRunningApplication?, previousWindow: NSWindow?,
-                            newCapture: Bool = false, baseline: ScreenshotDocument? = nil) {
+                            newCapture: Bool = false, baseline: ScreenshotDocument? = nil, activate: Bool = true) {
         captureLaunch = false
         if let editor {
             if let document { editor.changeDocument(document, newCapture: newCapture, baseline: baseline) }
-            editor.show()
+            editor.show(activate: activate)
             return
         }
         let editor = ScreenshotEditor(store: screenshotStore)
@@ -541,7 +541,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
         }
         if let document { editor.changeDocument(document, newCapture: newCapture, baseline: baseline) }
-        editor.show()
+        editor.show(activate: activate)
     }
 
     @objc private func showRecents() {
