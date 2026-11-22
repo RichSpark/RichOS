@@ -17,6 +17,7 @@ public enum WindowGesturePreferences {
         public static let titleBar = Self(rawValue: 1)
         public static let dock = Self(rawValue: 2)
         public static let desktopDelete = Self(rawValue: 4)
+        public static let tiling = Self(rawValue: 8)
     }
 
     public enum Status: String {

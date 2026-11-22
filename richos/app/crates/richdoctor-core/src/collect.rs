@@ -817,7 +817,8 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64, gestures: bo
         let confirmed = record["confirmed"].as_u64()?;
         let known_operation = if gestures {
             matches!(operation, "windowGestureAvailability" | "windowGestureMaximize" | "windowGestureRestore"
-                | "windowGestureDockMinimize" | "windowGestureDockRestore" | "desktopDeleteShortcut")
+                | "windowGestureDockMinimize" | "windowGestureDockRestore" | "desktopDeleteShortcut"
+                | "windowGestureTile" | "windowGestureTileRestore")
         } else {
             matches!(operation, "listing" | "listingVisible" | "copy" | "move" | "recovery" | "gitHistory" | "gitComparison" | "railVideoFrame"
                 | "windowPlacement" | "transferStall" | "cleanupScan" | "cleanupDuplicates" | "cleanupTrash" | "cleanupDelete"

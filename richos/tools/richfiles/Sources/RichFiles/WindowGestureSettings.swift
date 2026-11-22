@@ -120,7 +120,7 @@ struct WindowGestureSettings: View {
     private var guidanceColor: Color { BrowserPalette(colorScheme).hint }
 
     private var enabled: Bool {
-        let choices: Preferences.Selection = desktopShortcut ? .desktopDelete : [.titleBar, .dock]
+        let choices: Preferences.Selection = desktopShortcut ? .desktopDelete : [.titleBar, .dock, .tiling]
         return !selection.intersection(choices).isEmpty
     }
 
@@ -133,6 +133,12 @@ struct WindowGestureSettings: View {
                 .disabled(updating)
             Toggle("Click the active app’s Dock icon to minimize or restore", isOn: toggle(.dock))
                 .disabled(updating)
+            Toggle("Tile windows by dragging or with shortcuts", isOn: toggle(.tiling))
+                .disabled(updating)
+            if selection.contains(.tiling) {
+                Text("Drag a title bar to an edge or corner. Hold Control, Option and Command with an arrow for halves, 1–4 for quarters or Return to restore the previous size.")
+                    .foregroundStyle(guidanceColor)
+            }
         }
         if enabled {
             Text(desktopShortcut
@@ -210,7 +216,7 @@ struct WindowGestureSettings: View {
         }
         return accessibility
             ? "In Accessibility, add and allow RichFiles Window Gestures to move and minimize other apps’ windows."
-            : "In Input Monitoring, add and allow RichFiles Window Gestures to detect mouse clicks."
+            : "In Input Monitoring, add and allow RichFiles Window Gestures to detect mouse and keyboard shortcuts."
     }
 
     private func toggle(_ gesture: Preferences.Selection) -> Binding<Bool> {
