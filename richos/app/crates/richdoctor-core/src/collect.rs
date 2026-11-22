@@ -819,7 +819,7 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64, gestures: bo
             matches!(operation, "windowGestureAvailability" | "windowGestureMaximize" | "windowGestureRestore"
                 | "windowGestureDockMinimize" | "windowGestureDockRestore" | "desktopDeleteShortcut")
         } else {
-            matches!(operation, "listing" | "copy" | "move" | "recovery" | "gitHistory" | "gitComparison" | "railVideoFrame"
+            matches!(operation, "listing" | "listingVisible" | "copy" | "move" | "recovery" | "gitHistory" | "gitComparison" | "railVideoFrame"
                 | "windowPlacement" | "transferStall" | "cleanupScan" | "cleanupDuplicates" | "cleanupTrash" | "cleanupDelete"
                 | "openWithDiscovery"
                 | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata"
@@ -1186,6 +1186,7 @@ mod tests {
             "windowPlacement",
             "transferStall",
             "openWithDiscovery",
+            "listingVisible",
         ]
         .map(|stage| {
             let mut capture = record.clone();
@@ -1233,6 +1234,8 @@ mod tests {
         assert!(timing.text.contains("operation=railVideoFrame"));
         assert!(timing.text.contains("operation=windowPlacement"));
         assert!(timing.text.contains("operation=transferStall"));
+        assert!(timing.text.contains("operation=openWithDiscovery"));
+        assert!(timing.text.contains("operation=listingVisible"));
         for stage in ["cleanupScan", "cleanupDuplicates", "cleanupTrash", "cleanupDelete"] {
             assert!(timing.text.contains(&format!("operation={stage}")));
         }

@@ -683,7 +683,7 @@ struct FileThumbnail: View {
             }
         }.frame(width: side, height: side)
             .accessibilityHidden(true)
-            .task(id: "\(entry.url.absoluteString):\(version):\(side)") {
+            .task(id: "\(entry.url.absoluteString):\(version):\(side)", priority: .utility) {
                 thumbnail = nil
                 downloadRequired = false
                 guard entry.kind == .regularFile, entry.size != 0, !entry.needsDownload else { return }

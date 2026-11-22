@@ -16,6 +16,23 @@ final class DirectoryReaderTests: XCTestCase {
         try Data(text.utf8).write(to: root.appendingPathComponent(path))
     }
 
+    func testSmallInitialBatchKeepsTheRestOfALargeFolderComplete() throws {
+        try fixture { root in
+            for number in 0..<10_000 { try write("file-\(number).txt", in: root) }
+            var sizes: [Int] = []
+            var names: Set<String> = []
+            let report = try DirectoryReader.scan(root, firstBatchSize: 16) { batch in
+                sizes.append(batch.count)
+                names.formUnion(batch.map(\.name))
+            }
+            XCTAssertEqual(sizes.first, 16)
+            XCTAssertEqual(sizes.dropFirst().first, 128)
+            XCTAssertEqual(report.matched, 10_000)
+            XCTAssertEqual(names.count, 10_000)
+            XCTAssertEqual(sizes.reduce(0, +), 10_000)
+        }
+    }
+
     func testTypeGroupingKeepsNaturalNameOrderAndFoldersFirst() throws {
         try fixture { root in
             let names = ["Item 10.txt", "Item 2.txt", "Item 1.png", "Item 3.png"]
