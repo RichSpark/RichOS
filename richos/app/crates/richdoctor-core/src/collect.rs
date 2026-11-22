@@ -824,7 +824,8 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64, gestures: bo
                 | "windowPlacement" | "transferStall" | "cleanupScan" | "cleanupDuplicates" | "cleanupTrash" | "cleanupDelete"
                 | "openWithDiscovery"
                 | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata"
-                | "glanceCaptureFrame" | "glanceCaptureOutput" | "glanceCaptureSession" | "glanceScrollCapture")
+                | "glanceCaptureFrame" | "glanceCaptureOutput" | "glanceCaptureSession" | "glanceScrollCapture"
+                | "glanceCaptureHelperStart" | "glanceCaptureHelperLogin" | "glanceCaptureShortcutLaunch" | "glanceCaptureMenuLaunch")
         };
         if id.len() != 36 || !id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
             || build.len() > 40 || !build.bytes().all(|b| b.is_ascii_alphanumeric() || b".-+".contains(&b))
@@ -1183,6 +1184,10 @@ mod tests {
             "glanceCaptureSession",
             "glanceCaptureOutput",
             "glanceScrollCapture",
+            "glanceCaptureHelperStart",
+            "glanceCaptureHelperLogin",
+            "glanceCaptureShortcutLaunch",
+            "glanceCaptureMenuLaunch",
             "railVideoFrame",
             "windowPlacement",
             "transferStall",
@@ -1235,6 +1240,9 @@ mod tests {
         assert!(timing.text.contains("operation=glanceCaptureFrame"));
         assert!(timing.text.contains("operation=glanceCaptureSession"));
         assert!(timing.text.contains("operation=glanceCaptureOutput"));
+        for stage in ["glanceCaptureHelperStart", "glanceCaptureHelperLogin", "glanceCaptureShortcutLaunch", "glanceCaptureMenuLaunch"] {
+            assert!(timing.text.contains(&format!("operation={stage}")));
+        }
         assert!(timing.text.contains("operation=glanceScrollCapture outcome=issues"));
         assert!(timing.text.contains("scroll_failure=conflictingPixels"));
         assert!(!timing.text.contains("scroll_failure=lostOverlap"));
