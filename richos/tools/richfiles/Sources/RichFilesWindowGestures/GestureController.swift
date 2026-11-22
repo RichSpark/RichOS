@@ -362,8 +362,9 @@ final class GestureController {
             record(.windowGestureTileRestore, .unavailable, started: started)
             return
         }
-        let originalDisplay = GestureDisplay.current().first { $0.usable.intersects(saved.original) }
-        let target = (originalDisplay ?? display).reachable(saved.original)
+        let displays = GestureDisplay.current()
+        let originalDisplay = displays.first { $0.canReachTitleBar(of: saved.original) }
+        let target = originalDisplay != nil ? saved.original : display.reachable(saved.original)
         let accepted = window.setFrame(target)
         let restored = accepted && window.frame?.edgesAreNear(target, within: Self.layoutTolerance) == true
         if restored {

@@ -85,6 +85,14 @@ struct GestureDisplay {
         }
     }
 
+    func canReachTitleBar(of window: CGRect) -> Bool {
+        // Accessibility frames use a top-left origin across displays.
+        let grabHeight = min(22, window.height)
+        let titleBar = CGRect(x: window.minX, y: window.minY, width: window.width, height: grabHeight)
+        let visible = usable.intersection(titleBar)
+        return visible.width >= min(80, titleBar.width) && visible.height >= grabHeight
+    }
+
     func reachable(_ original: CGRect) -> CGRect {
         let width = min(original.width, usable.width)
         let height = min(original.height, usable.height)
