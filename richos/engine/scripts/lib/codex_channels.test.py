@@ -95,13 +95,185 @@ class Channels(unittest.TestCase):
             self.assertIn(first, output.getvalue())
             self.assertEqual(watcher.tick(state, out=io.StringIO(), sid="rich-session-a"), 0)
 
+    def quota_fixture(self, used=100, resets=1, fail=False, fail_once=False, uncertain=False):
+        binary = self.root / "codex"
+        ledger = self.root / "cli-events"
+        binary.write_text(f"#!{sys.executable}\n" + r"""
+import json, sys
+from pathlib import Path
+ledger = Path(sys.argv[0]).with_name("cli-events")
+def record(value):
+    with ledger.open("a") as out:
+        out.write(json.dumps(value) + "\n")
+def calls():
+    return [json.loads(line) for line in ledger.read_text().splitlines()] if ledger.exists() else []
+""" + f"used, resets, fail, fail_once, uncertain = {used}, {resets}, {fail}, {fail_once}, {uncertain}\n" + """
+if sys.argv[1] == "app-server":
+    for line in sys.stdin:
+        request = json.loads(line)
+        if "id" not in request:
+            continue
+        method = request["method"]
+        result = {}
+        if method == "account/read":
+            result = {"account": {"type": "chatgpt"}, "userId": "fixture-user"}
+        if method == "config/read":
+            result = {"config": {"model_provider": "openai"}}
+        if method == "account/rateLimits/read":
+            events = calls()
+            redeemed = any(x[0] == "reset" for x in events)
+            percent = 0 if redeemed else 100 if fail_once and any(x[0] == "exec" for x in events) else used
+            result = {
+                "accountId": "fixture-account", "ordinaryUsageAllowed": percent < 100,
+                "rateLimits": {"limitId": "codex", "primary": {"usedPercent": percent,
+                    "windowDurationMins": 10080, "resetsAt": 4200000000},
+                    "credits": {"hasCredits": True, "unlimited": False, "balance": "12.345"}},
+                "rateLimitResetCredits": {"availableCount": resets - int(redeemed), "credits": None},
+            }
+        if method == "account/rateLimitResetCredit/consume":
+            key = request["params"]["idempotencyKey"]
+            if uncertain and not any(x[0] == "unconfirmed" for x in calls()):
+                record(["unconfirmed", key])
+                sys.exit(1)
+            record(["reset", key])
+            result = {"outcome": "reset"}
+        print(json.dumps({"id": request["id"], "result": result}), flush=True)
+else:
+    previous_exec = any(x[0] == "exec" for x in calls())
+    record(["exec", sys.argv[1:], sys.stdin.read()])
+    print(json.dumps({"type": "thread.started", "thread_id": "quota-session"}), flush=True)
+    if fail or fail_once and not previous_exec:
+        print(json.dumps({"type": "turn.failed", "error": {"message": "You’ve hit your usage limit."}}))
+        sys.exit(1)
+""")
+        binary.chmod(0o700)
+        patch = mock.patch.object(c, "codex_binary", return_value=str(binary))
+        patch.start()
+        self.addCleanup(patch.stop)
+        return lambda: [json.loads(line) for line in ledger.read_text().splitlines()]
+
+    def test_codex_read_only_quota_reports_windows_resets_and_credit_balance(self):
+        self.quota_fixture()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(c.main(["quota"]), 0)
+        reading = json.loads(output.getvalue())
+        self.assertEqual(reading["limits"][0]["windows"][0]["used_percent"], 100)
+        self.assertEqual(reading["available_resets"], 1)
+        self.assertEqual(reading["limits"][0]["credits"]["balance"], "12.345")
+        self.assertNotIn("fixture-account", output.getvalue())
+        self.assertFalse((self.root / "cli-events").exists())
+
+    def test_exhausted_codex_redeems_one_reset_before_running(self):
+        calls = self.quota_fixture()
+        first = self.connect(self.a)
+        second = c.connect("Independent", "Fixture", terminal_session="rich-terminal")["locator"]
+        with concurrent.futures.ThreadPoolExecutor(2) as pool:
+            self.assertEqual(list(pool.map(c.dispatch, (first, second))), [0, 0])
+        self.assertEqual([row[0] for row in calls()], ["reset", "exec", "exec"])
+        messages = [row["text"] for pair in (first, second) for row in c.read(pair, "to-rich")["records"]]
+        self.assertEqual(sum("used a banked reset" in text for text in messages), 1)
+
+    def test_codex_credits_are_left_to_cli_and_failed_work_is_reported_and_recoverable(self):
+        calls = self.quota_fixture(resets=0, fail=True)
+        pair = self.connect(self.a)
+        self.assertEqual(c.dispatch(pair), 1)
+        self.assertEqual(c.dispatch(pair, resume=True), 1)
+        self.assertEqual([row[0] for row in calls()], ["exec", "exec"])
+        self.assertIn("quota-session", calls()[1][1])
+        self.assertIn("Exact user task", calls()[1][2])
+        self.assertEqual(c.load(Path(pair) / "dispatch.json")["through"], 0)
+        messages = [row["text"] for row in c.read(pair, "to-rich")["records"]]
+        self.assertTrue(any("quota" in text and "exit 1" in text and "resume" in text for text in messages))
+        health = c.load(c.root() / "quota/dispatch-health.json")
+        self.assertEqual(health["exit_code"], 1)
+        self.assertTrue(health["quota_failed"])
+        self.assertNotIn("12.345", json.dumps(health))
+        self.assertNotIn("Exact user task", json.dumps(health))
+
+    def test_codex_reset_uses_effective_chatgpt_account_with_shell_api_keys(self):
+        calls = self.quota_fixture()
+        pair = self.connect(self.a)
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "fixture", "CODEX_API_KEY": "fixture",
+                                         "OPENAI_BASE_URL": "https://example.invalid"}):
+            self.assertEqual(c.dispatch(pair), 0)
+        self.assertEqual([row[0] for row in calls()], ["reset", "exec"])
+
+    def test_manual_resume_warns_started_chat_to_check_prior_progress(self):
+        calls = self.quota_fixture(resets=0, fail=True)
+        pair = self.connect(self.a)
+        self.assertEqual(c.dispatch(pair), 1)
+        self.assertEqual(c.dispatch(pair, resume=True), 1)
+        self.assertIn("quota-session", calls()[1][1])
+        self.assertIn("Check prior progress before repeating any effects.", calls()[1][2])
+
+    def test_failed_followup_replays_even_after_codex_acknowledged_reading_it(self):
+        pair = self.connect(self.a)
+        prompts = []
+        followup = "Retry this correction after the limit"
+        late = "Deliver this later correction too"
+
+        def run(binary, path, marker, state, prompt):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                state["session_id"] = "fixture-session"
+                c.save(marker, state)
+            if len(prompts) == 2:
+                c.send(pair, "late", late, scope=self.a)
+                env = {"RICHOS_CODEX_DISPATCH_LOCATOR": pair,
+                       "RICHOS_CODEX_DISPATCH_ATTEMPT": state.get("attempt_id", "")}
+                with mock.patch.dict(os.environ, env):
+                    c.acknowledge_dispatch_read(pair, 0, c.read(pair)["through"])
+                self.assertTrue((Path(pair) / "dispatch-read.json").is_file())
+                return 1, True
+            return 0, False
+
+        with mock.patch.object(c, "codex_binary", return_value="fixture"), \
+             mock.patch.object(c, "check_codex_quota", return_value=(None, "unavailable")), \
+             mock.patch.object(c, "run_codex", run):
+            self.assertEqual(c.dispatch(pair), 0)
+            c.send(pair, "follow-up", followup, scope=self.a)
+            self.assertEqual(c.dispatch(pair, resume=True), 1)
+            self.assertEqual(c.dispatch(pair, resume=True), 0)
+            self.assertEqual(c.dispatch(pair, resume=True), 0)
+
+        self.assertEqual(len(prompts), 3)
+        self.assertIn(followup, prompts[2])
+        self.assertIn(late, prompts[2])
+        self.assertNotIn("Exact user task", prompts[2])
+
+    def test_codex_continues_under_credit_billing_without_banked_resets(self):
+        calls = self.quota_fixture(resets=0)
+        pair = self.connect(self.a)
+        self.assertEqual(c.dispatch(pair), 0)
+        self.assertEqual([row[0] for row in calls()], ["exec"])
+        self.assertIn("existing credits for eligible work", c.read(pair, "to-rich")["records"][0]["text"])
+
+    def test_codex_reuses_reset_key_after_an_uncertain_response(self):
+        calls = self.quota_fixture(uncertain=True)
+        first, second = self.connect(self.a), self.connect(self.b)
+        self.assertEqual(c.dispatch(first), 0)
+        self.assertEqual(c.dispatch(second), 0)
+        rows = calls()
+        self.assertEqual([row[0] for row in rows], ["unconfirmed", "exec", "reset", "exec"])
+        self.assertEqual(rows[0][1], rows[2][1])
+        self.assertIn("unconfirmed", c.read(first, "to-rich")["records"][0]["text"])
+
+    def test_codex_exhaustion_during_run_resumes_same_chat_after_reset(self):
+        calls = self.quota_fixture(used=99, fail_once=True)
+        pair = self.connect(self.a)
+        self.assertEqual(c.dispatch(pair), 0)
+        self.assertEqual([row[0] for row in calls()], ["exec", "reset", "exec"])
+        self.assertIn("quota-session", calls()[2][1])
+        self.assertGreater(c.load(Path(pair) / "dispatch.json")["through"], 0)
+
     def test_dispatch_starts_one_chat_with_its_own_original_task(self):
         first = self.connect(self.a)
         second = c.connect("Private second task", "Second transcript", scope=self.a)["locator"]
         binary = self.root / "codex"
         transcript = self.root / "codex-transcript"
         event = json.dumps({"type": "thread.started", "thread_id": "codex-fixture"})
-        binary.write_text("#!/bin/sh\nprintf '%s\\n' " + shlex.quote(event) + "\ncat >> " +
+        binary.write_text("#!/bin/sh\n[ \"$1\" != app-server ] || exit 1\nprintf '%s\\n' " + shlex.quote(event) + "\ncat >> " +
                           shlex.quote(str(transcript)) + "\n")
         binary.chmod(0o700)
         with mock.patch.dict(os.environ, {"PATH": str(self.root) + os.pathsep + os.environ["PATH"]}):
@@ -122,7 +294,7 @@ class Channels(unittest.TestCase):
         calls = self.root / "calls"
         prompt = self.root / "prompt"
         binary.write_text(
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + shlex.quote(str(calls)) +
+            "#!/bin/sh\n[ \"$1\" != app-server ] || exit 1\nprintf '%s\\n' \"$*\" >> " + shlex.quote(str(calls)) +
             "\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"first-session\"}'" +
             "\ncat >> " + shlex.quote(str(prompt)) + "\n")
         binary.chmod(0o700)
@@ -148,7 +320,7 @@ class Channels(unittest.TestCase):
         binary = self.root / "codex"
         calls = self.root / "terminal-calls"
         binary.write_text(
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + shlex.quote(str(calls)) +
+            "#!/bin/sh\n[ \"$1\" != app-server ] || exit 1\nprintf '%s\\n' \"$*\" >> " + shlex.quote(str(calls)) +
             "\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"terminal-chat\"}'"
             "\ncat >/dev/null\n"
         )
@@ -241,15 +413,18 @@ class Channels(unittest.TestCase):
                 state["session_id"] = "initial-chat"
                 c.save(marker, state)
                 c.send(pair, "already-read", before, scope=self.a)
-                child = dict(os.environ, RICHOS_CODEX_DISPATCH_LOCATOR=pair)
+                child = dict(os.environ, RICHOS_CODEX_DISPATCH_LOCATOR=pair,
+                             RICHOS_CODEX_DISPATCH_ATTEMPT=state.get("attempt_id", ""))
                 cli = [sys.executable, "-B", c.__file__, "read", "--locator", pair]
                 rows = json.loads(subprocess.check_output(cli, env=child))["records"]
                 self.assertEqual(rows[-1]["text"], before)
                 c.send(pair, "unread", after, scope=self.a)
                 self.assertEqual(json.loads(subprocess.check_output(cli))["records"][-1]["text"], after)
-            return 0
+            return 0, False
 
-        with mock.patch.object(c, "codex_binary", return_value="codex"), mock.patch.object(c, "run_codex", run):
+        with mock.patch.object(c, "codex_binary", return_value="codex"), \
+             mock.patch.object(c, "check_codex_quota", return_value=(None, "unavailable")), \
+             mock.patch.object(c, "run_codex", run):
             self.assertEqual(c.dispatch(pair), 0)
             self.assertEqual(c.dispatch(pair, resume=True), 0)
             self.assertEqual(c.dispatch(pair, resume=True), 0)
