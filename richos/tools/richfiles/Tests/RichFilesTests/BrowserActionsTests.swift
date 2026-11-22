@@ -273,6 +273,32 @@ final class BrowserActionsTests: XCTestCase {
     }
 
     @MainActor
+    func testUpdateRestartRequiresDurableUndoAndRedo() async throws {
+        try await withFixture { root, _, board in
+            let source = try write("original", named: "Original.txt", in: root)
+            let ephemeral = BrowserActions(pasteboard: board)
+            try await perform(ephemeral) { ephemeral.rename(source, to: "Ephemeral.txt") }
+            XCTAssertNotNil(ephemeral.undoName)
+            XCTAssertFalse(ephemeral.canRestartAfterUpdate)
+
+            let recovery = root.appendingPathComponent("Private", isDirectory: true)
+                .appendingPathComponent("Recovery.json")
+            let saved = BrowserActions(pasteboard: board, recoveryURL: recovery)
+            let renamed = try FileReference(url: root.appendingPathComponent("Ephemeral.txt"))
+            try await perform(saved) { saved.rename(renamed, to: "Durable.txt") }
+            XCTAssertTrue(saved.canRestartAfterUpdate)
+            let restored = BrowserActions(pasteboard: board, recoveryURL: recovery)
+            XCTAssertNotNil(restored.undoName)
+            try await perform(restored) { restored.undo() }
+            XCTAssertTrue(restored.canRestartAfterUpdate)
+            let reopened = BrowserActions(pasteboard: board, recoveryURL: recovery)
+            XCTAssertNotNil(reopened.redoName)
+            try await perform(reopened) { reopened.redo() }
+            XCTAssertEqual(try contents(root.appendingPathComponent("Durable.txt")), "original")
+        }
+    }
+
+    @MainActor
     func testCompletedRenameCanBeUndoneAfterReopeningTheRecoveryStore() async throws {
         try await withFixture { root, _, board in
             let source = try write("original", named: "Original.txt", in: root)

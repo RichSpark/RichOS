@@ -45,6 +45,7 @@ final class BrowserActions: ObservableObject {
         !busy && transfer?.running != true && transferTask == nil && preparingQueue.isEmpty
             && queuedTransfers.isEmpty && !replacingFile && currentDrag == nil && cutURLs.isEmpty
             && !canRetryTransfer && shelf.isEmpty
+            && (undoRedoPersisted || (undoHistory.isEmpty && redoHistory.isEmpty))
     }
 
     var didMutate: (() -> Void)?
@@ -62,6 +63,7 @@ final class BrowserActions: ObservableObject {
     private var retryRequest: BrowserTransferRequest?
     private var settledTransferID: UUID?
     private var unreadableRecoveryStore = false
+    private var undoRedoPersisted = false
     private var undoHistory: [HistoryGroup] = []
     private var redoHistory: [HistoryGroup] = []
 
@@ -81,6 +83,7 @@ final class BrowserActions: ObservableObject {
                     trashItems = saved.trash
                     undoHistory = saved.undo
                     redoHistory = saved.redo
+                    undoRedoPersisted = true
                     interruptedTransfer = saved.interruptedTransfer
                     settledTransferID = saved.settledTransferID
                     updateHistoryNames()
@@ -930,6 +933,7 @@ final class BrowserActions: ObservableObject {
     }
 
     private func persistRecovery() -> Bool {
+        undoRedoPersisted = false
         guard let recoveryURL else { return true }
         do {
             if unreadableRecoveryStore {
@@ -938,7 +942,7 @@ final class BrowserActions: ObservableObject {
                 _ = try FileOperations.move(unreadable, into: recoveryURL.deletingLastPathComponent(), named: name)
                 unreadableRecoveryStore = false
             }
-            try RecoveryState(trash: trashItems, undo: undoHistory, redo: redoHistory,
+            undoRedoPersisted = try RecoveryState(trash: trashItems, undo: undoHistory, redo: redoHistory,
                               interruptedTransfer: interruptedTransfer, settledTransferID: settledTransferID)
                 .save(to: recoveryURL)
             return true
@@ -1147,7 +1151,7 @@ private struct RecoveryState: Codable {
         return state
     }
 
-    func save(to url: URL) throws {
+    func save(to url: URL) throws -> Bool {
         let parent = url.deletingLastPathComponent()
         guard let directory = try RichFilesSupportDirectory.open(parent, create: true) else {
             throw CocoaError(.fileWriteNoPermission)
@@ -1162,10 +1166,17 @@ private struct RecoveryState: Codable {
             let bytes = try encoder.encode(recent)
             if bytes.count <= Self.maxBytes {
                 try bytes.write(to: url, options: .atomic)
-                return
+                // Normal persistence keeps bounded recent history. An update restart
+                // needs every currently available Undo and Redo step to survive.
+                return Self.stepCount(recent.undo) == Self.stepCount(undo)
+                    && Self.stepCount(recent.redo) == Self.stepCount(redo)
             }
         }
         throw CocoaError(.fileWriteOutOfSpace)
+    }
+
+    private static func stepCount(_ groups: [HistoryGroup]) -> Int {
+        groups.reduce(0) { $0 + $1.steps.count }
     }
 
     private static func recentGroups(_ groups: [HistoryGroup], stepBudget: Int) -> [HistoryGroup] {
