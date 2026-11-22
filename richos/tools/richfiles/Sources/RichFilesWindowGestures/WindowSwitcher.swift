@@ -7,6 +7,8 @@ private final class WindowSwitcherPanel: NSPanel {
     var dismissPicker: (() -> Void)?
     var openSelection: (() -> Void)?
 
+    override var canBecomeKey: Bool { true }
+
     override func sendEvent(_ event: NSEvent) {
         if event.type == .keyDown,
            event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty {
@@ -31,7 +33,7 @@ final class WindowSwitcher: NSObject, NSTableViewDataSource, NSTableViewDelegate
 
     private let panel = WindowSwitcherPanel(
         contentRect: NSRect(x: 0, y: 0, width: 560, height: 380),
-        styleMask: [.titled, .closable, .utilityWindow], backing: .buffered, defer: true
+        styleMask: [.titled, .closable, .utilityWindow, .nonactivatingPanel], backing: .buffered, defer: true
     )
     private let table = NSTableView()
     private let message = NSTextField(labelWithString: "")
@@ -39,13 +41,13 @@ final class WindowSwitcher: NSObject, NSTableViewDataSource, NSTableViewDelegate
     private var choices: [Choice] = []
     private var loadTask: Task<Void, Never>?
     private var loading: (id: UUID, started: TimeInterval)?
-    private var previousApp: NSRunningApplication?
     private var activation = UUID()
 
     override init() {
         super.init()
         panel.title = "Switch Windows"
         panel.isReleasedWhenClosed = false
+        panel.hidesOnDeactivate = false
         panel.level = .floating
         panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         panel.delegate = self
@@ -96,8 +98,7 @@ final class WindowSwitcher: NSObject, NSTableViewDataSource, NSTableViewDelegate
         let started = ProcessInfo.processInfo.systemUptime
         let id = UUID()
         activation = id
-        previousApp = NSWorkspace.shared.frontmostApplication
-        let activePID = previousApp?.processIdentifier
+        let activePID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let apps = NSWorkspace.shared.runningApplications
             .filter { !$0.isTerminated && $0.activationPolicy == .regular }
             .map { ($0.processIdentifier, $0.localizedName ?? "Application") }
@@ -113,9 +114,10 @@ final class WindowSwitcher: NSObject, NSTableViewDataSource, NSTableViewDelegate
         message.stringValue = "Reading open windows…"
         loading = (id, started)
         panel.center()
-        if #available(macOS 14, *) { NSApp.activate() }
-        else { NSApp.activate(ignoringOtherApps: true) }
-        panel.makeKeyAndOrderFront(nil)
+        // The login item may not receive app activation from a global event tap.
+        // The nonactivating panel can take keyboard focus while the current app stays active.
+        panel.orderFrontRegardless()
+        panel.makeKey()
         panel.makeFirstResponder(table)
         loadTask = Task { @MainActor [weak self] in
             let worker = Task.detached(priority: .userInitiated) { Self.readWindows(apps) }
@@ -180,16 +182,13 @@ final class WindowSwitcher: NSObject, NSTableViewDataSource, NSTableViewDelegate
 
     @objc func dismiss() {
         guard panel.isVisible else { return }
-        let previous = previousApp
         hide()
-        if let previous, !previous.isTerminated { previous.activate() }
     }
 
     private func hide() {
         loadTask?.cancel()
         loadTask = nil
         finishLoading(.cancelled)
-        previousApp = nil
         choices = []
         table.reloadData()
         panel.orderOut(nil)
