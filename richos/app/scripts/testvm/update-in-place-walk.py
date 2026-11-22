@@ -64,10 +64,17 @@ null speaker, so nothing is heard:
     publish    the app quit from its menu: the update is put in place at /Applications as it
                closes and the saved denial is gone
 
-Everything this walk starts is stopped by its recorded pid before it returns (CEO §54).
+--suite legacy checks that running pre-contract suite applications are left alone.
+--suite restore checks that both RichFiles windows and the RichGlance viewer return
+with their exact placements and that new processes report the new build.
+--suite busy adds a cross-volume RichFiles copy, requires the old process to defer
+and verifies the completed copy before accepting the restart.
+
+Everything this walk starts is stopped before it returns (CEO §54).
 Exit 0 when every step passes.
 """
 import argparse
+import base64
 import json
 import os
 from pathlib import Path
@@ -82,6 +89,11 @@ sys.path.insert(0, str(HERE))
 from relaunch import guest  # noqa: E402
 
 SYSTEM = '/Applications/RichOS.app'
+FILES = SYSTEM + '/Contents/Applications/RichFiles.app'
+GLANCE = FILES + '/Contents/Applications/RichGlance.app'
+SUITE_LOG = 'Library/Logs/RichOS/richfiles-timing.jsonl'
+VIEWER_IMAGE = ('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB'
+                '/aXdl1sAAAAASUVORK5CYII=')
 EXE = SYSTEM + '/Contents/MacOS/richos-tauri'
 GESTURES = SYSTEM + '/Contents/Applications/RichFiles.app/Contents/Library/LoginItems/RichFiles Window Gestures.app'
 PORT = 8765
@@ -121,6 +133,7 @@ class Walk:
         self.owned = {}  # name -> pid, everything this walk started in the guest
         self.facts = {}
         self.immutable = None  # the staged copy this walk made immutable, cleared at cleanup
+        self.endpoint_base = ('https' if a.suite else 'http') + '://127.0.0.1:%d' % PORT
 
     # --- the guest ---------------------------------------------------------------------------
     def g(self, command, timeout=60):
@@ -234,18 +247,43 @@ class Walk:
             'notes': 'update-in-place walk',
             'pub_date': '2026-11-19T00:00:00Z',
             'platforms': {key: {'signature': self.a.signature.read_text().strip(),
-                                'url': 'http://127.0.0.1:%d/update.tar.gz' % PORT}
+                                'url': self.endpoint_base + '/update.tar.gz'}
                           for key in ('darwin-aarch64', 'darwin-aarch64-app')},
         }
         local = self.out / 'latest.json'
         local.write_text(json.dumps(manifest, indent=1) + '\n')
         self.push(local, self.work + '/serve/latest.json')
-        pid = self.g('cd ' + q(self.work + '/serve') + ' && nohup python3 -m http.server %d --bind 127.0.0.1 '
-                     '</dev/null >' % PORT + q(self.work + '/serve.log') + ' 2>&1 & echo $!')
+        folder = self.work + '/serve'
+        command = 'python3 -m http.server %d --bind 127.0.0.1' % PORT
+        if self.a.suite:
+            # The published updater requires HTTPS. Trust this certificate only in this guest.
+            cert = self.work + '/testvm-root.pem'
+            key = self.work + '/testvm-key.pem'
+            config = self.work + '/tls.cnf'
+            self.g("umask 077; printf '%s' " + q(
+                '[req]\ndistinguished_name=dn\nx509_extensions=ext\nprompt=no\n'
+                '[dn]\nCN=RichOS disposable test VM\n[ext]\nsubjectAltName=IP:127.0.0.1\n'
+                'basicConstraints=critical,CA:true\nkeyUsage=critical,digitalSignature,keyCertSign\n'
+            ) + ' > ' + q(config)
+                + ' && openssl req -x509 -newkey rsa:2048 -nodes -days 1 -config ' + q(config)
+                + ' -keyout ' + q(key) + ' -out ' + q(cert) + ' 2>/dev/null'
+                + ' && sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ' + q(cert))
+            server = (
+                'import http.server, ssl, sys\n'
+                'server = http.server.ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), '
+                'http.server.SimpleHTTPRequestHandler)\n'
+                'context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)\n'
+                'context.load_cert_chain(sys.argv[2], sys.argv[3])\n'
+                'server.socket = context.wrap_socket(server.socket, server_side=True)\n'
+                'server.serve_forever()\n'
+            )
+            command = 'python3 -c %s %d %s %s' % (q(server), PORT, q(cert), q(key))
+        pid = self.g('cd ' + q(folder) + ' && { nohup ' + command + ' </dev/null >'
+                     + q(self.work + '/serve.log') + ' 2>&1 & echo $!; }')
         self.owned['server'] = int(pid)
-        self.wait(lambda: '"version"' in self.g('curl -s http://127.0.0.1:%d/latest.json || true' % PORT),
+        self.wait(lambda: '"version"' in self.g('curl -fsS ' + q(self.endpoint_base + '/latest.json') + ' || true'),
                   'the update server', 20)
-        return {'server_pid': int(pid), 'endpoint': 'http://127.0.0.1:%d/latest.json' % PORT}
+        return {'server_pid': int(pid), 'endpoint': self.endpoint_base + '/latest.json'}
 
     def receipt(self, name):
         """One of the updater's own journal documents, read only; None when absent."""
@@ -275,13 +313,13 @@ class Walk:
         self.g('ditto -x -k ' + q(self.work + '/bundle.zip') + ' /Applications', 180)
         self.facts['version_before'] = self.version()
         # A Dock-launched app inherits launchd's environment: the endpoint, and no Claude updater.
-        for key, value in (('RICHOS_UPDATE_ENDPOINT', 'http://127.0.0.1:%d/latest.json' % PORT),
+        for key, value in (('RICHOS_UPDATE_ENDPOINT', self.endpoint_base + '/latest.json'),
                            ('DISABLE_AUTOUPDATER', '1'), ('RICHOS_ACTIVATION', 'regular')):
             self.g('launchctl setenv %s %s' % (key, q(value)))
         # The first start carries the endpoint itself and keeps its output; the relaunch helper
         # passes both on to the app it starts again.
         self.log = self.work + '/app.log'
-        self.g('open -a ' + q(SYSTEM) + ' --env ' + q('RICHOS_UPDATE_ENDPOINT=http://127.0.0.1:%d/latest.json' % PORT)
+        self.g('open -a ' + q(SYSTEM) + ' --env ' + q('RICHOS_UPDATE_ENDPOINT=' + self.endpoint_base + '/latest.json')
                + ' --stdout ' + q(self.log) + ' --stderr ' + q(self.log))
         pid = self.wait(lambda: (self.app_pids() or [None])[-1], 'RichOS to start from /Applications', 90)
         self.set_app(pid)
@@ -355,12 +393,154 @@ class Walk:
         self.shot('1-available.png')
         return {'offered': True, 'first_run': bool(self.facts.get('first_run'))}
 
+    def suite_pids(self, name):
+        bundle = FILES if name == 'RichFiles' else GLANCE
+        executable = bundle + '/Contents/MacOS/' + name
+        return [int(pid) for pid, path in (line.strip().split(None, 1)
+                for line in self.g('ps -axo pid=,comm=').splitlines() if line.strip())
+                if path in (executable, '/System/Volumes/Data' + executable)]
+
+    def suite_ax(self, name, body):
+        return self.osascript('tell application "System Events" to tell process "%s"\n' % name
+                              + body + '\nend tell')
+
+    def windows(self, name):
+        rows = self.suite_ax(name, '''
+set resultRows to {}
+repeat with w in windows
+    set {leftEdge, topEdge} to position of w
+    set {windowWidth, windowHeight} to size of w
+    set end of resultRows to (name of w & "|" & leftEdge & "|" & topEdge & "|" & windowWidth & "|" & windowHeight)
+end repeat
+set AppleScript's text item delimiters to linefeed
+return resultRows as text
+''')
+        return sorted(row for row in rows.splitlines() if row.count('|') == 4)
+
+    def suite_open(self):
+        self.source = self.work + '/Source'
+        self.destination = self.work + '/Destination'
+        image = self.out / 'Suite-Walk.png'
+        image.write_bytes(base64.b64decode(VIEWER_IMAGE))
+        self.g('mkdir -p ' + q(self.source) + ' ' + q(self.destination))
+        self.push(image, self.source + '/Suite-Walk.png')
+        if self.a.suite == 'busy':
+            # Cross-volume copy exercises the real transfer. A clone on APFS can
+            # otherwise finish before the update reaches the other application.
+            disk = self.work + '/Copy.sparseimage'
+            self.mount = self.work + '/copy-volume'
+            self.g('mkdir -p ' + q(self.mount) + ' && hdiutil create -quiet -type SPARSE -fs APFS '
+                   '-size 16g -volname SuiteCopy ' + q(disk)
+                   + ' && hdiutil attach -quiet -nobrowse -mountpoint ' + q(self.mount) + ' ' + q(disk), 120)
+            self.destination = self.mount + '/Destination'
+            self.g('mkdir -p ' + q(self.destination) + ' && dd if=/dev/zero of='
+                   + q(self.source + '/Suite Copy.bin') + ' bs=8m count=1024 2>/dev/null', 180)
+        self.g('open -a ' + q(FILES) + ' ' + q(self.source))
+        files_pid = self.wait(lambda: next(iter(self.suite_pids('RichFiles')), None), 'RichFiles', 40)
+        self.owned['RichFiles-before'] = files_pid
+        self.wait(lambda: any(row.startswith('Source') for row in self.windows('RichFiles')), 'Source window', 30)
+        self.suite_ax('RichFiles', 'set frontmost to true\nkeystroke "n" using command down')
+        self.wait(lambda: len(self.windows('RichFiles')) == 2, 'the second RichFiles window', 30)
+        self.g('open -a ' + q(FILES) + ' ' + q(self.destination))
+        self.wait(lambda: any(row.startswith('Destination') for row in self.windows('RichFiles')),
+                  'Destination window', 30)
+        self.suite_ax('RichFiles', 'set position of (first window whose name begins with "Source") to {55, 100}\n'
+                                  'set position of (first window whose name begins with "Destination") to {520, 210}')
+        self.g('open -a ' + q(GLANCE) + ' ' + q(self.source + '/Suite-Walk.png'))
+        glance_pid = self.wait(lambda: next(iter(self.suite_pids('RichGlance')), None), 'RichGlance', 30)
+        self.owned['RichGlance-before'] = glance_pid
+        self.wait(lambda: len(self.windows('RichGlance')) == 1, 'the RichGlance image window', 30)
+        self.facts['suite_windows'] = {name: self.windows(name) for name in ('RichFiles', 'RichGlance')}
+        if self.a.suite != 'legacy':
+            for name, pid in (('RichFiles', files_pid), ('RichGlance', glance_pid)):
+                self.wait(lambda: self.running_build(name, pid, self.facts['version_before']),
+                          name + ' to report the original running version', 30)
+        self.shot('suite-before.png')
+        return {'pids': {name: self.owned[name + '-before'] for name in self.facts['suite_windows']},
+                'windows': self.facts['suite_windows']}
+
+    def suite_events(self):
+        data = self.g('cat ' + q(self.home + '/' + SUITE_LOG) + ' 2>/dev/null || true')
+        return [json.loads(line) for line in data.splitlines() if line.startswith('{')]
+
+    def running_build(self, name, pid, version):
+        bundle_ids = {'RichFiles': 'app.richos.richfiles', 'RichGlance': 'app.richos.richglance',
+                      'gestures': 'app.richos.richfiles.window-gestures'}
+        return next((row for row in self.suite_events()
+                     if row.get('operation') == 'suiteRestartRunning' and row.get('pid') == pid
+                     and row.get('application') == bundle_ids[name]
+                     and row.get('build') == version), None)
+
+    def suite_copy(self):
+        self.suite_ax('RichFiles', '''
+set frontmost to true
+perform action "AXRaise" of (first window whose name begins with "Source")
+keystroke "a" using command down
+keystroke "c" using command down
+perform action "AXRaise" of (first window whose name begins with "Destination")
+keystroke "v" using command down
+''')
+        self.facts['copy_requested'] = True
+
+    def suite_after(self):
+        report = {}
+        if self.a.suite != 'legacy':
+            old_gestures = self.owned['gestures']
+            new_gestures = self.wait(lambda: next((pid for pid in self.gesture_pids()
+                 if pid != old_gestures and self.running_build('gestures', pid, self.a.update_version)), None),
+                 'Window Gestures to report the new running version', 90)
+            self.owned['gestures-after'] = new_gestures
+            report['gestures'] = self.running_build('gestures', new_gestures, self.a.update_version)
+        for name, before in self.facts['suite_windows'].items():
+            old = self.owned[name + '-before']
+            if self.a.suite == 'legacy':
+                if self.suite_pids(name) != [old] or self.windows(name) != before:
+                    raise StepFailed(name + ' changed despite lacking the restart contract')
+                report[name] = {'pid': old, 'windows': before, 'outcome': 'legacy-process-retained'}
+                continue
+            if self.a.suite == 'busy' and name == 'RichFiles':
+                deferred = self.wait(lambda: next((row for row in self.suite_events()
+                    if row.get('pid') == old and row.get('operation') == 'richFilesSuiteRestart'
+                    and row.get('outcome') == 'interrupted'), None), 'RichFiles to defer the restart', 35)
+                if old not in self.suite_pids(name):
+                    raise StepFailed('RichFiles exited before the deferral could be observed')
+                source = self.source + '/Suite Copy.bin'
+                copied = self.destination + '/Suite Copy.bin'
+                size = self.g('stat -f %z ' + q(source))
+                self.wait(lambda: self.g('stat -f %z ' + q(copied) + ' 2>/dev/null || true') == size,
+                          'the copy to finish', 180)
+                report['copy'] = {'bytes': int(size), 'deferred': deferred}
+            pid = self.wait(lambda: next((pid for pid in self.suite_pids(name)
+                                          if pid != old and self.running_build(name, pid, self.a.update_version)), None),
+                            name + ' to report the new running version', 150)
+            self.owned[name + '-after'] = pid
+            if old in self.suite_pids(name):
+                raise StepFailed(name + ' still runs the original process')
+            if self.a.suite == 'busy' and name == 'RichFiles':
+                released = next((row for row in self.suite_events() if row.get('pid') == old
+                                 and row.get('id') == deferred['id'] and row.get('outcome') == 'complete'), None)
+                if released is None or released['workerMS'] - deferred['workerMS'] < 59_000:
+                    raise StepFailed('RichFiles did not retry its deferred restart after a minute')
+                report['copy']['released'] = released
+                digests = self.g('shasum -a 256 ' + q(source) + ' ' + q(copied), 120).splitlines()
+                if len(digests) != 2 or digests[0].split()[0] != digests[1].split()[0]:
+                    raise StepFailed('The copied file differs from its source')
+                report['copy']['sha256'] = digests[0].split()[0]
+            after = self.wait(lambda: (rows if (rows := self.windows(name)) == before else None),
+                              name + ' to restore the same windows and positions', 45)
+            report[name] = {'old_pid': old, 'pid': pid, 'windows': after,
+                            'running': self.running_build(name, pid, self.a.update_version)}
+        self.shot('suite-after.png')
+        return report
+
     def download(self):
         old = self.owned['app']
         self.press('is available', role=CUE_ROLE)
         self.wait(lambda: self.present('Download update', 'AXButton'), 'Download update', 30)
         pressed = time.monotonic()
         self.press('Download update')
+        if self.a.suite == 'busy':
+            self.suite_copy()
         seen = set()
 
         def watch(read):
@@ -384,7 +564,7 @@ class Walk:
                 raise StepFailed('the update is still prepared, not put in place')
         elif user_copy:
             raise StepFailed('a copy appeared at ~/Applications/RichOS.app: ' + user_copy)
-        if 'gestures' in self.owned and self.owned['gestures'] not in self.gesture_pids() and not self.g(
+        if self.a.suite in (None, 'legacy') and 'gestures' in self.owned and self.owned['gestures'] not in self.gesture_pids() and not self.g(
                 'kill -0 %d 2>/dev/null && echo alive || true' % self.owned['gestures']):
             raise StepFailed('the login item stopped during the update')
         timing = self.g('cat ' + q(self.home + '/Library/Application Support/com.richos.app/update-timing.log')
@@ -434,7 +614,7 @@ class Walk:
         """Open /Applications/RichOS.app as the Dock does, keeping its output in `log`."""
         self.log = log
         before = set(self.app_pids())
-        self.g('open -a ' + q(SYSTEM) + ' --env ' + q('RICHOS_UPDATE_ENDPOINT=http://127.0.0.1:%d/latest.json' % PORT)
+        self.g('open -a ' + q(SYSTEM) + ' --env ' + q('RICHOS_UPDATE_ENDPOINT=' + self.endpoint_base + '/latest.json')
                + ' --stdout ' + q(log) + ' --stderr ' + q(log))
         pid = self.wait(lambda: next((p for p in self.app_pids() if p not in before), None),
                         'RichOS to start from /Applications', 90)
@@ -448,7 +628,7 @@ class Walk:
         # The app's own check, download, signature check and staging, ending at "ready" without a
         # restart (updates.rs spawn_selftest), so nothing is put in place yet.
         self.g('open -n -a ' + q(SYSTEM) + ' --env RICHOS_UPDATE_SELFTEST=install --env '
-               + q('RICHOS_UPDATE_ENDPOINT=http://127.0.0.1:%d/latest.json' % PORT)
+               + q('RICHOS_UPDATE_ENDPOINT=' + self.endpoint_base + '/latest.json')
                + ' --stdout ' + q(log) + ' --stderr ' + q(log))
         pid = self.wait(lambda: next((p for p in self.app_pids() if p not in before), None),
                         'the staging run to start', 60)
@@ -539,7 +719,7 @@ class Walk:
         if self.immutable:
             self.g('chflags nouchg ' + q(self.immutable) + ' 2>/dev/null || true')
         for log in ('Library/Logs/RichOS/launch.log',
-                    'Library/Application Support/com.richos.app/update-timing.log'):
+                    'Library/Application Support/com.richos.app/update-timing.log', SUITE_LOG):
             self.pull(self.home + '/' + log, self.out / Path(log).name)
         if getattr(self, 'log', None):
             self.pull(self.log, self.out / 'app.log')
@@ -549,7 +729,12 @@ class Walk:
                 self.quit_app(app)
             except (StepFailed, RuntimeError, subprocess.SubprocessError):
                 self.g('kill -TERM %d 2>/dev/null || true' % app)
-        for name in ('gestures', 'server'):
+        for name in ('RichFiles', 'RichGlance') if self.a.suite else ():
+            for pid in self.suite_pids(name):
+                self.g('kill -TERM %d 2>/dev/null || true' % pid)
+        if getattr(self, 'mount', None):
+            self.g('hdiutil detach -quiet ' + q(self.mount) + ' || true')
+        for name in ('gestures', 'gestures-after', 'server'):
             pid = self.owned.get(name)
             if pid:
                 self.g('kill -TERM %d 2>/dev/null || true' % pid)
@@ -571,14 +756,20 @@ def main():
     p.add_argument('--stage-tool', type=Path, help="reinstall: the updater crate's guest-stage example")
     p.add_argument('--bundle-archive', type=Path, help='reinstall: the build under test as an update archive')
     p.add_argument('--bundle-version', help="reinstall: that archive's version")
+    p.add_argument('--suite', choices=('legacy', 'restore', 'busy'),
+                   help='verify suite windows and process builds across the restart')
     a = p.parse_args()
+    if a.suite and a.scenario != 'restart':
+        p.error('--suite requires the restart scenario')
     if a.scenario == 'reinstall' and not (a.stage_tool and a.bundle_archive and a.bundle_version):
         p.error('--scenario reinstall needs --stage-tool, --bundle-archive and --bundle-version')
     walk = Walk(a)
-    report = {'vm': a.vm, 'scenario': a.scenario, 'update_version': a.update_version, 'steps': []}
+    report = {'vm': a.vm, 'scenario': a.scenario, 'suite': a.suite, 'update_version': a.update_version, 'steps': []}
+    steps = (['serve', 'install', 'gestures', 'ready', 'suite_open', 'download', 'suite_after', 'dock']
+             if a.suite else STEPS[a.scenario])
     ok = True
     try:
-        for step in STEPS[a.scenario]:
+        for step in steps:
             began = time.monotonic()
             row = {'step': step}
             try:
