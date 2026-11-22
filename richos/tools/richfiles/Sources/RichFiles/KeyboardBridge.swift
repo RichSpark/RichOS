@@ -219,8 +219,9 @@ struct KeyboardBridge: NSViewRepresentable {
                 default: break
                 }
             }
-            guard modifiers.isEmpty, let key = event.charactersIgnoringModifiers?.lowercased(),
-                  !key.isEmpty, key.allSatisfy({ $0.isLetter || $0.isNumber }) else { return false }
+            guard !controlFocused, modifiers.isEmpty || modifiers == .shift,
+                  let key = event.characters, !key.isEmpty,
+                  key.allSatisfy({ $0.isLetter || $0.isNumber || "._-".contains($0) }) else { return false }
             return prefix?(key) == true
         }
     }

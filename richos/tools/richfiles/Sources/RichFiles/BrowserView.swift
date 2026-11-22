@@ -41,8 +41,6 @@ struct BrowserView: View {
     @State private var sheet: BrowserSheet?
     @State private var transfersVisible = false
     @State private var feedback = ""
-    @State private var prefixText = ""
-    @State private var prefixTime: TimeInterval = 0
     @State private var listRows = 12
     @State private var iconColumns = 4
     @State private var detailsViewport = DetailsViewport()
@@ -140,7 +138,7 @@ struct BrowserView: View {
                                    controlFocused: controlFocused == true,
                                    shortcuts: BrowserShortcut.load(shortcutData),
                                    activate: { workspace.select(side) },
-                                   perform: perform, prefix: selectPrefix))
+                                   perform: perform, prefix: { model.typeToSelect($0) }))
         .onAppear { workspace.setCommands(for: side, owner: commandOwner, handler: perform) }
         .onDisappear { workspace.clearCommands(for: side, owner: commandOwner) }
         .onChange(of: model.tabs.map(\.folder)) { _ in sessionChanged() }
@@ -154,10 +152,6 @@ struct BrowserView: View {
             focus = nil
             suggestions = []
             feedback = ""
-            model.selection.rangeAnchor = nil
-            model.selection.moveCursor(to: nil)
-            prefixText = ""
-            prefixTime = 0
         }
         .background {
             observeSelection { selection in
@@ -1387,6 +1381,7 @@ struct BrowserView: View {
     }
 
     private func select(_ entry: FileEntry, modifiers: NSEvent.ModifierFlags, scroll: Bool = false) {
+        model.resetTypeSelection()
         if modifiers.contains(.shift), let anchor = model.selection.rangeAnchor,
            let start = model.entries.firstIndex(where: { $0.url == anchor }),
            let end = model.entries.firstIndex(where: { $0.url == entry.url }) {
@@ -1425,19 +1420,6 @@ struct BrowserView: View {
         let index = current.map { max(0, min(model.entries.count - 1, $0 + step)) } ?? 0
         select(model.entries[index], modifiers: extend ? .shift : [], scroll: true)
         return true
-    }
-
-    private func selectPrefix(_ character: String) -> Bool {
-        let now = ProcessInfo.processInfo.systemUptime
-        prefixText = now - prefixTime < 0.8 ? prefixText + character : character
-        prefixTime = now
-        if let entry = model.entries.first(where: {
-            $0.name.range(of: prefixText, options: [.anchored, .caseInsensitive]) != nil
-        }) {
-            select(entry, modifiers: [], scroll: true)
-            return true
-        }
-        return false
     }
 
     private func viewportObserver(_ geometry: GeometryProxy, mode: BrowserViewMode) -> ([URL: CGRect]) -> Void {

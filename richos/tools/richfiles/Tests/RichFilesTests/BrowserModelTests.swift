@@ -30,6 +30,9 @@ final class BrowserModelTests: XCTestCase {
             .appendingPathComponent("RichFilesSlowFolder-\(UUID().uuidString)", isDirectory: true)
         let child = folder.appendingPathComponent("Child", isDirectory: true)
         try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
+        let match = child.appendingPathComponent("Élan.txt")
+        try Data().write(to: match)
+        try Data().write(to: child.appendingPathComponent("Else.txt"))
         defer { try? FileManager.default.removeItem(at: folder) }
 
         let resolving = expectation(description: "folder resolution started")
@@ -47,10 +50,16 @@ final class BrowserModelTests: XCTestCase {
         XCTAssertEqual(model.folder.path, folder.standardizedFileURL.path)
         model.selected = [child]
         XCTAssertEqual(model.selected, [child])
+        XCTAssertTrue(model.typeToSelect("E", at: 10))
+        XCTAssertTrue(model.typeToSelect("l", at: 10.1))
+        XCTAssertTrue(model.typeToSelect("a", at: 10.2))
+        XCTAssertEqual(model.selected, [child])
         result.signal()
         try await waitForListing(model, at: child)
         XCTAssertEqual(model.folder.path, child.standardizedFileURL.path)
         XCTAssertFalse(model.openingFolder)
+        XCTAssertEqual(model.selected, [match])
+        XCTAssertEqual(model.selection.scrollToItem, match)
     }
 
     func testCustomShortcutsKeepSystemKeysAndOtherActionsAvailable() throws {

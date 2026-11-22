@@ -244,6 +244,9 @@ final class BrowserModel: ObservableObject {
     private var scanID: UUID?
     private var navigationTask: Task<Void, Never>?
     private var navigationID: UUID?
+    private var selectionPrefix = ""
+    private var prefixTime: TimeInterval = 0
+    private var prefixPending = false
     private var volumeTask: Task<Void, Never>?
     private var volumeChanges: AnyCancellable?
     private var disconnectedMounts: Set<String> = []
@@ -315,6 +318,35 @@ final class BrowserModel: ObservableObject {
         selectionToRestore = [item.url.path: .sameFile(item.identity)]
         firstVisibleItem = nil
         scrollAnchor = item.url
+    }
+
+    func resetTypeSelection() {
+        selectionPrefix = ""
+        prefixPending = false
+    }
+
+    @discardableResult
+    func typeToSelect(_ characters: String, at time: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
+        selectionPrefix = time - prefixTime < 0.8 ? selectionPrefix + characters : characters
+        prefixTime = time
+        prefixPending = true
+        if !openingFolder { applyTypeSelection() }
+        return true
+    }
+
+    private func applyTypeSelection() {
+        guard prefixPending else { return }
+        if let entry = entries.first(where: {
+            $0.name.range(of: selectionPrefix, options: [.anchored, .caseInsensitive, .diacriticInsensitive]) != nil
+        }) {
+            prefixPending = false
+            selected = [entry.url]
+            selection.rangeAnchor = entry.url
+            selection.moveCursor(to: entry.url, scrolling: true)
+            scrollAnchor = entry.url
+        } else if !busy {
+            prefixPending = false
+        }
     }
 
     func recordViewport(_ firstItem: URL, in folder: URL, tab: UUID, mode: BrowserViewMode) {
@@ -645,6 +677,7 @@ final class BrowserModel: ObservableObject {
                 self.navigationID = nil
                 self.openingFolder = false
                 self.status = error.localizedDescription
+                self.resetTypeSelection()
             }
         }
     }
@@ -686,6 +719,7 @@ final class BrowserModel: ObservableObject {
     }
 
     private func cancelNavigation() {
+        resetTypeSelection()
         navigationID = nil
         navigationTask?.cancel()
         openingFolder = false
@@ -714,6 +748,8 @@ final class BrowserModel: ObservableObject {
     }
 
     private func restore(_ visit: Visit, revealing item: URL? = nil) {
+        selection.rangeAnchor = nil
+        selection.moveCursor(to: nil)
         folder = visit.folder
         if let index = tabs.firstIndex(where: { $0.id == currentTabID }) {
             tabs[index].folder = folder
@@ -813,6 +849,7 @@ final class BrowserModel: ObservableObject {
             scrollAnchor = listed
         }
         guard let report = update.report else {
+            if !openingFolder { applyTypeSelection() }
             status = "\(entries.count) \(searchActive ? "results" : "items") loaded…"
             return
         }
@@ -820,6 +857,7 @@ final class BrowserModel: ObservableObject {
         currentVolume = update.volume
         selectionToRestore.removeAll()
         busy = false
+        if !openingFolder { applyTypeSelection() }
         let label = searchActive ? "results" : "items"
         let unavailable = report.inaccessible == 0 ? "" : " · \(report.inaccessible) unavailable"
         let coverage = report.contentCoverage.map {
