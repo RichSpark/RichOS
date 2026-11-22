@@ -21,7 +21,8 @@ public struct DiskUsageReport: Sendable {
 public struct DuplicateFileGroup: Identifiable, Sendable {
     public let sha256: String
     public let size: Int64
-    public let files: [URL]
+    public let candidates: [CleanupCandidate]
+    public var files: [URL] { candidates.map(\.url) }
     public var id: String { sha256 }
 }
 
@@ -55,7 +56,7 @@ public enum StorageAnalysis {
     public static func duplicates(
         in folder: URL, isCancelled: () -> Bool = { false }
     ) throws -> DuplicateFileReport {
-        var sizes: [Int64: [(URL, FileVersion)]] = [:]
+        var sizes: [Int64: [CleanupCandidate]] = [:]
         var identities: Set<FileIdentity> = []
         var unavailable = 0
         let scan = try FileInventory.walk(folder, includePackages: false, isCancelled: isCancelled) { entry in
@@ -63,16 +64,16 @@ public enum StorageAnalysis {
             guard !TextContentReader.isDataless(entry.status) else { unavailable += 1; return }
             let version = FileVersion(entry.status)
             guard entry.status.st_nlink == 1 || identities.insert(version.identity).inserted else { return }
-            sizes[version.size, default: []].append((entry.url, version))
+            sizes[version.size, default: []].append(CleanupCandidate(entry))
         }
 
         var groups: [DuplicateFileGroup] = []
         for (size, candidates) in sizes where candidates.count > 1 {
             if isCancelled() { throw CancellationError() }
-            var byHash: [String: [URL]] = [:]
-            for (file, version) in candidates {
+            var byHash: [String: [CleanupCandidate]] = [:]
+            for file in candidates {
                 do {
-                    let hash = try digest(file, expected: version, isCancelled: isCancelled)
+                    let hash = try digest(file.url, expected: file.version, isCancelled: isCancelled)
                     byHash[hash, default: []].append(file)
                 } catch is CancellationError {
                     throw CancellationError()
@@ -82,7 +83,7 @@ public enum StorageAnalysis {
             }
             groups.append(contentsOf: byHash.compactMap { hash, files in
                 guard files.count > 1 else { return nil }
-                return DuplicateFileGroup(sha256: hash, size: size, files: files.sorted { $0.path < $1.path })
+                return DuplicateFileGroup(sha256: hash, size: size, candidates: files.sorted { $0.url.path < $1.url.path })
             })
         }
         groups.sort { $0.size == $1.size ? $0.sha256 < $1.sha256 : $0.size > $1.size }
@@ -195,6 +196,8 @@ enum FileInventory {
         let url: URL
         let relativePath: String
         let status: stat
+        let package: Bool
+        let insidePackage: Bool
 
         var isDirectory: Bool { status.st_mode & S_IFMT == S_IFDIR }
     }
@@ -205,7 +208,8 @@ enum FileInventory {
     }
 
     static func walk(
-        _ location: URL, includePackages: Bool = true, isCancelled: () -> Bool, receive: (Entry) throws -> Void
+        _ location: URL, includePackages: Bool = true, trackPackages: Bool = false, onlyChildren: Set<String>? = nil,
+        isCancelled: () -> Bool, receive: (Entry) throws -> Void
     ) throws -> Report {
         if isCancelled() { throw CancellationError() }
         let previous = try TextContentReader.disableDatalessMaterialization()
@@ -216,22 +220,35 @@ enum FileInventory {
         var report = Report()
         var rootError: Error?
         let options: FileManager.DirectoryEnumerationOptions = includePackages ? [] : [.skipsPackageDescendants]
-        guard let enumerator = FileManager.default.enumerator(at: folder.url, includingPropertiesForKeys: [],
+        let keys: [URLResourceKey] = trackPackages ? [.isPackageKey] : []
+        guard let enumerator = FileManager.default.enumerator(at: folder.url, includingPropertiesForKeys: keys,
                                                                options: options, errorHandler: { url, error in
             if url.path == path { rootError = error; return false }
             report.unavailable += 1
             return true
         }) else { throw CocoaError(.fileReadUnknown) }
 
+        var packageLevel: Int?
         while let item = enumerator.nextObject() as? URL {
             if isCancelled() { throw CancellationError() }
+            if let onlyChildren, let name = item.path.dropFirst(prefix.count).split(separator: "/", maxSplits: 1).first,
+               !onlyChildren.contains(String(name)) {
+                enumerator.skipDescendants()
+                continue
+            }
             var status = stat()
             guard item.path.hasPrefix(prefix), lstat(item.path, &status) == 0 else {
                 report.unavailable += 1
                 continue
             }
+            let level = enumerator.level
+            if let previousLevel = packageLevel, level <= previousLevel { packageLevel = nil }
+            let insidePackage = packageLevel != nil
+            let package = trackPackages && !insidePackage && status.st_mode & S_IFMT == S_IFDIR
+                && (try? item.resourceValues(forKeys: [.isPackageKey]).isPackage) == true
+            if package { packageLevel = level }
             let entry = Entry(root: folder.url, url: item, relativePath: String(item.path.dropFirst(prefix.count)),
-                              status: status)
+                              status: status, package: package, insidePackage: insidePackage)
             if status.st_dev != folder.identity.device {
                 if entry.isDirectory { enumerator.skipDescendants() }
                 report.otherVolumes += 1

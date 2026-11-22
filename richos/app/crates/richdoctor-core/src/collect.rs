@@ -819,8 +819,9 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64, gestures: bo
             matches!(operation, "windowGestureAvailability" | "windowGestureMaximize" | "windowGestureRestore"
                 | "windowGestureDockMinimize" | "windowGestureDockRestore" | "desktopDeleteShortcut")
         } else {
-            matches!(operation, "listing" | "copy" | "move" | "recovery" | "gitHistory" | "gitComparison" | "railVideoFrame" | "windowPlacement"
-                | "transferStall" | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata"
+            matches!(operation, "listing" | "copy" | "move" | "recovery" | "gitHistory" | "gitComparison" | "railVideoFrame"
+                | "windowPlacement" | "transferStall" | "cleanupScan" | "cleanupDuplicates" | "cleanupTrash" | "cleanupDelete"
+                | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata"
                 | "glanceCaptureFrame" | "glanceCaptureOutput" | "glanceCaptureSession" | "glanceScrollCapture")
         };
         if id.len() != 36 || !id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
@@ -1197,10 +1198,17 @@ mod tests {
             }
             capture.to_string()
         }).join("\n");
+        let cleanup = ["cleanupScan", "cleanupDuplicates", "cleanupTrash", "cleanupDelete"]
+            .map(|operation| {
+                let mut event = record.clone();
+                event["operation"] = serde_json::json!(operation);
+                event["filename"] = serde_json::json!("Private reviewed filename");
+                event.to_string()
+            }).join("\n");
         let mut gestures = record.clone();
         gestures["operation"] = serde_json::json!("windowGestureDockRestore");
         gestures["title"] = serde_json::json!("Private window title");
-        write(&scope.logs_root().join("richfiles-timing.jsonl"), &format!("{record}\n{glance}\n{defaults}\n{metadata}\n{captures}"));
+        write(&scope.logs_root().join("richfiles-timing.jsonl"), &format!("{record}\n{glance}\n{defaults}\n{metadata}\n{captures}\n{cleanup}"));
         let mut desktop_delete = record.clone();
         desktop_delete["operation"] = serde_json::json!("desktopDeleteShortcut");
         desktop_delete["path"] = serde_json::json!("/Users/private/Desktop/test.txt");
@@ -1223,6 +1231,10 @@ mod tests {
         assert!(timing.text.contains("operation=railVideoFrame"));
         assert!(timing.text.contains("operation=windowPlacement"));
         assert!(timing.text.contains("operation=transferStall"));
+        for stage in ["cleanupScan", "cleanupDuplicates", "cleanupTrash", "cleanupDelete"] {
+            assert!(timing.text.contains(&format!("operation={stage}")));
+        }
+        assert!(!timing.text.contains("Private reviewed filename"));
         let window_gestures = items.iter().find(|item| item.source == "RichFiles Window Gestures log").unwrap();
         assert_eq!(window_gestures.status, Status::Collected);
         assert!(window_gestures.text.contains("operation=windowGestureDockRestore"));

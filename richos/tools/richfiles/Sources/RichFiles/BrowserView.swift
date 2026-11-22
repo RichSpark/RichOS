@@ -513,7 +513,7 @@ struct BrowserView: View {
                     Divider()
                     Button("Compare Folders…") { sheet = .compare(model.folder) }
                     Button("Find Duplicate Files…") { sheet = .duplicates(model.folder) }
-                    Button("Disk Usage…") { sheet = .diskUsage(model.folder) }
+                    Button("Disk Usage…") { workspace.cleanupFolder = model.folder }
                     Button("Connect to Server…") { sheet = .connect }
                 } label: { barLabel("Tools", "ellipsis", labeled) }
                     .accessibilityLabel("Tools")
@@ -1224,7 +1224,7 @@ struct BrowserView: View {
         Button("Expand to Current Folder") { expandToCurrentFolder() }
         Button("Workspaces…") { sheet = .workspaces }
         Button("File Shelf…") { _ = perform(.fileShelf) }
-        Button("Disk Usage…") { sheet = .diskUsage(model.folder) }
+        Button("Disk Usage…") { workspace.cleanupFolder = model.folder }
         Button("Find Duplicate Files…") { sheet = .duplicates(model.folder) }
         Button("Compare Folders…") { sheet = .compare(model.folder) }
         Button("Refresh") { _ = perform(.refresh) }
@@ -1373,7 +1373,7 @@ struct BrowserView: View {
                     sheet = .fileShelf(destination)
                 } catch { feedback = error.localizedDescription }
             }
-        case .diskUsage: sheet = .diskUsage(model.folder)
+        case .diskUsage: workspace.cleanupFolder = model.folder
         case .duplicates: sheet = .duplicates(model.folder)
         case .compareFolders: sheet = .compare(model.folder)
         case .checksum:
@@ -1784,7 +1784,6 @@ struct BrowserView: View {
         case .archive(let catalog): ArchiveBrowserSheet(catalog: catalog, changed: model.refresh)
         case .createZip(let sources, let destination):
             ZipCreateSheet(sources: sources, destination: destination, changed: model.refresh)
-        case .diskUsage(let folder): DiskUsageSheet(folder: folder, openFolder: model.openFolder)
         case .duplicates(let folder): DuplicateSheet(folder: folder, openFolder: model.openFolder)
         case .compare(let folder): CompareFoldersSheet(first: folder, actions: actions, openFolder: model.openFolder)
         case .checksum(let reference): ChecksumSheet(file: reference)

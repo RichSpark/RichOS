@@ -587,15 +587,42 @@ final class BrowserActions: ObservableObject {
     }
 
     func trash(_ sources: [FileReference]) {
+        trash(sources, reviewed: [:], keepers: [:])
+    }
+
+    @discardableResult
+    func trashReviewed(_ files: [ReviewedFile], keeping keepers: [URL: ReviewedFile],
+                       finished: @escaping ([BrowserTrashItem], [FileReference]) -> Void) -> Task<Void, Never>? {
+        let reviewed = Dictionary(files.map { ($0.reference.url, $0) }, uniquingKeysWith: { first, _ in first })
+        return trash(files.map(\.reference), reviewed: reviewed, keepers: keepers, finished: finished)
+    }
+
+    @discardableResult
+    private func trash(_ sources: [FileReference], reviewed: [URL: ReviewedFile], keepers: [URL: ReviewedFile],
+                       finished: (([BrowserTrashItem], [FileReference]) -> Void)? = nil) -> Task<Void, Never>? {
         let sources = unique(sources)
-        guard !sources.isEmpty else { return }
-        runMutation(title: "Move to Trash") {
+        guard !sources.isEmpty else { return nil }
+        let retained = Set(keepers.values.map(\.reference.identity))
+        return runMutation(title: "Move to Trash", onResult: { mutation in
+            let moved = mutation.trashChanges.compactMap { change -> BrowserTrashItem? in
+                if case .add(let item) = change { return item }
+                return nil
+            }
+            finished?(moved, mutation.untrashed ?? [])
+        }) {
             var items: [BrowserTrashItem] = []
             var issues: [String] = []
             var failures: [FileReference] = []
             for source in sources {
                 do {
-                    let item = BrowserTrashItem(receipt: try FileOperations.trash(source))
+                    guard !retained.contains(source.identity) else { throw CleanupReviewError.keepOneCopy }
+                    let receipt: TrashReceipt
+                    if let file = reviewed[source.url] {
+                        receipt = try FileOperations.trashCleanup(file, keeping: keepers[source.url])
+                    } else {
+                        receipt = try FileOperations.trash(source)
+                    }
+                    let item = BrowserTrashItem(receipt: receipt)
                     items.append(item)
                     if !item.canRestore {
                         issues.append("\(source.url.lastPathComponent): Use Finder to restore this item from Trash.")
@@ -625,9 +652,15 @@ final class BrowserActions: ObservableObject {
         }
     }
 
-    func restoreSelected(_ entries: [TrashListEntry]) {
-        guard !entries.isEmpty else { return }
-        runMutation(title: "Restore Selected") {
+    @discardableResult
+    func restoreSelected(_ entries: [TrashListEntry], finished: (([UUID]) -> Void)? = nil) -> Task<Void, Never>? {
+        guard !entries.isEmpty else { return nil }
+        return runMutation(title: "Restore Selected", onResult: { mutation in
+            finished?(mutation.trashChanges.compactMap { change in
+                if case .remove(let id) = change { return id }
+                return nil
+            })
+        }) {
             var restored: [(BrowserTrashItem, FileReference)] = []
             var issues: [String] = []
             for entry in entries {
@@ -666,11 +699,16 @@ final class BrowserActions: ObservableObject {
         }
     }
 
-    func deletePermanently(_ confirmed: [FileReference], trash: [BrowserTrashItem] = [], afterTrashFailure: Bool = false) {
+    @discardableResult
+    func deletePermanently(_ confirmed: [FileReference], trash: [BrowserTrashItem] = [],
+                           afterTrashFailure: Bool = false,
+                           finished: (([FileReference]) -> Void)? = nil) -> Task<Void, Never>? {
         let sources = unique(confirmed)
         let previousFailures = untrashed
-        guard !sources.isEmpty else { return }
-        runMutation(title: "Delete Permanently") {
+        guard !sources.isEmpty else { return nil }
+        return runMutation(title: "Delete Permanently", onResult: { mutation in
+            finished?(mutation.removed)
+        }) {
             var removed: [FileReference] = []
             var changes: [TrashChange] = []
             var issues: [String] = []
@@ -687,7 +725,8 @@ final class BrowserActions: ObservableObject {
             let deleted = Dictionary(uniqueKeysWithValues: removed.map { ($0.url.path, $0) })
             let remaining = afterTrashFailure ? previousFailures.filter { deleted[$0.url.path] != $0 } : nil
             return MutationResult(message: "Permanently deleted \(removed.count) of \(sources.count) items.",
-                                  issues: issues, changed: !removed.isEmpty, trashChanges: changes, untrashed: remaining)
+                                  issues: issues, changed: !removed.isEmpty, trashChanges: changes, untrashed: remaining,
+                                  removed: removed)
         }
     }
 
@@ -769,6 +808,7 @@ final class BrowserActions: ObservableObject {
     @discardableResult
     private func runMutation(
         title: String, onSuccess: ((MutationResult) -> Void)? = nil, onFinish: (() -> Void)? = nil,
+        onResult: ((MutationResult) -> Void)? = nil,
         _ operation: @escaping @Sendable () throws -> MutationResult
     ) -> Task<Void, Never>? {
         guard !busy else { return nil }
@@ -784,6 +824,7 @@ final class BrowserActions: ObservableObject {
             case .success(let mutation):
                 onSuccess?(mutation)
                 finishMutation(mutation, title: title)
+                onResult?(mutation)
             case .failure(let error) where error is CancellationError:
                 status = "Operation cancelled."
                 notifyMutation()
@@ -942,6 +983,7 @@ private struct MutationResult: Sendable {
     var createdItem: FileReference?
     var untrashed: [FileReference]?
     var completed = true
+    var removed: [FileReference] = []
 }
 
 private enum TrashChange: Sendable {
