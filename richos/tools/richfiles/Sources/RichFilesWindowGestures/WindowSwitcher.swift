@@ -141,11 +141,14 @@ final class WindowSwitcher: NSObject, NSTableViewDataSource, NSTableViewDelegate
             let windows: [AXUIElement] = app.value(kAXWindowsAttribute) ?? []
             for window in windows {
                 if Task.isCancelled { return choices }
-                guard window.role == kAXWindowRole, window.subrole == kAXStandardWindowSubrole else { continue }
+                guard window.role == kAXWindowRole else { continue }
+                let minimized = window.minimized == true
+                // AppKit can expose a minimized document window as AXDialog.
+                guard minimized || window.subrole == kAXStandardWindowSubrole else { continue }
                 let title: String? = window.value(kAXTitleAttribute)
                 choices.append(Choice(window: window, pid: pid, application: name,
                                       title: title.flatMap { $0.isEmpty ? nil : $0 } ?? "Untitled window",
-                                      minimized: window.minimized == true))
+                                      minimized: minimized))
             }
         }
         return choices
