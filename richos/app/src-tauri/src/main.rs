@@ -1576,8 +1576,8 @@ fn get_timeline(app: AppHandle, state: State<AppState>, thread_id: String) -> Re
 /// The priming intake marker makes messages durable while the provider is preparing.
 /// Context and company permissions retain the thread's immutable binding. Failure is
 /// logged and the next real request keeps the existing recovery path.
-/// Start the already selected conversation while the user is still opening the app
-/// or completing setup. No company or conversation is invented for this optimization.
+/// Prepare the selected conversation after a company confirmation. On a company
+/// screen with no conversation selected, prepare the next desk for that company.
 fn ready_selected_front_desk(app: &AppHandle) {
     let Some(state) = app.try_state::<AppState>() else { return };
     let active = state.reader.snapshot().active_thread().map(str::to_string);
@@ -1646,10 +1646,8 @@ fn ready_the_front_desk(app: &AppHandle, thread_id: &str) {
 ///
 /// # WHERE IT IS CALLED, and the one place it should be and is not
 ///
-/// Three hooks, all of them Rust: at the end of the boot, after a thread's own pre-prime, and
-/// after a thread is created (which consumes the spare, so the next one is prepared). Together
-/// they cover the measured case — the first brand-new thread of a session, which is Ray's
-/// measurement 1 — and every new thread started after he has opened or created another.
+/// A company confirmation, an opened conversation or a newly created thread can prepare a
+/// spare. Launching onto Home with no selected conversation spends no model turn on a spare.
 ///
 /// **The hook that is MISSING is the entity's new-thread screen itself, and that is a gap, not
 /// a design.** `showEntityView` in `ui/main.js` makes no bridge call at all: it is pure local
@@ -4291,9 +4289,12 @@ fn main() {
                 if engine_update_now {
                     update_engine_by_itself(app.clone());
                 }
-                // Readiness starts before the window's setup/navigation reads, with the
-                // selected thread's immutable company scope. Reader snapshots stay available.
-                ready_selected_front_desk(app);
+                // Prepare a real selected conversation before navigation reads. An idle Home
+                // launch has no selected conversation and leaves model work to user activity.
+                let selected = app.state::<AppState>().reader.snapshot().active_thread().map(str::to_owned);
+                if let Some(thread) = selected {
+                    ready_the_front_desk(app, &thread);
+                }
                 spawn_idle_session_retirement(app.clone());
                 // "Keep chat alive": the clock that looks at the chats whose box is checked.
                 chat_cache_host::start(app.clone());
