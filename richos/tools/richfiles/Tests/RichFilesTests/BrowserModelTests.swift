@@ -58,8 +58,8 @@ final class BrowserModelTests: XCTestCase {
         try await waitForListing(model, at: child)
         XCTAssertEqual(model.folder.path, child.standardizedFileURL.path)
         XCTAssertFalse(model.openingFolder)
-        XCTAssertEqual(model.selected, [match])
-        XCTAssertEqual(model.selection.scrollToItem, match)
+        XCTAssertEqual(model.selected, [model.folder.appendingPathComponent(match.lastPathComponent)])
+        XCTAssertEqual(model.selection.scrollToItem, model.folder.appendingPathComponent(match.lastPathComponent))
     }
 
     func testCustomShortcutsKeepSystemKeysAndOtherActionsAvailable() throws {
