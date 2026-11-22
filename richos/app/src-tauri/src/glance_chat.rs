@@ -97,11 +97,13 @@ mod native {
     use ring::rand::{SecureRandom, SystemRandom};
     use serde::{Deserialize, Serialize};
     use serde_json::{json, Value};
+    use std::ffi::OsStr;
     use std::fs;
     use std::io::{self, BufRead, BufReader, Read, Write};
+    use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
     use std::os::unix::net::{UnixListener, UnixStream};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
@@ -140,9 +142,26 @@ mod native {
         });
     }
 
+    // Launches can provide a fixture HOME that differs from the companion's home and
+    // exceeds Darwin's Unix socket limit. Both apps ask Darwin for the same short path.
+    fn socket_directory() -> io::Result<PathBuf> {
+        let size = unsafe { libc::confstr(libc::_CS_DARWIN_USER_TEMP_DIR, std::ptr::null_mut(), 0) };
+        if size <= 1 {
+            return Err(io::Error::from(io::ErrorKind::NotFound));
+        }
+        let mut bytes = vec![0u8; size];
+        let written = unsafe {
+            libc::confstr(libc::_CS_DARWIN_USER_TEMP_DIR, bytes.as_mut_ptr().cast(), bytes.len())
+        };
+        if written != size {
+            return Err(io::Error::from(io::ErrorKind::InvalidData));
+        }
+        let directory = Path::new(OsStr::from_bytes(&bytes[..size - 1]));
+        Ok(directory.join("richglance-chat"))
+    }
+
     fn serve(app: AppHandle) -> io::Result<()> {
-        let home = app.path().home_dir().map_err(io::Error::other)?;
-        let root = home.join("Library/Application Support/com.richos.app/Glance Chat");
+        let root = socket_directory()?;
         fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
@@ -304,6 +323,15 @@ mod native {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn draft_endpoint_fits_darwins_unix_address() {
+            let root = socket_directory().unwrap();
+            assert!(root.is_absolute());
+            assert_eq!(root.file_name().unwrap(), "richglance-chat");
+            let endpoint = root.join(format!("{}.sock", u32::MAX));
+            assert!(endpoint.as_os_str().as_bytes().len() < 104, "{endpoint:?}");
+        }
 
         #[test]
         fn bounds_header_and_leaves_the_png_unread() {

@@ -34,7 +34,15 @@ private enum ScreenshotChatLink {
     }
 
     private static func exchange(_ pid: pid_t, header: [String: any Sendable], png: Data? = nil, preview: Data? = nil) async throws -> Reply {
-        let path = GlanceHelper.applicationSupport.appendingPathComponent("com.richos.app/Glance Chat/\(pid).sock").path
+        // Keep this directory in sync with the RichOS listener. Darwin gives both apps
+        // the same per-user directory when either was launched with a different HOME.
+        let count = confstr(_CS_DARWIN_USER_TEMP_DIR, nil, 0)
+        guard count > 1 else { throw Problem("Could not reach RichOS.") }
+        var directory = [CChar](repeating: 0, count: count)
+        guard confstr(_CS_DARWIN_USER_TEMP_DIR, &directory, count) == count else { throw Problem("Could not reach RichOS.") }
+        let base = FileManager.default.string(withFileSystemRepresentation: directory, length: count - 1)
+        let path = URL(fileURLWithPath: base, isDirectory: true)
+            .appendingPathComponent("richglance-chat/\(pid).sock").path
         let data = try JSONSerialization.data(withJSONObject: header.compactMapValues { value in
             if let thread = value as? String { return thread as Any }
             if let number = value as? Int { return number as Any }
