@@ -90,7 +90,7 @@ final class BrowserActions: ObservableObject {
     static var recoveryLocation: URL? {
         try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
                                      appropriateFor: nil, create: false)
-            .appendingPathComponent("app.richos.richfiles", isDirectory: true)
+            .appendingPathComponent(RichFilesSupportDirectory.name, isDirectory: true)
             .appendingPathComponent("Recovery.json")
     }
 
@@ -1143,13 +1143,10 @@ private struct RecoveryState: Codable {
 
     func save(to url: URL) throws {
         let parent = url.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true,
-                                                attributes: [.posixPermissions: 0o700])
-        var info = stat()
-        guard lstat(parent.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR,
-              info.st_uid == getuid(), info.st_mode & 0o077 == 0 else {
+        guard let directory = try RichFilesSupportDirectory.open(parent, create: true) else {
             throw CocoaError(.fileWriteNoPermission)
         }
+        defer { try? directory.close() }
         let encoder = JSONEncoder()
         for budget in [512, 256, 128, 64, 32, 16, 8, 0] {
             let recent = RecoveryState(trash: Array(trash.prefix(min(2_000, 4 * budget))),

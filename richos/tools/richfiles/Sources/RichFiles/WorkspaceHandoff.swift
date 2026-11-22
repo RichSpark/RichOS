@@ -72,9 +72,13 @@ enum WorkspaceHandoff {
     private static func ticketFolder(create: Bool) throws -> URL {
         let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
                                                    appropriateFor: nil, create: create)
-        let root = support.appendingPathComponent("app.richos.richfiles", isDirectory: true)
+        let root = support.appendingPathComponent(RichFilesSupportDirectory.name, isDirectory: true)
         let folder = root.appendingPathComponent("Handoff", isDirectory: true)
         if create {
+            guard let supportDirectory = try RichFilesSupportDirectory.open(root, create: true) else {
+                throw HandoffError.invalid
+            }
+            defer { try? supportDirectory.close() }
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
                                                     attributes: [.posixPermissions: 0o700])
         }
