@@ -2,6 +2,13 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.3.7-nightly.20261122.116
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.7-nightly.20261122.116)
+
+- Changed RichOS to stop using your Claude usage to get a new conversation ready when it opens onto Home; it does that once you choose a company or open a conversation
+- Fixed RichOS handing Stu old messages from your earlier Codex handoffs when it opened after an update; only new messages from Codex reach him now
+
 ## 1.3.7-nightly.20261122.115
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.7-nightly.20261122.115)
