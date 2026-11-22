@@ -36,7 +36,10 @@ its exit status, its output and the clock, so a walk's evidence is one file and 
                                        it to that guest process (a second app the walk opened) and finds
                                        "find" in it (the RichGlance walk); "asis": true raises no app before
                                        the input, for a click on the Dock or a background window ("app"
-                                       then only names whose tree "find" reads, e.g. "Dock"; the window-gesture walk)
+                                       then only names whose tree "find" reads, e.g. "Dock"; the window-gesture walk);
+                                       "from": true with "find" STARTS the drag on the found control's
+                                       center and reads each point as a "dx,dy" offset from it (a
+                                       column's resize handle, a window's title bar; the nightly 114 walk)
   openlink pattern [app] [seconds]     read the app window's tree until an https:// address containing
                                        PATTERN is drawn, then open it in the guest with APP (default
                                        Safari): the Mac's pairing address handed to the guest's phone
@@ -132,7 +135,15 @@ def step_run(vm, step, out):
                          if all(isinstance(rec.get(k), (int, float)) for k in ('x', 'y', 'w', 'h'))), None)
             if node is None:
                 return 1, f'pointer find: nothing with a position matched; ax said {text[:300]!r}'
-            points.append(f"{round(node['x'] + node['w'] / 2)},{round(node['y'] + node['h'] / 2)}")
+            cx, cy = round(node['x'] + node['w'] / 2), round(node['y'] + node['h'] / 2)
+            if step.get('from'):
+                # A drag that STARTS on the found control (a column's resize handle, a window's
+                # title bar): its center is the first point and each given point is an offset
+                # "dx,dy" from it, so the drag follows the control wherever the app drew it.
+                points = [f'{cx},{cy}'] + [f'{cx + int(dx)},{cy + int(dy)}'
+                                           for dx, dy in (pt.split(',') for pt in points)]
+            else:
+                points.append(f'{cx},{cy}')
             if len(points) == 1 and not (step.get('hover') or step.get('double') or step.get('scroll')):
                 # No points of its own and nothing else asked: a click on the found control, the
                 # same point twice (a Dock icon, found in the Dock's own tree).
@@ -193,7 +204,7 @@ REQUIRED = {
 }
 OPTIONAL = {'tree': {'app': str}, 'shot': {'ocr': bool}, 'handfile': {'to': str},
             'pointer': {'right': bool, 'hover': bool, 'find': list, 'scroll': int, 'ctrl': bool, 'double': bool, 'app': str,
-                        'asis': bool},
+                        'asis': bool, 'from': bool},
             'relaunch': {'env': list}, 'openlink': {'app': str, 'seconds': (int, float)},
             'until': {'seconds': (int, float)}, '*': {'allow_fail': bool}}
 
@@ -219,6 +230,13 @@ def problems(steps):
                                 or (isinstance(step[key], bool) and kind != bool)):
                 found.append(f'step {i} ({op}): {key!r} has the wrong type')
         found_point = 1 if isinstance(step.get('find'), list) and step['find'] else 0
+        if op == 'pointer' and step.get('from') is True and (
+                not found_point or not isinstance(step.get('points'), list) or not step['points']
+                or step.get('scroll') or step.get('double') or step.get('hover') is True
+                or not all(isinstance(pt, str) and re.fullmatch(r'-?\d+,-?\d+', pt) for pt in step['points'])):
+            found.append(f'step {i} (pointer): "from" starts a drag on the "find" control and needs at least one '
+                         f'"dx,dy" offset of whole numbers in "points", with no "scroll", "double" or "hover"')
+            continue
         if op == 'pointer' and isinstance(step.get('scroll'), int) and not isinstance(step.get('scroll'), bool) and (
                 not -50 <= step['scroll'] <= 50 or step['scroll'] == 0
                 or (isinstance(step.get('points'), list) and len(step['points']) + found_point != 1)):
