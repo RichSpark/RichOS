@@ -2642,15 +2642,14 @@ fn main() {
     if std::env::args().nth(1).as_deref() == Some("--richos-connect-guard") {
         std::process::exit(phone::connect::supervisor::guard_main());
     }
-    // The update relaunch helper: waits for the app to quit, then starts it again so the
-    // downloaded update activates. Before any lease or alert, like the guard above.
-    if let Some(code) = update_relaunch::helper_main() {
-        std::process::exit(code);
-    }
     // This is compile-generated metadata, before any application runtime exists.
     // Use the same merged build version for the probe, startup and final app.
     let context = tauri::generate_context!();
     let compiled_version = context.package_info().version.to_string();
+    // An automatic update restart publishes and then reopens as one operation.
+    if let Some(code) = update_relaunch::helper_main(&compiled_version) {
+        std::process::exit(code);
+    }
     // The helper a quitting app leaves behind to put a prepared update in place (Sage's plan
     // 2026-11-14, rule 4): it needs this executable's own version, so it starts here, before any
     // alert, lease or window, and exits without starting anything.
@@ -4941,8 +4940,10 @@ fn main() {
             }
             if let tauri::RunEvent::Exit = event {
                 #[cfg(target_os = "macos")]
-                if handle.try_state::<updates::Updates>().is_some_and(|state|
-                    state.quitting_for_update.load(std::sync::atomic::Ordering::Acquire))
+                let quitting_for_update = handle.try_state::<updates::Updates>().is_some_and(|state|
+                    state.quitting_for_update.load(std::sync::atomic::Ordering::Acquire));
+                #[cfg(target_os = "macos")]
+                if quitting_for_update
                     && handle.try_state::<Arc<dictation_app::Link>>().is_some_and(|link| link.connected())
                 {
                     if let Err(error) = dictation::ipc::mark_update_exit() {
@@ -4959,9 +4960,9 @@ fn main() {
                 // AN UPDATE IS PUT IN PLACE NOW, NOT AT THE NEXT CLICK (Sage's plan 2026-11-14,
                 // rule 4): with one prepared, leave the helper that waits for this process to end,
                 // swaps it in and reclaims old copies, so the next launch starts the new copy
-                // directly. If it is interrupted, the next launch puts it in place as before.
+                // directly. The automatic relaunch helper handles publication on its own quit.
                 #[cfg(target_os = "macos")]
-                if update_startup::leased()
+                if !quitting_for_update && update_startup::leased()
                     && std::env::var_os("HOME").is_some_and(|home| update_relaunch::has_quit_work(Path::new(&home)))
                 {
                     match update_relaunch::spawn_at_quit_helper() {

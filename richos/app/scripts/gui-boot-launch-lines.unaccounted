@@ -537,8 +537,6 @@
 [richos] turn interrupted [{}]: {}
 [richos] update ready and nothing is running: relaunching into {}
 [richos] update relaunch: RichOS did not quit, so nothing was started
-[richos] update relaunch: a RichOS session still holds the update lease; starting anyway
-[richos] update relaunch: could not read the update lease ({}); starting anyway
 [richos] update relaunch: could not start RichOS again: {}
 [richos] update relaunch: could not start the helper: {}
 [richos] update remains deferred: {}

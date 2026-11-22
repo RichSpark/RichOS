@@ -18,8 +18,8 @@
 //! old version. So the app quits through its own quit path (which settles every lease and
 //! writes the clean-exit marker), and a small helper, this same executable started with
 //! [`HELPER_ARG`], waits for that process to be gone and for the lease to be free, then
-//! starts the app again. The new start activates the update exactly as an ordinary launch
-//! would.
+//! publishes the prepared update, then starts the app again. Publication has finished and
+//! released both locks by the time the replacement starts.
 //!
 //! WHERE HE LANDS. The window's position and size are recorded as it moves
 //! (`remember_window_geometry`), the open conversation is the backend's `active_thread`, and
@@ -83,7 +83,7 @@ pub fn spawn_helper(regular: bool) -> std::io::Result<()> {
 
 /// The helper itself. Runs first in `main`, before any lease, alert or runtime exists.
 /// Returns `None` when this process is not the helper.
-pub fn helper_main() -> Option<i32> {
+pub fn helper_main(compiled_version: &str) -> Option<i32> {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let (app_pid, app_args) = parse_helper_args(&args)?;
     // 1. THE APP QUITS. The helper is the app's child, so the app being gone is a positive
@@ -96,17 +96,20 @@ pub fn helper_main() -> Option<i32> {
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    // 2. NO SESSION HOLDS THE LEASE, so the start below can activate the update.
-    #[cfg(target_os = "macos")]
-    if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
-        match richos_user_update::wait_for_sessions_to_end(&home, LEASE_BOUND) {
-            Ok(true) => {}
-            Ok(false) => eprintln!("[richos] update relaunch: a RichOS session still holds the update lease; starting anyway"),
-            Err(error) => eprintln!("[richos] update relaunch: could not read the update lease ({error}); starting anyway"),
-        }
-    }
-    // 3. START THE APP AGAIN, with the same arguments and environment.
+    // Keep the launch path from before publication, which can move the loaded bundle.
     let code = match std::env::current_exe().and_then(|exe| {
+        #[cfg(target_os = "macos")]
+        if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
+            let bundle = crate::activation::bundle_root(&exe)
+                .filter(|bundle| quit_work_at(&home, bundle));
+            if let Some(bundle) = bundle {
+                publish_after_quit(&home, &bundle, compiled_version, started);
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = compiled_version;
+        // The publisher returns after releasing its locks. On a deferred publication
+        // the normal startup path remains the recovery path.
         std::process::Command::new(exe).args(&app_args).stdin(std::process::Stdio::null()).spawn()
     }) {
         Ok(_) => 0,
@@ -154,10 +157,14 @@ pub fn spawn_at_quit_helper() -> std::io::Result<()> {
 
 #[cfg(target_os = "macos")]
 pub fn has_quit_work(home: &std::path::Path) -> bool {
-    richos_user_update::has_prepared(home)
-        || std::env::current_exe().ok()
-            .and_then(|exe| crate::activation::bundle_root(&exe))
-            .is_some_and(|bundle| richos_user_update::needs_install_migration(home, &bundle))
+    std::env::current_exe().ok()
+        .and_then(|exe| crate::activation::bundle_root(&exe))
+        .is_some_and(|bundle| quit_work_at(home, &bundle))
+}
+
+#[cfg(target_os = "macos")]
+fn quit_work_at(home: &std::path::Path, bundle: &std::path::Path) -> bool {
+    richos_user_update::has_prepared(home) || richos_user_update::needs_install_migration(home, bundle)
 }
 
 /// The helper itself. `Some(exit code)` when this process is one; `None` to carry on as the app.
@@ -176,63 +183,72 @@ pub fn at_quit_main(compiled_version: &str) -> Option<i32> {
     #[cfg(target_os = "macos")]
     {
         let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else { return Some(0) };
-        let attempt = richos_core::util::now_millis();
-        let record = |outcome| {
-            richdoctor_core::update_timing::record(
-                &crate::activation::installed_data_dir(&home, "com.richos.app"),
-                richos_core::util::now_millis(),
-                attempt,
-                "publication",
-                outcome,
-                started.elapsed().as_millis() as u64,
-                compiled_version,
-            );
-        };
-        match richos_user_update::wait_for_sessions_to_end(&home, LEASE_BOUND) {
-            Ok(true) => {}
-            Ok(false) => {
-                record("deferred");
-                eprintln!("[richos] update at quit: a RichOS session is still open; the next launch puts the update in place");
-                return Some(0);
-            }
-            Err(error) => {
-                record("deferred");
-                eprintln!("[richos] update at quit: could not read the update lease ({error}); the next launch puts the update in place");
-                return Some(0);
-            }
-        }
-        let Some(bundle) = std::env::current_exe().ok().and_then(|exe| crate::activation::bundle_root(&exe)) else {
-            return Some(0);
-        };
-        let repairing = richos_user_update::needs_install_migration(&home, &bundle);
-        match richos_user_update::activate_at_quit(&home, compiled_version, &bundle) {
-            Ok(Some(done)) => {
-                record("published");
-                eprintln!(
-                    "[richos] update at quit: {} put in place: {} -> {}",
-                    if done.rollback { "rollback" } else { "update" },
-                    done.left.as_deref().unwrap_or("(nothing installed)"),
-                    done.entered.version
-                );
-                crate::richfiles_integration::refresh_gestures_after_publication(&home);
-            }
-            Ok(None) => {
-                if repairing && !richos_user_update::needs_install_migration(&home, &bundle) {
-                    record("migrated");
-                } else {
-                    record("idle");
-                }
-                eprintln!("[richos] update at quit: nothing to put in place now; the next launch checks again");
-            }
-            Err(error) => {
-                record(if error.kind() == std::io::ErrorKind::PermissionDenied { "permission" } else { "deferred" });
-                eprintln!("[richos] update at quit: deferred to the next launch: {error}");
-            }
+        if let Some(bundle) = std::env::current_exe().ok().and_then(|exe| crate::activation::bundle_root(&exe)) {
+            publish_after_quit(&home, &bundle, compiled_version, started);
         }
     }
     #[cfg(not(target_os = "macos"))]
     let _ = compiled_version;
     Some(0)
+}
+
+#[cfg(target_os = "macos")]
+fn publish_after_quit(
+    home: &std::path::Path,
+    bundle: &std::path::Path,
+    compiled_version: &str,
+    started: Instant,
+) {
+    let attempt = richos_core::util::now_millis();
+    let record = |outcome| {
+        richdoctor_core::update_timing::record(
+            &crate::activation::installed_data_dir(home, "com.richos.app"),
+            richos_core::util::now_millis(),
+            attempt,
+            "publication",
+            outcome,
+            started.elapsed().as_millis() as u64,
+            compiled_version,
+        );
+    };
+    match richos_user_update::wait_for_sessions_to_end(home, LEASE_BOUND) {
+        Ok(true) => {}
+        Ok(false) => {
+            record("deferred");
+            eprintln!("[richos] update at quit: a RichOS session is still open; the next launch puts the update in place");
+            return;
+        }
+        Err(error) => {
+            record("deferred");
+            eprintln!("[richos] update at quit: could not read the update lease ({error}); the next launch puts the update in place");
+            return;
+        }
+    }
+    let repairing = richos_user_update::needs_install_migration(home, bundle);
+    match richos_user_update::activate_at_quit(home, compiled_version, bundle) {
+        Ok(Some(done)) => {
+            record("published");
+            eprintln!(
+                "[richos] update at quit: {} put in place: {} -> {}",
+                if done.rollback { "rollback" } else { "update" },
+                done.left.as_deref().unwrap_or("(nothing installed)"),
+                done.entered.version
+            );
+            crate::richfiles_integration::refresh_gestures_after_publication(home);
+        }
+        Ok(None) => {
+            if repairing && !richos_user_update::needs_install_migration(home, bundle) {
+                record("migrated");
+            } else {
+                record("idle");
+            }
+            eprintln!("[richos] update at quit: nothing to put in place now; the next launch checks again");
+        }
+        Err(error) => {
+            record(if error.kind() == std::io::ErrorKind::PermissionDenied { "permission" } else { "deferred" });
+            eprintln!("[richos] update at quit: deferred to the next launch: {error}");
+        }
+    }
 }
 
 #[cfg(unix)]
