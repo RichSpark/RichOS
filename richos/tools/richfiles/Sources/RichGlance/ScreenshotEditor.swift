@@ -486,37 +486,40 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
         let started = ProcessInfo.processInfo.systemUptime
         search = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
-            let worker = Task.detached(priority: .utility) {
-                var indexed: [UUID: TextIndexEntry] = [:]
-                var hits: [UUID: [ScreenshotText.Line]] = [:]
-                for entry in entries {
-                    guard !Task.isCancelled else { break }
-                    let lines: [ScreenshotText.Line]
-                    if entry.id == current?.id, dirty {
-                        lines = current.flatMap(ScreenshotText.Input.init(document:)).flatMap { try? ScreenshotText.recognize($0) } ?? []
-                    } else if let previous = cache[entry.id], previous.entry == entry {
-                        lines = previous.lines
-                        indexed[entry.id] = previous
-                    } else if let document = try? store.load(entry), let input = ScreenshotText.Input(document: document),
-                              let recognized = try? ScreenshotText.recognize(input) {
-                        lines = recognized
-                        indexed[entry.id] = TextIndexEntry(entry: entry, lines: lines)
-                    } else { continue }
-                    let found = lines.filter { $0.matches(query) }
-                    if !found.isEmpty { hits[entry.id] = found }
+            var indexed: [UUID: TextIndexEntry] = [:]
+            var hits: [UUID: [ScreenshotText.Line]] = [:]
+            for entry in entries {
+                guard !Task.isCancelled else { return }
+                let isCurrent = entry.id == current?.id
+                let lines: [ScreenshotText.Line]
+                if let previous = cache[entry.id], previous.entry == entry, !(isCurrent && dirty) {
+                    lines = previous.lines
+                    indexed[entry.id] = previous
+                } else {
+                    let document: ScreenshotDocument?
+                    if isCurrent { document = current }
+                    else {
+                        let loader = Task.detached(priority: .utility) { try? store.load(entry) }
+                        document = await loader.value
+                    }
+                    guard !Task.isCancelled else { return }
+                    guard let document, let input = ScreenshotText.Input(document: document),
+                          let recognized = try? await ScreenshotText.read(input) else { continue }
+                    lines = recognized
+                    if !(isCurrent && dirty) { indexed[entry.id] = TextIndexEntry(entry: entry, lines: lines) }
                 }
-                return (indexed, hits)
+                let found = lines.filter { $0.matches(query) }
+                if !found.isEmpty { hits[entry.id] = found }
             }
-            let result = await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
             guard !Task.isCancelled, let self, store.keepsHistory else { return }
             guard searchQuery == query else { runSearch(); return }
-            cachedText = result.0
-            searchMatches = result.1
-            let matches = entries.filter { result.1[$0.id] != nil }
-            let captions = result.1.mapValues { $0.first?.text ?? "" }
+            cachedText = indexed
+            searchMatches = hits
+            let matches = entries.filter { hits[$0.id] != nil }
+            let captions = hits.mapValues { $0.first?.text ?? "" }
             searchStatus.stringValue = matches.isEmpty ? "No matches" : "\(matches.count) of \(entries.count) match"
             shelf.update(entries: matches, selected: canvas?.document.id, enabled: true, retention: store.retention, matches: captions)
-            if let id = canvas?.document.id { canvas?.textMatches = result.1[id]?.map(\.bounds) ?? [] }
+            if let id = canvas?.document.id { canvas?.textMatches = hits[id]?.map(\.bounds) ?? [] }
             layoutBottom(width: bottom.bounds.width)
             RichFilesDiagnostics.record(.glanceSearch, id: UUID(), outcome: .complete, started: started,
                                         total: entries.count, confirmed: matches.count)
