@@ -3540,6 +3540,16 @@
         // no longer there is refused with `output_files.rs`'s MISSING; the size is refused before
         // anything is read; then it is the drop's road (`mockStage`), on bytes of the entry's size
         // that open with the kind's own magic, so the desk's sniffing passes as it does on disk.
+        case "glance_stage_attachment": {
+          mockAttach.calls.push({ cmd, requestId: args.requestId, chatKey: args.chatKey });
+          const preview = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZ9cAAAAASUVORK5CYII=";
+          const bytes = Uint8Array.from(atob(preview), (c) => c.charCodeAt(0));
+          return mockStage(args.draftId, args.attachmentId, "RichGlance Capture.png", "image/png", bytes)
+            .then((view) => ({ ...view, preview }));
+        }
+        case "glance_cancel_attachment":
+          mockAttach.calls.push({ cmd, requestId: args.requestId });
+          return true;
         case "output_attach": {
           mockAttach.calls.push({ cmd, draftId: args.draftId, attachmentId: args.attachmentId, outputId: args.outputId });
           const recorded = (outputByThread[activeThreadId] || []).find((e) => e.id === args.outputId);
@@ -5894,6 +5904,9 @@
     /// Drop files on the window, the way the shell reports one: a `rich://file-drag` enter and
     /// leave, then `rich://file-drop` with a drop number and names only. Each file is
     /// `{ name, bytes: number[] }` or `{ name, folder: true, items: n }`.
+    offerGlanceDraft(requestId, thread) {
+      emit("rich://glance-draft", { requestId, thread });
+    },
     dropFiles(files) {
       const id = ++mockAttach.nextDrop;
       mockAttach.drops.set(id, files.map(mockDropped));

@@ -379,6 +379,31 @@
     }
   }
 
+  async function addGlance(requestId, chatKey) {
+    const tray = trayFor(chatKey, true);
+    if (!tray || composerKey() !== chatKey) return false;
+    clearNote();
+    const item = {
+      seq: ++nextSeq, id: null, name: "RichGlance Capture.png",
+      label: "", size: 0, sha256: null, state: "adding", thumb: null,
+    };
+    if (!place(tray, item)) return false;
+    try {
+      const answer = await bridge.invoke("glance_stage_attachment", {
+        requestId, chatKey, draftId: tray.draftId, attachmentId: freshId(),
+      });
+      if (answer.preview && tray.items.includes(item)) {
+        const bytes = Uint8Array.from(atob(answer.preview), (character) => character.charCodeAt(0));
+        item.thumb = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
+      }
+      settle(tray, item, answer);
+      return true;
+    } catch (e) {
+      fail(tray, item, e);
+      return false;
+    }
+  }
+
   function setDragging(on) {
     if (dragging === on) return;
     dragging = on;
@@ -448,6 +473,7 @@
       changed();
     },
     addRecorded,
+    addGlance,
     /// The plus: the file picker, then the drop's road.
     pick: addPicked,
     note,

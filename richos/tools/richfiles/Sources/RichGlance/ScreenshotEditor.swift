@@ -27,6 +27,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
     var pinImage: ((CGImage, UUID) -> Void)?
     var discardedOriginal: ((UUID) -> Void)?
     private var comparison: ScreenshotCompareView?
+    private var chatSheet: ScreenshotChat?
     private var incomingBaselines: [UUID: ScreenshotDocument] = [:]
     private let moreButton = ScreenshotButton("More", symbol: "ellipsis")
     private let searchField = NSSearchField()
@@ -522,11 +523,29 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
         let menu = NSMenu()
         menu.addItem(withTitle: "Copy Text", action: #selector(copyCurrentText), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Pin to Screen", action: #selector(pinCurrentImage), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Attach to RichOS Chat", action: #selector(attachCurrent), keyEquivalent: "").target = self
         if let document = canvas?.document, document.hasRedactions, entries.contains(where: { $0.id == document.id }) {
             menu.addItem(.separator())
             menu.addItem(withTitle: keepRedactedButton.title, action: #selector(keepCurrentRedacted), keyEquivalent: "").target = self
         }
         menu.popUp(positioning: nil, at: CGPoint(x: 0, y: moreButton.bounds.maxY), in: moreButton)
+    }
+
+    @objc private func attachCurrent() {
+        canvas?.finishCallout()
+        if let document = canvas?.document { attach(document) }
+    }
+
+    private func attach(_ document: ScreenshotDocument) {
+        guard chatSheet == nil, window.attachedSheet == nil else { return }
+        guard let image = ScreenshotRenderer.flattened(document) else {
+            announce("Could not prepare this capture for attaching.")
+            return
+        }
+        let sheet = ScreenshotChat(parent: window, image: image, name: document.title)
+        sheet.closed = { [weak self] in self?.chatSheet = nil }
+        chatSheet = sheet
+        sheet.show()
     }
 
     @objc private func keepCurrentRedacted() {
@@ -601,6 +620,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
         switch action {
         case .text: copyText(document)
         case .pin: pinDocument(document)
+        case .attach: attach(document)
         case .compare: beginCompare(document)
         case .keepRedacted: keepRedacted(document)
         }
@@ -943,6 +963,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
         if let field = searchField.currentEditor(), field === window.firstResponder { return false }
         if flags == .option, key == "t" { copyCurrentText(); return true }
         if flags == .option, key == "p" { pinCurrentImage(); return true }
+        if flags == .option, key == "a" { attachCurrent(); return true }
         if flags == .option, key == "k" { toggleCompare(); return true }
         if shelfOpen, shelf.handle(event) { return true }
         if let comparison, comparison.handle(event) { return true }

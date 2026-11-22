@@ -159,6 +159,7 @@ mod phone;
 /// SCREENSHOTS AND FILES DROPPED OR PASTED ONTO THE MAC COMPOSER (CEO §86). The phone's
 /// attachment desk, reached from the window: same storage, same limits, same words for Rich.
 mod mac_attachments;
+mod glance_chat;
 
 /// THE FILES A THREAD PRODUCED, REACHED SAFELY (Output side panel PRD §5): the commands take
 /// an output id, never a path, and the `richos-output` scheme serves only what the active
@@ -4300,6 +4301,9 @@ fn main() {
                 // attachment desk writes to (`phone/attachments.rs`). No I/O until a file arrives.
                 let attachments_home = app.state::<AppState>().data_dir.clone();
                 app.manage(mac_attachments::MacAttachments::open(&attachments_home));
+                app.manage(glance_chat::Host::default());
+                let chat_handoff = app.clone();
+                first_frame::after_page(app, move || glance_chat::start(chat_handoff));
                 // The Output panel's file commands and preview scheme (PRD §5), over the SAME store
                 // the spine and the work host write, and the published spine for the active thread.
                 // QuickLook renditions go in the app's cache directory (§4.8).
@@ -4667,6 +4671,7 @@ fn main() {
             mac_attachments::attach_dropped_file,
             mac_attachments::attach_pick_files,
             mac_attachments::attach_pasted_file,
+            glance_chat::glance_stage_attachment, glance_chat::glance_cancel_attachment,
             mac_attachments::discard_attachment,
             mac_attachments::commit_attachments,
             // Add to chat from the Output panel (output side-panel PRD §12.7): the same desk.

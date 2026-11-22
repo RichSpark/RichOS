@@ -3,6 +3,7 @@ import AppKit
 enum ScreenshotShelfAction: String, CaseIterable {
     case text = "Copy Text"
     case pin = "Pin to Screen"
+    case attach = "Attach to RichOS Chat"
     case compare = "Compare"
     case keepRedacted = "Keep Only Redacted Copy…"
 }
@@ -243,6 +244,7 @@ final class ScreenshotRecents: NSView {
         case 53: focusCanvas?()
         case 46: cards[index].showMenu()
         case 35: action?(.pin, cards[index].entry)
+        case 0: action?(.attach, cards[index].entry)
         case 40: action?(.compare, cards[index].entry)
         default: return false
         }
