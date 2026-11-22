@@ -345,7 +345,7 @@ final class DiskCleanupModel: ObservableObject {
             self.preparing = false
             switch result {
             case .success(let entry):
-                let device = self.batch.first?.reviewed.reference.identity.device ?? self.trashDevice
+                let device = self.batch.first?.reviewed.reference.identity.device ?? (self.moved.isEmpty ? nil : self.trashDevice)
                 guard device == nil || device == entry.reviewed.reference.identity.device else {
                     self.notice = "Finish this cleanup before adding files from another volume."
                     return
