@@ -59,18 +59,18 @@ typedef enum {
 
     // Prepare an output while AppKit constructs the window. The inactive node
     // initially feeds silence, and only the video clock may authorize playback.
-    AVAudioEngine *engine = [AVAudioEngine new];
-    AVAudioPlayerNode *node = [AVAudioPlayerNode new];
     @try {
+        AVAudioEngine *engine = [AVAudioEngine new];
+        AVAudioPlayerNode *node = [AVAudioPlayerNode new];
         [engine attachNode:node];
         [engine connect:node to:engine.mainMixerNode format:buffer.format];
         if (![engine startAndReturnError:NULL]) return;
+        self.engine = engine;
+        self.node = node;
+        self.buffer = buffer;
     } @catch (NSException *exception) {
         return;
     }
-    self.engine = engine;
-    self.node = node;
-    self.buffer = buffer;
     if (self.report) self.report(SoundOutputReady);
 }
 
