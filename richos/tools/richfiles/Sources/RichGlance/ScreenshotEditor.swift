@@ -440,7 +440,10 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
         shelfToggle.setAccessibilityValue(shelfOpen ? "Expanded" : "Collapsed")
     }
 
-    private var searchQuery: String { searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var searchQuery: String {
+        let text = searchField.currentEditor()?.string ?? searchField.stringValue
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     func controlTextDidChange(_ notification: Notification) {
         if notification.object as? NSSearchField === searchField { runSearch() }
@@ -449,6 +452,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         guard control === searchField else { return false }
         if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            textView.string = ""
             searchField.stringValue = ""
             runSearch()
             return true
@@ -504,7 +508,8 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
                 return (indexed, hits)
             }
             let result = await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
-            guard !Task.isCancelled, let self, store.keepsHistory, searchQuery == query else { return }
+            guard !Task.isCancelled, let self, store.keepsHistory else { return }
+            guard searchQuery == query else { runSearch(); return }
             cachedText = result.0
             searchMatches = result.1
             let matches = entries.filter { result.1[$0.id] != nil }
