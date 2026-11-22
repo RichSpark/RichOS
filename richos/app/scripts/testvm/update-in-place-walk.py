@@ -476,7 +476,11 @@ return resultRows as text
     def prepare_suite_copy(self):
         self.suite_ax('RichFiles', 'set frontmost to true\n'
                       'perform action "AXRaise" of (first window whose name begins with "Source")')
-        file = self.ax('find', '--app', 'RichFiles', '--title', 'Suite Copy.bin', '--first')[0]
+        # ax.sh also emits JSON timing rows. Select the element's geometry.
+        matches = self.ax('find', '--app', 'RichFiles', '--title', 'Suite Copy.bin')
+        file = next((row for row in matches if row.get('w') and row.get('h')), None)
+        if not file:
+            raise StepFailed('the copy fixture has no visible accessibility row')
         point = '%d,%d' % (file['x'] + min(14, file['w'] / 2), file['y'] + file['h'] / 2)
         self.ax('click', '--app', 'RichFiles', '--at', point)
         self.suite_ax('RichFiles', 'click menu item "Copy Files" of menu 1 of menu bar item "Files" of menu bar 1')
