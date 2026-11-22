@@ -332,23 +332,21 @@ final class BrowserModel: ObservableObject {
         selectionPrefix = time - prefixTime < 0.8 ? selectionPrefix + characters : characters
         prefixTime = time
         prefixPending = true
-        if !openingFolder { applyTypeSelection() }
+        applyTypeSelection()
         return true
     }
 
     private func applyTypeSelection() {
-        guard prefixPending else { return }
-        if let entry = entries.first(where: {
+        // Partial batches are sorted but do not yet contain every possible first match.
+        guard prefixPending, !openingFolder, !busy else { return }
+        prefixPending = false
+        guard let entry = entries.first(where: {
             $0.name.range(of: selectionPrefix, options: [.anchored, .caseInsensitive, .diacriticInsensitive]) != nil
-        }) {
-            prefixPending = false
-            selected = [entry.url]
-            selection.rangeAnchor = entry.url
-            selection.moveCursor(to: entry.url, scrolling: true)
-            scrollAnchor = entry.url
-        } else if !busy {
-            prefixPending = false
-        }
+        }) else { return }
+        selected = [entry.url]
+        selection.rangeAnchor = entry.url
+        selection.moveCursor(to: entry.url, scrolling: true)
+        scrollAnchor = entry.url
     }
 
     func recordViewport(_ firstItem: URL, in folder: URL, tab: UUID, mode: BrowserViewMode) {
@@ -836,6 +834,7 @@ final class BrowserModel: ObservableObject {
                 self.busy = false
                 self.status = error.localizedDescription
                 self.selectionToRestore.removeAll()
+                self.resetTypeSelection()
                 self.finishVisibleRows(.unavailable)
             }
         }
@@ -854,7 +853,7 @@ final class BrowserModel: ObservableObject {
         settingSelection = false
     }
 
-    private func apply(_ update: ListingUpdate) {
+    func apply(_ update: ListingUpdate) {
         entries = update.entries
         if !selectionToRestore.isEmpty {
             let available = entries.compactMap { entry -> URL? in
@@ -868,7 +867,6 @@ final class BrowserModel: ObservableObject {
             scrollAnchor = listed
         }
         guard let report = update.report else {
-            if !openingFolder { applyTypeSelection() }
             status = "\(entries.count) \(searchActive ? "results" : "items") loaded…"
             return
         }
@@ -876,7 +874,7 @@ final class BrowserModel: ObservableObject {
         currentVolume = update.volume
         selectionToRestore.removeAll()
         busy = false
-        if !openingFolder { applyTypeSelection() }
+        applyTypeSelection()
         let label = searchActive ? "results" : "items"
         if entries.isEmpty { finishVisibleRows(.complete) }
         let unavailable = report.inaccessible == 0 ? "" : " · \(report.inaccessible) unavailable"
@@ -886,7 +884,7 @@ final class BrowserModel: ObservableObject {
         status = "\(report.matched) \(label)\(coverage)\(unavailable)"
     }
 
-    private struct ListingUpdate: Sendable {
+    struct ListingUpdate: Sendable {
         let entries: [FileEntry]
         var report: ScanReport?
         var volume: VolumeInfo?

@@ -64,6 +64,32 @@ final class BrowserModelTests: XCTestCase {
         XCTAssertEqual(try FileReference(url: XCTUnwrap(model.selection.scrollToItem)).identity, expected)
     }
 
+    @MainActor
+    func testTypeSelectionWaitsForTheFirstMatchInTheCompleteSortOrder() throws {
+        let temporary = try XCTUnwrap(ProcessInfo.processInfo.environment["TMPDIR"])
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .appendingPathComponent("RichFilesSelectionOrder-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let first = root.appendingPathComponent("notes-1.txt")
+        let later = root.appendingPathComponent("notes-8.txt")
+        try Data().write(to: first)
+        try Data().write(to: later)
+        let ordered = try [first, later].map(FileEntry.init(url:))
+        let report = try DirectoryReader.scan(root) { _ in }
+        let model = BrowserModel(start: root)
+        XCTAssertTrue(model.busy)
+        XCTAssertTrue(model.typeToSelect("n", at: 10))
+        model.apply(.init(entries: [ordered[1]]))
+        XCTAssertTrue(model.typeToSelect("o", at: 10.1))
+        XCTAssertTrue(model.selected.isEmpty, "An early batch cannot decide the first match")
+
+        model.apply(.init(entries: ordered, report: report))
+        XCTAssertEqual(model.selected, [ordered[0].id])
+        XCTAssertEqual(model.selection.scrollToItem, ordered[0].id)
+    }
+
     func testCustomShortcutsKeepSystemKeysAndOtherActionsAvailable() throws {
         XCTAssertEqual(BrowserShortcut("Ctrl+L").flatMap { BrowserShortcut.preset(true)[$0] }, .address)
         XCTAssertEqual(BrowserShortcut("Command+L").flatMap { BrowserShortcut.preset(false)[$0] }, .address)
