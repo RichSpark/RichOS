@@ -383,8 +383,6 @@ def check_codex_quota(binary, expected_account=None):
                 return reading, "none"
             if not isinstance(reading.account, str) or not 0 < len(reading.account) <= 256:
                 return reading, "accountUnavailable"
-            if any(os.environ.get(key) for key in ("CODEX_API_KEY", "OPENAI_API_KEY", "OPENAI_BASE_URL")):
-                return reading, "otherProvider"
             config = rpc.request("config/read", {"cwd": os.getcwd(), "includeLayers": False}).get("config")
             if not isinstance(config, dict):
                 return reading, "unavailable"

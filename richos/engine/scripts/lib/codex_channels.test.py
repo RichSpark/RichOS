@@ -191,6 +191,14 @@ else:
         self.assertNotIn("12.345", json.dumps(health))
         self.assertNotIn("Exact user task", json.dumps(health))
 
+    def test_codex_reset_uses_effective_chatgpt_account_with_shell_api_keys(self):
+        calls = self.quota_fixture()
+        pair = self.connect(self.a)
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "fixture", "CODEX_API_KEY": "fixture",
+                                         "OPENAI_BASE_URL": "https://example.invalid"}):
+            self.assertEqual(c.dispatch(pair), 0)
+        self.assertEqual([row[0] for row in calls()], ["reset", "exec"])
+
     def test_codex_continues_under_credit_billing_without_banked_resets(self):
         calls = self.quota_fixture(resets=0)
         pair = self.connect(self.a)
