@@ -293,6 +293,33 @@ final class BrowserActionsTests: XCTestCase {
     }
 
     @MainActor
+    func testLegacyRichFilesSupportDirectoryKeepsMoveUndoAfterRelaunch() async throws {
+        try await withFixture { root, destination, board in
+            let support = root.appendingPathComponent("app.richos.richfiles", isDirectory: true)
+            try FileManager.default.createDirectory(at: support, withIntermediateDirectories: false,
+                                                    attributes: [.posixPermissions: 0o755])
+            let lock = support.appendingPathComponent("RichGlanceDefaults.lock")
+            try Data().write(to: lock)
+            let store = support.appendingPathComponent("Recovery.json")
+            let source = try write("original", named: "Notes.txt", in: root)
+            let actions = BrowserActions(pasteboard: board, recoveryURL: store)
+            actions.copy([source], cut: true)
+            try await perform(actions) { actions.paste(into: destination) }
+
+            XCTAssertEqual(try contents(destination.appendingPathComponent("Notes.txt")), "original")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: source.url.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: store.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: lock.path))
+            let attributes = try FileManager.default.attributesOfItem(atPath: support.path)
+            XCTAssertEqual(attributes[.posixPermissions] as? Int, 0o700)
+            let reopened = BrowserActions(pasteboard: board, recoveryURL: store)
+            _ = try XCTUnwrap(reopened.undoName)
+            try await perform(reopened) { reopened.undo() }
+            XCTAssertEqual(try contents(source.url), "original")
+        }
+    }
+
+    @MainActor
     func testCopyUsesNativeFileURLsAndRetainsTheSource() async throws {
         try await withFixture { root, destination, board in
             let source = try write("original", named: "Notes.txt", in: root)

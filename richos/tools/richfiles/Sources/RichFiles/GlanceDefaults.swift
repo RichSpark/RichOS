@@ -75,7 +75,7 @@ final class GlanceDefaults: ObservableObject {
 
     private var directory: URL {
         fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("app.richos.richfiles", isDirectory: true)
+            .appendingPathComponent(RichFilesSupportDirectory.name, isDirectory: true)
     }
 
     private var stateFile: URL { directory.appendingPathComponent("RichGlanceDefaults.json") }
@@ -260,9 +260,12 @@ final class GlanceDefaults: ObservableObject {
     }
 
     private func lockState() throws -> Int32 {
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        let url = directory.appendingPathComponent("RichGlanceDefaults.lock")
-        let descriptor = open(url.path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
+        guard let folder = try RichFilesSupportDirectory.open(directory, create: true) else {
+            throw CocoaError(.fileWriteNoPermission)
+        }
+        defer { try? folder.close() }
+        let descriptor = openat(folder.fileDescriptor, "RichGlanceDefaults.lock",
+                                O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
         guard descriptor >= 0 else { throw CocoaError(.fileWriteNoPermission) }
         guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
             Darwin.close(descriptor)
