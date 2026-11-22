@@ -92,22 +92,22 @@ private struct BackgroundCaptureSettingsView: View {
             let keyCode = event.keyCode
             let repeatKey = event.isARepeat
             let modifiers = event.modifierFlags
-            return MainActor.assumeIsolated {
-                if keyCode == 53 { stopRecording(); return nil }
-                if repeatKey { return nil }
+            MainActor.assumeIsolated {
+                if keyCode == 53 { stopRecording(); return }
+                if repeatKey { return }
                 guard let shortcut = GlanceHelper.Shortcut(keyCode: keyCode,
                         control: modifiers.contains(.control), option: modifiers.contains(.option),
                         shift: modifiers.contains(.shift), command: modifiers.contains(.command)) else {
                     feedback = "Use two or more modifiers and a letter or number."
-                    return nil
+                    return
                 }
                 do { _ = try shortcut.carbon() }
-                catch { feedback = error.localizedDescription; return nil }
+                catch { feedback = error.localizedDescription; return }
                 let enabled = status?.enabled == true
                 stopRecording()
                 update { try GlanceHelperControl.setShortcut(shortcut, enabled: enabled) }
-                return nil
             }
+            return nil
         }
     }
 
