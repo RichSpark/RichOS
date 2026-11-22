@@ -748,6 +748,8 @@ struct BrowserView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    private enum ColumnScrollTarget { case currentDivider }
+
     private var columnBrowser: some View {
         GeometryReader { geometry in
             let path = model.breadcrumbs
@@ -805,13 +807,15 @@ struct BrowserView: View {
                             Color.clear.preference(key: FileColumnFrameKey.self,
                                                    value: geometry.frame(in: .named("richfiles-items")))
                         })
-                        .id(model.folder)
                         columnDivider(for: model.folder, width: currentWidth)
+                            .id(ColumnScrollTarget.currentDivider)
                         Spacer(minLength: 0)
                     }.frame(minWidth: geometry.size.width, maxHeight: .infinity)
                 }
-                .onAppear { columns.scrollTo(model.folder, anchor: .trailing) }
-                .onChange(of: model.folder) { columns.scrollTo($0, anchor: .trailing) }
+                .onAppear { columns.scrollTo(ColumnScrollTarget.currentDivider, anchor: .trailing) }
+                .onChange(of: model.folder) { _ in
+                    columns.scrollTo(ColumnScrollTarget.currentDivider, anchor: .trailing)
+                }
             }
         }.accessibilityLabel("Column view").accessibilityIdentifier("file-columns")
     }

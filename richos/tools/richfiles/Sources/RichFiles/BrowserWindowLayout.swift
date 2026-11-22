@@ -101,6 +101,7 @@ struct BrowserColumnDivider: View {
                 }
                 .onEnded { _ in startingWidth = nil })
             .help("Drag to resize the \(folderName) column")
+            .accessibilityElement(children: .ignore)
             .accessibilityLabel("Width of \(folderName) column")
             .accessibilityValue("\(Int(width)) points")
             .accessibilityAdjustableAction { direction in
