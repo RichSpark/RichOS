@@ -8,7 +8,8 @@
 Use an empty synthetic home. This walk replaces the guest bundle and engine
 at their original paths while retaining the same home, as a manual upgrade.
 It records Claude transcripts and session bindings before opening the candidate
-and checks them while the app and its watcher run for ten minutes.
+and checks them while the app and its watcher run for ten minutes. A Claude
+process used solely to read quota does not start a conversation or send a turn.
 """
 import argparse
 import json
@@ -82,6 +83,7 @@ SNAPSHOT = r"""
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 
 home = Path(sys.argv[1])
@@ -103,13 +105,30 @@ def alive(pid):
 
 record = watch / "host-child.json"
 watcher = json.loads(record.read_text())["pid"] if record.exists() else None
-files = [*home.glob(".claude/projects/**/*.jsonl"), *home.glob(".claude/sessions/*.json"),
+# Claude writes a transient PID record even for the app's initialize/get_usage
+# control connection. Require its full command shape from quota/probe.rs and the
+# app as parent. Normal Rich and Stu leases carry different arguments.
+quota_args = ["--print", "--input-format=stream-json", "--output-format=stream-json", "--verbose",
+              "--setting-sources", "--no-session-persistence", "--tools", "--strict-mcp-config",
+              "--mcp-config", '{"mcpServers":{}}']
+quota_readers = []
+conversation_sessions = []
+for pid_record in home.glob(".claude/sessions/*.json"):
+    process = subprocess.run(["/bin/ps", "-ww", "-p", pid_record.stem, "-o", "ppid=,command="],
+                             text=True, capture_output=True, check=False)
+    fields = process.stdout.split()
+    if len(fields) > 2 and fields[0] == sys.argv[2] and Path(fields[1]).name == "claude" and fields[2:] == quota_args:
+        quota_readers.append(pid_record.stem)
+    else:
+        conversation_sessions.append(pid_record)
+files = [*home.glob(".claude/projects/**/*.jsonl"), *conversation_sessions,
          *state.glob("evidence/*/binding.json"), *state.glob("messages/*/*/stu.jsonl")]
-print(json.dumps(dict(records={str(p.relative_to(home)): stat(p) for p in files},
+print(json.dumps(dict(quota_readers=quota_readers, records={str(p.relative_to(home)): stat(p) for p in files},
      app_alive=alive(int(sys.argv[2])) if sys.argv[2] else None,
      watcher=watcher, watcher_alive=alive(watcher) if watcher is not None else False,
      poll=offsets.stat().st_mtime_ns if offsets.exists() else None,
      raw_offset=json.loads(offsets.read_text()).get(str(raw), {}).get("offset") if offsets.exists() else None,
+     archived_records=[stat(raw), stat(watch / "pending.jsonl")],
      live_bytes=(watch / "live.jsonl").stat().st_size if (watch / "live.jsonl").exists() else 0)))
 """
 
@@ -187,7 +206,9 @@ def main():
                 polls.add(sample["poll"])
             result.update(seconds=round(elapsed, 1), last_sample=sample, distinct_watcher_polls=len(polls))
             if sample["records"] != baseline["records"] or sample["live_bytes"]:
-                raise ValueError("Opening the candidate staged Stu input or started Claude activity")
+                raise ValueError("Opening the candidate staged Stu input or started a Claude conversation")
+            if sample["archived_records"] != baseline["archived_records"]:
+                raise ValueError("The updated app rewrote the archived history")
             if not sample["app_alive"]:
                 raise ValueError("The updated app exited during the observation")
             if elapsed >= IDLE_SECONDS:
