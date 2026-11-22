@@ -762,6 +762,33 @@ mod tests {
     }
 
     #[test]
+    fn automatic_relaunch_uses_the_migrated_executable_without_reclaiming_first() {
+        let (_work, home, system) = fixture();
+        let installed = install_verified(&home, &archive("2.0.0", |_| {}), "2.0.0").unwrap();
+        let user_app = home.join("Applications").join(APP);
+        let (_, executable) =
+            activate_for_relaunch(&home, "2.0.0", &user_app, &installed.executable(&home)).unwrap();
+        assert_eq!(executable, system.join("Contents/MacOS").join(&installed.executable_name));
+        assert!(executable.is_file());
+        assert!(has_deferred_reclamation(&home));
+        let r = root(&home).unwrap();
+        let retired = fs::read_dir(&r).unwrap().filter_map(Result::ok)
+            .map(|entry| entry.path().join("incoming.app"))
+            .find(|app| bundle_version(app).as_deref().is_ok_and(|version| version == "1.0.0"))
+            .expect("the previous copy should remain while RichOS comes back");
+
+        let mut running = StartupLease::acquire(&home).unwrap();
+        running.begin_session().unwrap();
+        assert!(activate_at_quit(&home, "2.0.0", &system).unwrap().is_none());
+        assert!(retired.exists());
+        drop(running);
+
+        activate_at_quit(&home, "2.0.0", &system).unwrap();
+        assert!(!retired.exists());
+        assert!(!has_deferred_reclamation(&home));
+    }
+
+    #[test]
     fn existing_two_copy_installation_keeps_both_launch_references() {
         let (_work, home, system) = fixture();
         install_verified(&home, &archive("2.0.0", |_| {}), "2.0.0").unwrap();
