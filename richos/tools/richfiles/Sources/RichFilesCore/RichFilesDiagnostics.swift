@@ -8,6 +8,7 @@ public enum RichFilesDiagnostics {
         case windowGestureAvailability, windowGestureMaximize, windowGestureRestore
         case windowGestureDockMinimize, windowGestureDockRestore, desktopDeleteShortcut
         case windowGestureTile, windowGestureTileRestore
+        case windowSwitcherList, windowSwitcherActivate
         case glanceCaptureFrame, glanceCaptureOutput, glanceCaptureSession, glanceScrollCapture
         case glanceDisplay, glanceDecode, glanceFolder, glancePreview, glanceDefaults, glanceMetadata
 
@@ -15,7 +16,7 @@ public enum RichFilesDiagnostics {
             switch self {
             case .windowGestureAvailability, .windowGestureMaximize, .windowGestureRestore,
                  .windowGestureDockMinimize, .windowGestureDockRestore, .desktopDeleteShortcut,
-                 .windowGestureTile, .windowGestureTileRestore:
+                 .windowGestureTile, .windowGestureTileRestore, .windowSwitcherList, .windowSwitcherActivate:
                 return RichFilesDiagnostics.gestureFilename
             default:
                 return RichFilesDiagnostics.filename

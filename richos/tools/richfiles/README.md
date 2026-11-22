@@ -19,6 +19,7 @@ The script builds and ad hoc signs a development bundle. RichOS packaging uses t
 - RichFiles Settings offers the Mac preset and individual shortcut overrides.
 - **Press Delete to move selected desktop items to Trash** is on by default. Change it in **RichFiles Settings → Keyboard → Mac desktop**. RichOS can start the Window Gestures background helper when it opens or installs an update. Follow the Accessibility and Input Monitoring instructions in Settings if macOS asks for access.
 - Enable **Tile windows by dragging or with shortcuts** in **RichFiles Settings → Window Gestures**. Drag a window by its title bar and drop at a display edge or corner. Control–Option–Command plus an arrow tiles the focused window to a half of its display. Use the same modifiers with 1–4 for the four quarters in reading order or Return to restore its previous size and position.
+- Enable **Switch directly between open windows** in **Window Gestures**. Control–Option–Command–W opens a list of windows by app and title, including minimized windows. Use the arrow keys and Return or double-click a window to open it.
 - **Use RichFiles for Folders** sets the macOS folder association. **Restore Previous App** restores the previous association. macOS still owns the Desktop and system Open and Save dialogs. **Reveal in Finder** still opens Finder.
 - For a shortcut that opens the standalone app from other apps, install RichFiles in an Applications folder and open it once. Assign **Open RichFiles** in **System Settings → Keyboard → Keyboard Shortcuts → Services**.
 

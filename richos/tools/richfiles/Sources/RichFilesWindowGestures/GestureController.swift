@@ -45,6 +45,7 @@ final class GestureController {
     private var maximized: [AXUIElement: RestorableFrame] = [:]
     private var tiled: [AXUIElement: RestorableFrame] = [:]
     private var tileDrag: TileDrag?
+    private var switcher: WindowSwitcher?
     private var dockMinimized: [pid_t: AXUIElement] = [:]
     private var observers: [pid_t: AXObserver] = [:]
     private var appTermination: NSObjectProtocol?
@@ -83,6 +84,7 @@ final class GestureController {
         if !selection.contains(.titleBar) && previous.contains(.titleBar) { maximized.removeAll() }
         if !selection.contains(.dock) && previous.contains(.dock) { dockMinimized.removeAll() }
         if !selection.contains(.tiling) && previous.contains(.tiling) { tiled.removeAll() }
+        if !selection.contains(.switcher) && previous.contains(.switcher) { switcher?.dismiss() }
         if selection != previous {
             stopTap(keepingWindows: true)
             pruneObservers()
@@ -164,7 +166,7 @@ final class GestureController {
         if !selection.intersection([.titleBar, .dock, .tiling]).isEmpty {
             types = [.leftMouseDown, .leftMouseUp, .leftMouseDragged, .rightMouseDown, .otherMouseDown]
         }
-        if !selection.intersection([.desktopDelete, .tiling]).isEmpty { types.append(.keyDown) }
+        if !selection.intersection([.desktopDelete, .tiling, .switcher]).isEmpty { types.append(.keyDown) }
         let mask = types.reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
         // Observe mouse-down before Dock can change focus and pass through
         // mouse events unchanged. The desktop shortcut may modify a key-down.
@@ -194,6 +196,7 @@ final class GestureController {
         firstTitleClick = nil
         tileDrag = nil
         if keepingWindows { return }
+        switcher?.dismiss()
         maximized.removeAll()
         tiled.removeAll()
         dockMinimized.removeAll()
@@ -264,9 +267,21 @@ final class GestureController {
         let modifiers: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift, .maskSecondaryFn]
         // Some keyboards report the Fn flag along with an arrow.
         let pressed = event.flags.intersection(modifiers).subtracting(.maskSecondaryFn)
-        guard pressed == [.maskCommand, .maskAlternate, .maskControl],
-              selection.contains(.tiling) else { return false }
+        guard pressed == [.maskCommand, .maskAlternate, .maskControl] else { return false }
         let key = Int(event.getIntegerValueField(.keyboardEventKeycode))
+        let repeated = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+        if key == kVK_ANSI_W, selection.contains(.switcher) {
+            if !repeated {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, !self.recheckingPermissions, Preferences.selection.contains(.switcher),
+                          AXIsProcessTrusted(), CGPreflightListenEventAccess() else { return }
+                    if self.switcher == nil { self.switcher = WindowSwitcher() }
+                    self.switcher?.toggle()
+                }
+            }
+            return true
+        }
+        guard selection.contains(.tiling) else { return false }
         let tile: WindowTile?
         switch key {
         case kVK_LeftArrow: tile = .left
@@ -280,7 +295,7 @@ final class GestureController {
         case kVK_Return: tile = nil
         default: return false
         }
-        if event.getIntegerValueField(.keyboardEventAutorepeat) == 0 {
+        if !repeated {
             let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
             DispatchQueue.main.async { [weak self] in
                 guard let self, let pid, NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,

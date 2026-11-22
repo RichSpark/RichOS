@@ -120,7 +120,7 @@ struct WindowGestureSettings: View {
     private var guidanceColor: Color { BrowserPalette(colorScheme).hint }
 
     private var enabled: Bool {
-        let choices: Preferences.Selection = desktopShortcut ? .desktopDelete : [.titleBar, .dock, .tiling]
+        let choices: Preferences.Selection = desktopShortcut ? .desktopDelete : [.titleBar, .dock, .tiling, .switcher]
         return !selection.intersection(choices).isEmpty
     }
 
@@ -137,6 +137,12 @@ struct WindowGestureSettings: View {
                 .disabled(updating)
             if selection.contains(.tiling) {
                 Text("Drag a title bar to an edge or corner. Hold Control, Option and Command with an arrow for halves, 1–4 for quarters or Return to restore the previous size.")
+                    .foregroundStyle(guidanceColor)
+            }
+            Toggle("Switch directly between open windows", isOn: toggle(.switcher))
+                .disabled(updating)
+            if selection.contains(.switcher) {
+                Text("Press Control–Option–Command–W. Select a window and press Return, or double-click it.")
                     .foregroundStyle(guidanceColor)
             }
         }

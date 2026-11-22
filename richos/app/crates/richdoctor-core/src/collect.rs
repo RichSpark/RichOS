@@ -818,7 +818,7 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64, gestures: bo
         let known_operation = if gestures {
             matches!(operation, "windowGestureAvailability" | "windowGestureMaximize" | "windowGestureRestore"
                 | "windowGestureDockMinimize" | "windowGestureDockRestore" | "desktopDeleteShortcut"
-                | "windowGestureTile" | "windowGestureTileRestore")
+                | "windowGestureTile" | "windowGestureTileRestore" | "windowSwitcherList" | "windowSwitcherActivate")
         } else {
             matches!(operation, "listing" | "listingVisible" | "copy" | "move" | "recovery" | "gitHistory" | "gitComparison" | "railVideoFrame"
                 | "windowPlacement" | "transferStall" | "cleanupScan" | "cleanupDuplicates" | "cleanupTrash" | "cleanupDelete"
@@ -1216,7 +1216,14 @@ mod tests {
         let mut desktop_delete = record.clone();
         desktop_delete["operation"] = serde_json::json!("desktopDeleteShortcut");
         desktop_delete["path"] = serde_json::json!("/Users/private/Desktop/test.txt");
-        write(&scope.logs_root().join("richfiles-window-gestures.jsonl"), &format!("{gestures}\n{desktop_delete}\n{record}"));
+        let extra_gestures = ["windowGestureTile", "windowGestureTileRestore", "windowSwitcherList", "windowSwitcherActivate"]
+            .map(|operation| {
+                let mut event = gestures.clone();
+                event["operation"] = serde_json::json!(operation);
+                event.to_string()
+            }).join("\n");
+        write(&scope.logs_root().join("richfiles-window-gestures.jsonl"),
+              &format!("{gestures}\n{desktop_delete}\n{extra_gestures}\n{record}"));
         let items = collect(Category::Configuration, &scope, &Context::default(), 0);
         let timing = items.iter().find(|item| item.source == "RichFiles timing log").unwrap();
         assert_eq!(timing.status, Status::Collected);
@@ -1245,6 +1252,9 @@ mod tests {
         assert_eq!(window_gestures.status, Status::Collected);
         assert!(window_gestures.text.contains("operation=windowGestureDockRestore"));
         assert!(window_gestures.text.contains("operation=desktopDeleteShortcut"));
+        for operation in ["windowGestureTile", "windowGestureTileRestore", "windowSwitcherList", "windowSwitcherActivate"] {
+            assert!(window_gestures.text.contains(&format!("operation={operation}")));
+        }
         assert!(!window_gestures.text.contains("/Users/private/Desktop"));
         assert!(!window_gestures.text.contains("operation=listing"));
         assert!(!timing.text.contains("Private screen content"));
