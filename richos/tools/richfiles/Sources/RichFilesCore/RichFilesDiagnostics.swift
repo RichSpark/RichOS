@@ -84,7 +84,16 @@ public enum RichFilesDiagnostics {
                             application: operation.isSuiteRestart ? bundle.bundleIdentifier : nil,
                             pid: operation.isSuiteRestart ? getpid() : nil)
         let folder = library.appendingPathComponent("Logs/RichOS", isDirectory: true)
-        writer.async { try? append(sample, in: folder) }
+        writer.async {
+            // Suite apps record their decision together. Give the shared log
+            // lock a bounded chance to clear so simultaneous restarts leave evidence.
+            for attempt in 0..<(operation.isSuiteRestart ? 5 : 1) {
+                if attempt > 0 { Thread.sleep(forTimeInterval: 0.01) }
+                do { try append(sample, in: folder); return }
+                catch let error as POSIXError where error.code == .EWOULDBLOCK {}
+                catch { return }
+            }
+        }
     }
 
     /// Finish enqueued records before a short-lived app exits.
@@ -102,7 +111,9 @@ public enum RichFilesDiagnostics {
                               O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0o600)
         guard descriptor >= 0 else { throw CocoaError(.fileWriteNoPermission) }
         let file = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else { throw CocoaError(.fileWriteUnknown) }
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
         var info = stat()
         guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
               info.st_uid == getuid(), info.st_mode & 0o077 == 0, info.st_nlink == 1 else {

@@ -1,5 +1,7 @@
 import AppKit
+import CoreServices
 import Darwin
+import os
 
 /// The installed RichOS sends this only after starting from a verified forward update.
 @MainActor
@@ -153,16 +155,36 @@ public final class SuiteRestart: NSObject {
             configuration.addsToRecentItems = false
             configuration.arguments = ["--suite-restore", token.uuidString, "-ApplePersistenceIgnoreState", "YES"]
                 + Array(arguments.dropFirst(5))
-            let completed = DispatchSemaphore(value: 0)
-            NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, error in
-                if error != nil { NSLog("Suite restart: reopening the application failed") }
-                completed.signal()
-            }
-            _ = completed.wait(timeout: .now() + 15)
+            reopen(Bundle.main.bundleURL, version: arguments[2], oldPID: pid, configuration: configuration)
         default:
             return false
         }
         return true
+    }
+
+    private static func reopen(_ bundle: URL, version: String, oldPID: pid_t,
+                               configuration: NSWorkspace.OpenConfiguration) {
+        // An atomic bundle exchange can leave LaunchServices resolving the old
+        // registration briefly after the app exits. Refresh the exact new URL and
+        // retry a bounded number of times without changing foreground ownership.
+        for delay in [0.0, 0.25, 0.75, 1.5, 3.0] {
+            if delay > 0 { Thread.sleep(forTimeInterval: delay) }
+            guard info(at: bundle)?[versionKey] as? String == version else { return }
+            let registered = LSRegisterURL(bundle as CFURL, true)
+            let completed = DispatchSemaphore(value: 0)
+            let launched = OSAllocatedUnfairLock(initialState: false)
+            NSWorkspace.shared.openApplication(at: bundle, configuration: configuration) { app, error in
+                if let app, !app.isTerminated, app.processIdentifier != oldPID {
+                    launched.withLock { $0 = true }
+                } else if let error = error as NSError? {
+                    NSLog("Suite restart: LaunchServices %@ (%ld), registration %d",
+                          error.domain, error.code, registered)
+                }
+                completed.signal()
+            }
+            if completed.wait(timeout: .now() + 3) == .success, launched.withLock({ $0 }) { return }
+        }
+        NSLog("Suite restart: LaunchServices did not reopen the application")
     }
 
     private static func snapshotURL(_ token: UUID) -> URL {
