@@ -46,24 +46,36 @@ enum ScreenshotText {
         try VNImageRequestHandler(cgImage: input.image, orientation: .up).perform([request])
         try Task.checkCancellation()
         let frame = CGSize(width: input.image.width, height: input.image.height)
-        let lines = (request.results ?? []).compactMap { observation -> Line? in
-            guard let text = observation.topCandidates(1).first?.string, !text.isEmpty else { return nil }
-            let box = observation.boundingBox
-            let bounds = CGRect(x: box.minX * frame.width, y: (1 - box.maxY) * frame.height,
-                                width: box.width * frame.width, height: box.height * frame.height)
-            return Line(text: text, bounds: bounds)
+        return (request.results ?? []).flatMap { observation -> [Line] in
+            guard let candidate = observation.topCandidates(1).first, !candidate.string.isEmpty else { return [] }
+            let line = Line(text: candidate.string, bounds: pixels(observation.boundingBox, in: frame))
+            if !input.redactions.contains(where: { $0.intersects(line.bounds) }) { return [line] }
+
+            var words: [Line] = []
+            var result: [Line] = []
+            for word in candidate.string.split(whereSeparator: \.isWhitespace) {
+                let range = word.startIndex..<word.endIndex
+                let box = (try? candidate.boundingBox(for: range)).map { pixels($0.boundingBox, in: frame) }
+                if let box, !input.redactions.contains(where: { $0.intersects(box) }) {
+                    words.append(Line(text: String(word), bounds: box))
+                } else if !words.isEmpty {
+                    result.append(join(words))
+                    words.removeAll()
+                }
+            }
+            if !words.isEmpty { result.append(join(words)) }
+            return result
         }
-        return visibleLines(lines, redactions: input.redactions)
     }
 
-    static func visibleLines(_ lines: [Line], redactions: [CGRect]) -> [Line] {
-        lines.filter { line in
-            // Vision can split a single line into fragments around an opaque block.
-            // Exclude the whole affected line so a partial recognition cannot reconstruct it.
-            !redactions.contains { cover in
-                cover.minY < line.bounds.maxY && cover.maxY > line.bounds.minY
-            }
-        }
+    private static func pixels(_ box: CGRect, in frame: CGSize) -> CGRect {
+        CGRect(x: box.minX * frame.width, y: (1 - box.maxY) * frame.height,
+               width: box.width * frame.width, height: box.height * frame.height)
+    }
+
+    private static func join(_ words: [Line]) -> Line {
+        Line(text: words.map(\.text).joined(separator: " "),
+             bounds: words.reduce(CGRect.null) { $0.union($1.bounds) })
     }
 
     @MainActor

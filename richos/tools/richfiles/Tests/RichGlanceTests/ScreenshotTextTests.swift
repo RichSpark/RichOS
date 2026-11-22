@@ -3,15 +3,26 @@ import XCTest
 @testable import RichGlance
 
 final class ScreenshotTextTests: XCTestCase {
-    func testRedactionDropsLineFragmentsAndKeepsUnaffectedLine() {
-        let wholeLine = [
-            ScreenshotText.Line(text: "Ticket:", bounds: CGRect(x: 1, y: 15, width: 35, height: 10)),
-            ScreenshotText.Line(text: "failed", bounds: CGRect(x: 90, y: 15, width: 40, height: 10)),
-            ScreenshotText.Line(text: "Try again later", bounds: CGRect(x: 1, y: 28, width: 120, height: 10))
-        ]
-        let visible = ScreenshotText.visibleLines(wholeLine, redactions: [CGRect(x: 40, y: 13, width: 46, height: 13)])
-        XCTAssertEqual(visible.map(\.text), ["Try again later"])
-        XCTAssertTrue(visible[0].matches("AGAIN"))
+    func testRedactionKeepsWordsOnEitherSideAndInTheOtherColumn() throws {
+        let size = CGSize(width: 1120, height: 110)
+        let image = NSImage(size: size, flipped: false) { rect in
+            NSColor.white.setFill()
+            rect.fill()
+            let attributes: [NSAttributedString.Key: Any] = [
+                .foregroundColor: NSColor.black, .font: NSFont.monospacedSystemFont(ofSize: 32, weight: .semibold),
+            ]
+            ("From: PRIVATE approved" as NSString).draw(at: CGPoint(x: 12, y: 36), withAttributes: attributes)
+            ("Invoice total" as NSString).draw(at: CGPoint(x: 780, y: 36), withAttributes: attributes)
+            return true
+        }
+        let bitmap = try XCTUnwrap(image.cgImage(forProposedRect: nil, context: nil, hints: nil))
+        let redaction = CGRect(x: 150, y: 18, width: 95, height: 63)
+        let results = try ScreenshotText.recognize(.init(image: bitmap, redactions: [redaction]))
+        XCTAssertTrue(results.contains { $0.matches("From") }, "\(results)")
+        XCTAssertTrue(results.contains { $0.matches("approved") }, "\(results)")
+        XCTAssertTrue(results.contains { $0.matches("Invoice total") }, "\(results)")
+        XCTAssertFalse(results.contains { $0.matches("PRIVATE") }, "\(results)")
+        XCTAssertFalse(results.contains { redaction.intersects($0.bounds) }, "\(results)")
     }
 
     func testVisionReadsScannedPixels() throws {
