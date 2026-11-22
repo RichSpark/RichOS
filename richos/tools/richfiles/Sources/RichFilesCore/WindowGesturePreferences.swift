@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 public enum WindowGesturePreferences {
@@ -55,11 +56,18 @@ public enum WindowGesturePreferences {
                      forKey: restartContractKey)
     }
 
-    public static func handlesOwnRestart(process: pid_t, launched: Date?) -> Bool {
-        guard process > 0, let launched, let mark = defaults.dictionary(forKey: restartContractKey),
-              mark["pid"] as? Int == Int(process), let ready = mark["ready"] as? Date
-        else { return false }
-        return launched <= ready
+    public static func runningHelperHandlesOwnRestart() -> Bool {
+        guard let mark = defaults.dictionary(forKey: restartContractKey),
+              let pid = mark["pid"] as? Int, pid > 1, let process = pid_t(exactly: pid),
+              let ready = mark["ready"] as? Date else { return false }
+        // A login item can have a running launchd job without an AppKit
+        // application registration. Use the recorded process's kernel identity.
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(process, PROC_PIDTBSDINFO, 0, &info, size) == size,
+              info.pbi_uid == getuid() else { return false }
+        let launched = Double(info.pbi_start_tvsec) + Double(info.pbi_start_tvusec) / 1_000_000
+        return launched <= ready.timeIntervalSince1970
     }
 
     public static var nativeTitleBarIsOff: Bool {
