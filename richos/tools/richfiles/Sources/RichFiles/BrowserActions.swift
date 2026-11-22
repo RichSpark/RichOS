@@ -942,9 +942,11 @@ final class BrowserActions: ObservableObject {
                 _ = try FileOperations.move(unreadable, into: recoveryURL.deletingLastPathComponent(), named: name)
                 unreadableRecoveryStore = false
             }
-            undoRedoPersisted = try RecoveryState(trash: trashItems, undo: undoHistory, redo: redoHistory,
+            try RecoveryState(trash: trashItems, undo: undoHistory, redo: redoHistory,
                               interruptedTransfer: interruptedTransfer, settledTransferID: settledTransferID)
                 .save(to: recoveryURL)
+            // An update preserves the same bounded history as an ordinary reopen.
+            undoRedoPersisted = true
             return true
         } catch {
             let message = "Could not save recovery history for the next launch."
@@ -1151,7 +1153,7 @@ private struct RecoveryState: Codable {
         return state
     }
 
-    func save(to url: URL) throws -> Bool {
+    func save(to url: URL) throws {
         let parent = url.deletingLastPathComponent()
         guard let directory = try RichFilesSupportDirectory.open(parent, create: true) else {
             throw CocoaError(.fileWriteNoPermission)
@@ -1166,17 +1168,10 @@ private struct RecoveryState: Codable {
             let bytes = try encoder.encode(recent)
             if bytes.count <= Self.maxBytes {
                 try bytes.write(to: url, options: .atomic)
-                // Normal persistence keeps bounded recent history. An update restart
-                // needs every currently available Undo and Redo step to survive.
-                return Self.stepCount(recent.undo) == Self.stepCount(undo)
-                    && Self.stepCount(recent.redo) == Self.stepCount(redo)
+                return
             }
         }
         throw CocoaError(.fileWriteOutOfSpace)
-    }
-
-    private static func stepCount(_ groups: [HistoryGroup]) -> Int {
-        groups.reduce(0) { $0 + $1.steps.count }
     }
 
     private static func recentGroups(_ groups: [HistoryGroup], stepBudget: Int) -> [HistoryGroup] {

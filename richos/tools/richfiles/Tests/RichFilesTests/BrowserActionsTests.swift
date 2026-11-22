@@ -299,6 +299,30 @@ final class BrowserActionsTests: XCTestCase {
     }
 
     @MainActor
+    func testUpdateRestartAllowsLongHistoryWithSavedUndoAndRedo() async throws {
+        try await withFixture { root, _, board in
+            var source = try write("original", named: "Original.txt", in: root)
+            let recovery = root.appendingPathComponent("Private", isDirectory: true)
+                .appendingPathComponent("Recovery.json")
+            let actions = BrowserActions(pasteboard: board, recoveryURL: recovery)
+            for index in 1...42 {
+                let name = "Rename \(index).txt"
+                try await perform(actions) { actions.rename(source, to: name) }
+                source = try FileReference(url: root.appendingPathComponent(name))
+            }
+            XCTAssertTrue(actions.canRestartAfterUpdate)
+            try await perform(actions) { actions.undo() }
+            XCTAssertTrue(actions.canRestartAfterUpdate)
+
+            let reopened = BrowserActions(pasteboard: board, recoveryURL: recovery)
+            XCTAssertNotNil(reopened.undoName)
+            XCTAssertNotNil(reopened.redoName)
+            try await perform(reopened) { reopened.redo() }
+            XCTAssertEqual(try contents(root.appendingPathComponent("Rename 42.txt")), "original")
+        }
+    }
+
+    @MainActor
     func testCompletedRenameCanBeUndoneAfterReopeningTheRecoveryStore() async throws {
         try await withFixture { root, _, board in
             let source = try write("original", named: "Original.txt", in: root)
