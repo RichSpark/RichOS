@@ -41,6 +41,12 @@ final class BrowserActions: ObservableObject {
     @Published private(set) var redoName: String?
     @Published private(set) var mutationRevision = UUID()
 
+    var canRestartAfterUpdate: Bool {
+        !busy && transfer?.running != true && transferTask == nil && preparingQueue.isEmpty
+            && queuedTransfers.isEmpty && !replacingFile && currentDrag == nil && cutURLs.isEmpty
+            && !canRetryTransfer && shelf.isEmpty
+    }
+
     var didMutate: (() -> Void)?
     var operationIssues: [String] { issuesAreFromTransfer ? [] : issues }
 

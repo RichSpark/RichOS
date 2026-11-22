@@ -4435,6 +4435,8 @@ fn main() {
                     let capture_app = app.clone();
                     first_frame::after_page(app, move || glance_capture_shortcut::restore(capture_app));
                     first_frame::after_page(app, richfiles_integration::start_window_gestures);
+                    let version = app.package_info().version.to_string();
+                    first_frame::after_page(app, move || richfiles_integration::notify_suite_of_update(version));
                 }
                 // The first window is up. Optional private starter I/O stays off startup.
                 if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {

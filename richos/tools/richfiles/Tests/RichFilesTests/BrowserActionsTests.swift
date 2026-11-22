@@ -332,7 +332,12 @@ final class BrowserActionsTests: XCTestCase {
             let url = try XCTUnwrap(objects.first as? NSURL) as URL
             XCTAssertEqual(url.path, source.url.path)
 
-            try await perform(actions) { actions.paste(into: destination) }
+            XCTAssertTrue(actions.canRestartAfterUpdate)
+            try await perform(actions) {
+                actions.paste(into: destination)
+                XCTAssertFalse(actions.canRestartAfterUpdate, "The file copy must finish before an update can restart RichFiles")
+            }
+            XCTAssertTrue(actions.canRestartAfterUpdate, "A finished copy needs no user action before restarting")
             XCTAssertEqual(try contents(source.url), "original")
             XCTAssertEqual(try contents(destination.appendingPathComponent("Notes.txt")), "original")
             XCTAssertEqual(actions.transfer?.succeeded, 1)

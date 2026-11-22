@@ -145,16 +145,20 @@ struct WindowBrowserView: View {
     @State private var cleanLaunchDeadline: TimeInterval?
     @State private var switchError = ""
     @State private var showSwitchError = false
+    @State private var suiteFrameApplied = false
+    @State private var closeForWindowlessUpdate = false
+    @State private var suiteWindow: SuiteBrowserWindow?
 
     private let start: URL
     private let supportsSessionRestore: Bool
     private let placementFamily: BrowserWindowPlacement.Family?
     private let handoffID: String?
     private let launchHandoffID: String?
+    private let suiteWindowIndex: Int?
 
     init(start: URL, actions: BrowserActions, openRequests: FolderOpenDelegate,
          supportsSessionRestore: Bool = false, placementFamily: BrowserWindowPlacement.Family? = nil,
-         handoffID: String? = nil, launchHandoffID: String? = nil) {
+         handoffID: String? = nil, launchHandoffID: String? = nil, suiteWindowIndex: Int? = nil) {
         _workspace = StateObject(wrappedValue: WindowWorkspace(start: start))
         self.start = start
         self.actions = actions
@@ -163,6 +167,7 @@ struct WindowBrowserView: View {
         self.placementFamily = placementFamily
         self.handoffID = handoffID
         self.launchHandoffID = launchHandoffID
+        self.suiteWindowIndex = suiteWindowIndex
     }
 
     var body: some View {
@@ -257,7 +262,28 @@ struct WindowBrowserView: View {
     private func appear() {
         if !appeared {
             appeared = true
-            if let handoffID, let id = UUID(uuidString: handoffID) {
+            openRequests.actions = actions
+            if let windows = openRequests.updateWindows, let index = suiteWindowIndex
+                ?? (supportsSessionRestore && openRequests.claimInitialBrowser() ? 0 : nil) {
+                if windows.indices.contains(index) {
+                    let snapshot = windows[index]
+                    if workspace.restoreSession(snapshot.session) {
+                        suiteWindow = snapshot
+                        if let nativeWindowNumber, let window = NSApp.window(withWindowNumber: nativeWindowNumber) {
+                            restoreUpdateFrame(window)
+                        }
+                    }
+                    if index == 0 {
+                        for other in windows.indices.dropFirst().reversed() {
+                            openWindow(id: "richfiles-after-update", value: other)
+                        }
+                    }
+                } else if windows.isEmpty {
+                    closeForWindowlessUpdate = true
+                    if let nativeWindowNumber { NSApp.window(withWindowNumber: nativeWindowNumber)?.close() }
+                }
+                openRequests.didRestoreUpdateWindow(index)
+            } else if let handoffID, let id = UUID(uuidString: handoffID) {
                 openRequests.markHandoffOpened(id)
                 acceptHandoff(id)
             } else if supportsSessionRestore {
@@ -295,6 +321,17 @@ struct WindowBrowserView: View {
         window?.title = "\(name) — RichFiles"
     }
 
+    private func restoreUpdateFrame(_ window: NSWindow) {
+        if !suiteFrameApplied, let suiteWindow {
+            suiteFrameApplied = true
+            paneLayout = suiteWindow.layout
+            let frame = BrowserWindowPlacement.fit(suiteWindow.frame, to: NSScreen.screens.map(\.visibleFrame),
+                                                   fallback: NSScreen.main?.visibleFrame)
+            window.setFrame(frame, display: true)
+            if suiteWindow.minimized { window.miniaturize(nil) }
+        }
+    }
+
     private func attachWindow(_ window: NSWindow?) {
         if nativeWindowNumber != window?.windowNumber || (placementFamily != nil && placementSlot == nil) {
             releasePlacement()
@@ -308,6 +345,19 @@ struct WindowBrowserView: View {
             nativeWindowNumber = window?.windowNumber
             updateTitle(of: window, folder: workspace.activeModel.folder)
         }
+        if let window {
+            openRequests.suiteWindows[window.windowNumber] = { [weak window] in
+                guard let window, appeared, workspace.cleanupFolder == nil,
+                      !window.styleMask.contains(.fullScreen), let session = workspace.sessionData()
+                else { return nil }
+                return SuiteBrowserWindow(session: session, frame: window.frame,
+                                          layout: paneLayout, minimized: window.isMiniaturized)
+            }
+            restoreUpdateFrame(window)
+            if closeForWindowlessUpdate {
+                window.close()
+            }
+        }
         receiveFolderOpen()
     }
 
@@ -317,7 +367,10 @@ struct WindowBrowserView: View {
         if !window.isMiniaturized, !window.styleMask.contains(.fullScreen) {
             openRequests.windowPlacement.save(window.frame, in: slot)
         }
-        if notice.name == NSWindow.willCloseNotification { releasePlacement() }
+        if notice.name == NSWindow.willCloseNotification {
+            openRequests.suiteWindows.removeValue(forKey: window.windowNumber)
+            releasePlacement()
+        }
     }
 
     private func releasePlacement() {

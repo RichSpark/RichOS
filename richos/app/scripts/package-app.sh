@@ -1613,7 +1613,8 @@ done
 package_richfiles() (
   richfiles_stage="$(mktemp -d "${TMPDIR:?}/richfiles-package.XXXXXX")" || exit 1
   trap 'rm -rf -- "$richfiles_stage"' EXIT
-  bash "$here/package-richfiles.sh" --embedded "$richfiles_stage/payload" &&
+  RICHOS_SUITE_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_bundle/Contents/Info.plist")" \
+    bash "$here/package-richfiles.sh" --embedded "$richfiles_stage/payload" &&
     mkdir -p "$app_bundle/Contents/Applications" "$app_bundle/Contents/Frameworks" &&
     ditto "$richfiles_stage/payload/RichFiles.app" "$app_bundle/Contents/Applications/RichFiles.app" &&
     install -m 755 "$richfiles_stage/payload/libRichFilesIntegration.dylib" "$app_bundle/Contents/Frameworks/libRichFilesIntegration.dylib"

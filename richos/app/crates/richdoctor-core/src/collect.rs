@@ -821,6 +821,7 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64, gestures: bo
                 | "windowGestureTile" | "windowGestureTileRestore" | "windowSwitcherList" | "windowSwitcherActivate")
         } else {
             matches!(operation, "listing" | "listingVisible" | "copy" | "move" | "recovery" | "gitHistory" | "gitComparison" | "railVideoFrame"
+                | "suiteRestartRunning" | "richFilesSuiteRestart" | "richGlanceSuiteRestart" | "captureHelperSuiteRestart" | "gesturesSuiteRestart"
                 | "windowPlacement" | "transferStall" | "cleanupScan" | "cleanupDuplicates" | "cleanupTrash" | "cleanupDelete"
                 | "openWithDiscovery"
                 | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata"
@@ -841,7 +842,20 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64, gestures: bo
                 "conflictingPixels" | "lostOverlap" | "incompleteCoverage" | "noMotion" | "sourceChanged" |
                 "streamInterrupted" | "noFrame" | "finalFrameUnavailable" | "sizeLimit" | "timeLimit" | "accessibility")
         }).map(|reason| format!(" scroll_failure={reason}")).unwrap_or_default();
-        Some((at, format!("{} build={build} id={id} operation={operation} outcome={outcome} worker={duration}ms{first_rows} confirmed={confirmed}/{total}{scroll_failure}",
+        let process = if matches!(operation, "suiteRestartRunning" | "richFilesSuiteRestart" | "richGlanceSuiteRestart"
+            | "captureHelperSuiteRestart" | "gesturesSuiteRestart")
+        {
+            let app = record["application"].as_str()?;
+            let pid = u32::try_from(record["pid"].as_u64()?).ok()?;
+            if pid == 0 || !matches!(app, "app.richos.richfiles" | "app.richos.richglance"
+                | "app.richos.richglance.capture-helper" | "app.richos.richfiles.window-gestures") {
+                return None;
+            }
+            format!(" application={app} pid={pid}")
+        } else {
+            String::new()
+        };
+        Some((at, format!("{} build={build} id={id} operation={operation} outcome={outcome} worker={duration}ms{first_rows} confirmed={confirmed}/{total}{scroll_failure}{process}",
                           crate::util::utc_stamp(at))))
     }).collect();
     if lines.is_empty() {
@@ -1215,10 +1229,15 @@ mod tests {
                 event["filename"] = serde_json::json!("Private reviewed filename");
                 event.to_string()
             }).join("\n");
+        let mut suite = record.clone();
+        suite["operation"] = serde_json::json!("richFilesSuiteRestart");
+        suite["outcome"] = serde_json::json!("interrupted");
+        suite["application"] = serde_json::json!("app.richos.richfiles");
+        suite["pid"] = serde_json::json!(123);
         let mut gestures = record.clone();
         gestures["operation"] = serde_json::json!("windowGestureDockRestore");
         gestures["title"] = serde_json::json!("Private window title");
-        write(&scope.logs_root().join("richfiles-timing.jsonl"), &format!("{record}\n{glance}\n{defaults}\n{metadata}\n{captures}\n{cleanup}"));
+        write(&scope.logs_root().join("richfiles-timing.jsonl"), &format!("{record}\n{glance}\n{defaults}\n{metadata}\n{captures}\n{cleanup}\n{suite}"));
         let mut desktop_delete = record.clone();
         desktop_delete["operation"] = serde_json::json!("desktopDeleteShortcut");
         desktop_delete["path"] = serde_json::json!("/Users/private/Desktop/test.txt");
@@ -1242,6 +1261,8 @@ mod tests {
         assert!(timing.text.contains("operation=glanceCaptureSession"));
         assert!(timing.text.contains("operation=glanceCaptureOutput"));
         assert!(timing.text.contains("operation=glanceCompare"));
+        assert!(timing.text.contains("operation=richFilesSuiteRestart outcome=interrupted"));
+        assert!(timing.text.contains("application=app.richos.richfiles pid=123"));
         for stage in ["glanceCaptureHelperStart", "glanceCaptureHelperLogin", "glanceCaptureShortcutLaunch", "glanceCaptureMenuLaunch"] {
             assert!(timing.text.contains(&format!("operation={stage}")));
         }

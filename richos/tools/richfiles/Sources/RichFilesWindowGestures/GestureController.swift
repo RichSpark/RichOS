@@ -77,6 +77,8 @@ final class GestureController {
         )
     }
 
+    var canRestartAfterUpdate: Bool { press == nil && tileDrag == nil && switcher == nil }
+
     func refresh() {
         guard !recheckingPermissions else { return }
         let previous = selection

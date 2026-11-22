@@ -27,10 +27,34 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var pins: [ScreenshotPin] = []
     private var captureLaunch = CommandLine.arguments.contains("--capture-request")
     private var launchOrigin = Application.launchOrigin()
+    private var suiteRestart: SuiteRestart?
+    private var restartState = SuiteRestart.restore(UpdateWindows.self)
+
+    private struct UpdateWindows: Codable {
+        struct Placement: Codable {
+            let frame: CGRect
+            let minimized: Bool
+
+            @MainActor init(_ window: NSWindow) {
+                frame = window.frame
+                minimized = window.isMiniaturized
+            }
+
+            @MainActor func apply(to window: NSWindow) {
+                window.setFrame(frame, display: true)
+                if minimized { window.miniaturize(nil) }
+            }
+        }
+        let file: URL?
+        let viewer: Placement?
+        let document: UUID?
+        let editor: Placement?
+        let settings: Placement?
+    }
 
     static func main() {
         let arguments = Array(CommandLine.arguments.dropFirst())
-        if GlanceHelperControl.runCommand(arguments) { return }
+        if SuiteRestart.runCommand(arguments) || GlanceHelperControl.runCommand(arguments) { return }
         if arguments == ["--check-screen-recording-access"] {
             exit(CGPreflightScreenCaptureAccess() ? EXIT_SUCCESS : EXIT_FAILURE)
         }
@@ -94,7 +118,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationOpenUntitledFile(_ sender: NSApplication) -> Bool {
-        if viewer == nil, editor == nil, capture == nil, captureSettings?.window?.isVisible != true, !captureLaunch { openWithoutFile() }
+        if restartState == nil, viewer == nil, editor == nil, capture == nil, captureSettings?.window?.isVisible != true, !captureLaunch { openWithoutFile() }
         return true
     }
 
@@ -103,6 +127,14 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        suiteRestart = SuiteRestart(operation: .richGlanceSuiteRestart) { [weak self] in
+            self?.snapshotForUpdate()
+        }
+        if let state = restartState {
+            restoreUpdateWindows(state)
+            // LaunchServices can deliver the initial untitled event after this delegate method.
+            DispatchQueue.main.async { [weak self] in self?.restartState = nil }
+        }
         if screenshotStore.keepsHistory {
             let store = screenshotStore
             DispatchQueue.global(qos: .utility).async { _ = try? store.entries() }
@@ -116,6 +148,45 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         beginCapture(originPID: originPID > 0 ? originPID : nil,
                      repeatsRegion: arguments[4] == "again", copiesText: arguments[4] == "text")
+    }
+
+    private func snapshotForUpdate() -> Data? {
+        guard capture == nil, permissionProbe == nil, openingPanel == nil, captureNotice == nil,
+              !captureLaunch, pins.isEmpty, editor?.canRestartAfterUpdate != false
+        else { return nil }
+        let windows = [viewer?.window, editor?.window, captureSettings?.window].compactMap { $0 }
+        guard !windows.contains(where: { $0.styleMask.contains(.fullScreen) }),
+              NSApp.windows.filter({ $0.isVisible && $0.canBecomeMain }).allSatisfy({ window in
+                  windows.contains { $0 === window }
+              }) else { return nil }
+        let settings = captureSettings?.window.flatMap {
+            $0.isVisible || $0.isMiniaturized || NSApp.isHidden ? UpdateWindows.Placement($0) : nil
+        }
+        let snapshot = UpdateWindows(file: viewer?.file, viewer: viewer.map { .init($0.window) },
+                                     document: editor?.restartDocument, editor: editor.map { .init($0.window) },
+                                     settings: settings)
+        guard snapshot.viewer == nil || snapshot.file?.isFileURL == true else { return nil }
+        return try? JSONEncoder().encode(snapshot)
+    }
+
+    private func restoreUpdateWindows(_ state: UpdateWindows) {
+        if let file = state.file {
+            open(file, activate: false)
+            if let window = viewer?.window { state.viewer?.apply(to: window) }
+        }
+        if let placement = state.editor {
+            let document: ScreenshotDocument? = state.document.flatMap { id in
+                guard let entry = try? screenshotStore.entries().first(where: { $0.id == id }) else { return nil }
+                return try? screenshotStore.load(entry)
+            }
+            showEditor(document, origin: nil, previousWindow: viewer?.window)
+            if let window = editor?.window { placement.apply(to: window) }
+        }
+        if let placement = state.settings {
+            captureSettings = BackgroundCaptureSettings()
+            captureSettings?.showWindow(nil)
+            if let window = captureSettings?.window { placement.apply(to: window) }
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {

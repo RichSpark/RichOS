@@ -32,6 +32,9 @@ pub enum AppMessage {
     /// Who is connecting: its version, its bundle and its data folder.
     #[serde(rename_all = "camelCase")]
     Hello { version: String, bundle: String, data_dir: String },
+    /// Sent by the updated, verified installation to the tool that still holds the key.
+    #[serde(rename_all = "camelCase")]
+    RestartAfterUpdate { version: String, bundle: String, data_dir: String },
     /// Re-read `dictation.json`.
     SettingsChanged,
     /// Accessibility may have been allowed: create the tap now.

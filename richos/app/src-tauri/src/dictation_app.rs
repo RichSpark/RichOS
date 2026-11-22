@@ -348,6 +348,15 @@ pub fn boot(host: Arc<Host>) {
             }
         }
         host.ensure_tool();
+        if crate::update_startup::launch_report().update_arrival.is_some() {
+            if let Ok(executable) = std::env::current_exe() {
+                host.link.tell(&AppMessage::RestartAfterUpdate {
+                    version: host.version.clone(),
+                    bundle: bundle_of(&executable).display().to_string(),
+                    data_dir: host.data_dir.display().to_string(),
+                });
+            }
+        }
     });
     if let Err(e) = spawned {
         eprintln!("[richos] dictation: could not start: {e}");

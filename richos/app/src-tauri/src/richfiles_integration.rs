@@ -259,6 +259,22 @@ fn open_bundle(file: Option<PathBuf>, image_viewer_settings: bool) -> Result<(),
 }
 
 #[cfg(target_os = "macos")]
+pub fn notify_suite_of_update(version: String) {
+    if crate::update_startup::launch_report().update_arrival.is_none() {
+        return;
+    }
+    std::thread::spawn(move || {
+        let Some(bundle) = richfiles_bundle() else { return };
+        let result = std::process::Command::new(bundle.join("Contents/MacOS/RichFiles"))
+            .args(["--suite-update-arrived", &std::process::id().to_string(), &version])
+            .status();
+        if !result.is_ok_and(|status| status.success()) {
+            eprintln!("[richos] suite restart: could not notify the running applications");
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
 pub fn start_window_gestures() {
     let launch = crate::update_startup::launch_report();
     let action = if launch.update_arrival.is_some() || launch.handover.is_some() {

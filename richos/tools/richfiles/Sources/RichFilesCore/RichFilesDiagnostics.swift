@@ -3,6 +3,7 @@ import Foundation
 
 public enum RichFilesDiagnostics {
     public enum Operation: String, Codable, Sendable {
+        case suiteRestartRunning, richFilesSuiteRestart, richGlanceSuiteRestart, captureHelperSuiteRestart, gesturesSuiteRestart
         case listing, listingVisible, copy, move, recovery, gitHistory, gitComparison, windowPlacement, transferStall
         case cleanupScan, cleanupDuplicates, cleanupTrash, cleanupDelete, openWithDiscovery
         case windowGestureAvailability, windowGestureMaximize, windowGestureRestore
@@ -12,6 +13,16 @@ public enum RichFilesDiagnostics {
         case glanceCaptureFrame, glanceCaptureOutput, glanceCaptureSession, glanceScrollCapture, glanceCompare, glanceOCR, glanceSearch, glancePin, glanceRedactedCopy, glanceShare
         case glanceCaptureHelperStart, glanceCaptureHelperLogin, glanceCaptureShortcutLaunch, glanceCaptureMenuLaunch
         case glanceDisplay, glanceDecode, glanceFolder, glancePreview, glanceDefaults, glanceMetadata
+
+        fileprivate var isSuiteRestart: Bool {
+            switch self {
+            case .suiteRestartRunning, .richFilesSuiteRestart, .richGlanceSuiteRestart,
+                 .captureHelperSuiteRestart, .gesturesSuiteRestart:
+                return true
+            default:
+                return false
+            }
+        }
 
         fileprivate var logFilename: String {
             switch self {
@@ -45,6 +56,8 @@ public enum RichFilesDiagnostics {
         let total: Int
         let confirmed: Int
         var scrollCaptureFailure: ScrollCaptureFailure? = nil
+        var application: String? = nil
+        var pid: Int32? = nil
     }
 
     static let filename = "richfiles-timing.jsonl"
@@ -60,13 +73,16 @@ public enum RichFilesDiagnostics {
         guard ["app.richos.richfiles", "com.richos.app", "app.richos.richglance", WindowGesturePreferences.helperID, GlanceHelper.bundleID]
             .contains(bundle.bundleIdentifier ?? ""),
               let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first else { return }
-        let version = bundle.object(forInfoDictionaryKey: "RichOSSourceRevision") as? String
+        let suiteVersion = operation.isSuiteRestart ? bundle.object(forInfoDictionaryKey: "RichOSSuiteVersion") as? String : nil
+        let version = suiteVersion ?? bundle.object(forInfoDictionaryKey: "RichOSSourceRevision") as? String
             ?? bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
         let build = String(version.filter { $0.isASCII && ($0.isLetter || $0.isNumber || ".-+".contains($0)) }.prefix(40))
         let sample = Sample(atMS: Int64(Date().timeIntervalSince1970 * 1_000), id: id, build: build,
                             operation: operation, outcome: outcome,
                             workerMS: milliseconds(since: started), firstRowsMS: firstRowsMS,
-                            total: total, confirmed: confirmed, scrollCaptureFailure: scrollCaptureFailure)
+                            total: total, confirmed: confirmed, scrollCaptureFailure: scrollCaptureFailure,
+                            application: operation.isSuiteRestart ? bundle.bundleIdentifier : nil,
+                            pid: operation.isSuiteRestart ? getpid() : nil)
         let folder = library.appendingPathComponent("Logs/RichOS", isDirectory: true)
         writer.async { try? append(sample, in: folder) }
     }

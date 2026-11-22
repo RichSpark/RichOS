@@ -789,6 +789,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
         do {
             guard try store.retain(document, existingOnly: true) else { return false }
             persisted = document.edits
+            window.isDocumentEdited = false
             record(.complete, for: document, from: started)
             return true
         } catch {
@@ -833,6 +834,15 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
             window.performClose(nil)
         }
         return false
+    }
+
+    var restartDocument: UUID? { canvas?.document.id }
+
+    var canRestartAfterUpdate: Bool {
+        guard !sheetOpen, pendingCaptures.isEmpty, comparison == nil else { return false }
+        guard let canvas else { return true }
+        return !canvas.isInteracting && canvas.previewCrop == nil && canvas.document.edits == persisted
+            && store.keepsHistory && entries.contains(where: { $0.id == canvas.document.id })
     }
 
     func allowApplicationQuit() -> Bool {
@@ -1042,7 +1052,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
             meta.stringValue = "Screenshot editor"
         }
         let hasEdits = canvas?.hasChanges == true
-        window.isDocumentEdited = hasEdits
+        window.isDocumentEdited = canvas?.document.edits != persisted
         let isRedactedCopy = document?.redactedGeneration != nil
         edited.stringValue = isRedactedCopy ? "Redacted copy" : "Edited"
         edited.isHidden = !hasEdits && !isRedactedCopy
