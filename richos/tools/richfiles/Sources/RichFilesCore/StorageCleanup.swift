@@ -53,16 +53,14 @@ public struct CleanupCandidate: Sendable, Identifiable {
     static func eligible(_ status: stat, at url: URL) -> Bool {
         guard status.st_mode & S_IFMT == S_IFREG, status.st_uid == getuid(),
               !TextContentReader.isDataless(status) else { return false }
-        var path = url.standardizedFileURL.path
-        let data = "/System/Volumes/Data/"
-        if path.hasPrefix(data) { path = "/" + path.dropFirst(data.count) }
-        let parts = path.split(separator: "/")
+        let parts = logicalComponents(at: url)
         guard let root = parts.first,
               !["System", "Library", "Applications", "private", "dev", "bin", "sbin", "usr", "etc", "var"].contains(root)
         else { return false }
         if root == "Users" {
-            let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
-            guard path.hasPrefix(home + "/"), !path.hasPrefix(home + "/Library/") else { return false }
+            let home = logicalComponents(at: FileManager.default.homeDirectoryForCurrentUser)
+            guard parts.starts(with: home), let first = parts.dropFirst(home.count).first,
+                  first != "Library" else { return false }
         }
         return !parts.dropLast().contains { part in
             let name = part.lowercased()
@@ -71,6 +69,12 @@ public struct CleanupCandidate: Sendable, Identifiable {
                     name.hasSuffix($0)
                 }
         }
+    }
+
+    private static func logicalComponents(at url: URL) -> ArraySlice<String> {
+        let components = url.standardizedFileURL.pathComponents
+        let dataRoot = ["/", "System", "Volumes", "Data"]
+        return components.dropFirst(components.starts(with: dataRoot) ? dataRoot.count : 1)
     }
 
     public func review() throws -> ReviewedFile {

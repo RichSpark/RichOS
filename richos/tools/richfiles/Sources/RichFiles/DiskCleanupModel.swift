@@ -94,7 +94,9 @@ final class DiskCleanupModel: ObservableObject {
     }
 
     var name: String {
-        if folder.path == "/" || folder.path == "/System/Volumes/Data" { return space?.volume.name ?? "This Mac" }
+        if folder.path == "/" || folder.pathComponents == ["/", "System", "Volumes", "Data"] {
+            return space?.volume.name ?? "This Mac"
+        }
         return folder.lastPathComponent
     }
     var canGoUp: Bool { !breadcrumbs.isEmpty }
