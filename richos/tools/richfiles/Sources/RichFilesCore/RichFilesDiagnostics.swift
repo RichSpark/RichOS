@@ -3,7 +3,7 @@ import Foundation
 
 public enum RichFilesDiagnostics {
     public enum Operation: String, Codable, Sendable {
-        case listing, copy, move, recovery, gitHistory, gitComparison
+        case listing, copy, move, recovery, gitHistory, gitComparison, windowPlacement
         case windowGestureAvailability, windowGestureMaximize, windowGestureRestore
         case windowGestureDockMinimize, windowGestureDockRestore, desktopDeleteShortcut
         case glanceCaptureFrame, glanceCaptureOutput, glanceCaptureSession, glanceScrollCapture
