@@ -15,6 +15,7 @@ final class Viewer {
     }
 
     let window: NSWindow
+    var pinImage: ((CGImage) -> Void)?
     private(set) var file: URL?
     private let canvas: Canvas
     var info: GlanceInfoView { canvas.info }
@@ -56,10 +57,13 @@ final class Viewer {
         case 53: window.performClose(nil)
         case 123: step(-1)
         case 124: step(1)
+        case 35: pinToScreen()
         default: return false
         }
         return true
     }
+
+    func pinToScreen() { if let image = canvas.pinBitmap { pinImage?(image) } }
 
     func show() {
         if window.isMiniaturized { window.deminiaturize(nil) }

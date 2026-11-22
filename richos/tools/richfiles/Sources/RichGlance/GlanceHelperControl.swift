@@ -10,8 +10,12 @@ enum GlanceHelperControl {
         let available: Bool
         let enabled: Bool
         let registered: Bool
+        let againRegistered: Bool
+        let textRegistered: Bool
         let running: Bool
         let shortcut: Shortcut
+        let againShortcut: Shortcut
+        let textShortcut: Shortcut
         let background: Bool
         let menuBar: Bool
         let service: String
@@ -83,28 +87,40 @@ enum GlanceHelperControl {
         @unknown default: name = "unavailable"
         }
         return Status(available: installed, enabled: preference.enabled, registered: endpoint?.registered == true,
-                      running: endpoint != nil, shortcut: preference.shortcut, background: preference.background, menuBar: preference.menuBar,
+                      againRegistered: endpoint?.againRegistered == true, textRegistered: endpoint?.textRegistered == true,
+                      running: endpoint != nil, shortcut: preference.shortcut,
+                      againShortcut: preference.againShortcut, textShortcut: preference.textShortcut, background: preference.background, menuBar: preference.menuBar,
                       service: name)
     }
 
-    static func setShortcut(_ shortcut: Shortcut, enabled: Bool) throws -> Status {
+    static func setShortcut(_ shortcut: Shortcut, enabled: Bool, for action: CaptureRequest.Action = .capture) throws -> Status {
         _ = try shortcut.carbon()
-        return try update { $0.shortcut = shortcut; $0.enabled = enabled }
+        return try update(requiring: action) {
+            $0[action] = shortcut
+            $0.enabled = enabled
+        }
     }
 
     static func setMenuBar(_ enabled: Bool) throws -> Status {
         try update { $0.menuBar = enabled }
     }
 
-    private static func update(_ change: (inout GlanceHelper.Preferences) -> Void) throws -> Status {
+    private static func update(requiring required: CaptureRequest.Action? = nil,
+                               _ change: (inout GlanceHelper.Preferences) -> Void) throws -> Status {
         guard installed else { throw GlanceHelper.Problem("The RichGlance capture helper could not be found in this installation.") }
         let lock = try store.lock("settings")
         defer { try? lock?.close() }
         let original = try store.read().preferences
         var next = original
         change(&next)
+        let actions: [CaptureRequest.Action] = [.capture, .captureAgain, .copyText]
+        for (index, action) in actions.enumerated() {
+            guard !actions[..<index].contains(where: { next[$0] == next[action] }) else {
+                throw GlanceHelper.Problem("That shortcut already belongs to another RichGlance action.")
+            }
+        }
         if shouldRunSession(next, loginEnabled: service.status == .enabled) { _ = try startSessionIfNeeded() }
-        let command = GlanceHelper.Request(.configure, preferences: next)
+        let command = GlanceHelper.Request(.configure, preferences: next, requiredShortcut: required)
         if try store.send(command) == nil { try store.write(next) }
         return try status()
     }

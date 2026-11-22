@@ -824,7 +824,7 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64, gestures: bo
                 | "windowPlacement" | "transferStall" | "cleanupScan" | "cleanupDuplicates" | "cleanupTrash" | "cleanupDelete"
                 | "openWithDiscovery"
                 | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata"
-                | "glanceCaptureFrame" | "glanceCaptureOutput" | "glanceCaptureSession" | "glanceScrollCapture"
+                | "glanceCaptureFrame" | "glanceCaptureOutput" | "glanceCaptureSession" | "glanceScrollCapture" | "glanceCompare" | "glanceOCR" | "glanceSearch" | "glancePin" | "glanceRedactedCopy" | "glanceShare"
                 | "glanceCaptureHelperStart" | "glanceCaptureHelperLogin" | "glanceCaptureShortcutLaunch" | "glanceCaptureMenuLaunch")
         };
         if id.len() != 36 || !id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
@@ -1183,6 +1183,7 @@ mod tests {
             "glanceCaptureFrame",
             "glanceCaptureSession",
             "glanceCaptureOutput",
+            "glanceCompare",
             "glanceScrollCapture",
             "glanceCaptureHelperStart",
             "glanceCaptureHelperLogin",
@@ -1240,6 +1241,7 @@ mod tests {
         assert!(timing.text.contains("operation=glanceCaptureFrame"));
         assert!(timing.text.contains("operation=glanceCaptureSession"));
         assert!(timing.text.contains("operation=glanceCaptureOutput"));
+        assert!(timing.text.contains("operation=glanceCompare"));
         for stage in ["glanceCaptureHelperStart", "glanceCaptureHelperLogin", "glanceCaptureShortcutLaunch", "glanceCaptureMenuLaunch"] {
             assert!(timing.text.contains(&format!("operation={stage}")));
         }

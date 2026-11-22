@@ -9,7 +9,7 @@ public enum RichFilesDiagnostics {
         case windowGestureDockMinimize, windowGestureDockRestore, desktopDeleteShortcut
         case windowGestureTile, windowGestureTileRestore
         case windowSwitcherList, windowSwitcherActivate
-        case glanceCaptureFrame, glanceCaptureOutput, glanceCaptureSession, glanceScrollCapture
+        case glanceCaptureFrame, glanceCaptureOutput, glanceCaptureSession, glanceScrollCapture, glanceCompare, glanceOCR, glanceSearch, glancePin, glanceRedactedCopy, glanceShare
         case glanceCaptureHelperStart, glanceCaptureHelperLogin, glanceCaptureShortcutLaunch, glanceCaptureMenuLaunch
         case glanceDisplay, glanceDecode, glanceFolder, glancePreview, glanceDefaults, glanceMetadata
 

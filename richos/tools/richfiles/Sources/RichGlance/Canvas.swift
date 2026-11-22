@@ -4,6 +4,7 @@ import RichFilesCore
 @MainActor
 final class Canvas: NSView {
     let info: GlanceInfoView
+    private(set) var pinBitmap: CGImage?
 
     private var viewport = GlanceViewport()
     private var image: NSImage?
@@ -42,6 +43,7 @@ final class Canvas: NSView {
 
     func show(_ decoded: GlanceImage?, filename: String, message: String? = nil) {
         info.reset(showIcon: decoded != nil)
+        pinBitmap = decoded?.bitmap
         image = decoded.map { NSImage(cgImage: $0.bitmap, size: $0.pointSize) }
         self.message = message
         setAccessibilityLabel(filename)
@@ -53,6 +55,7 @@ final class Canvas: NSView {
     }
 
     func showAnimationFrame(_ bitmap: CGImage) {
+        pinBitmap = bitmap
         image = NSImage(cgImage: bitmap, size: viewport.imageSize)
         needsDisplay = true
     }

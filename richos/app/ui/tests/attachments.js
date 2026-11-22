@@ -765,6 +765,27 @@ async function main() {
     await page.close();
   });
 
+  await run.check("14. a RichGlance handoff opens the chosen chat and stages a removable image without sending", async () => {
+    const page = await openApp(browser);
+    await openThread(page, "acme");
+    await page.evaluate(() => window.__RICHOS_MOCK__.offerGlanceDraft("capture-1", "hiring"));
+    await readyChips(page, 1);
+    const draft = await readTray(page);
+    assertEqual(draft.chips[0].name, "RichGlance Capture.png", "the offered capture appears");
+    assertEqual(draft.chips[0].thumb, true, "the rendered image has a preview");
+    const calls = await page.evaluate(() => window.__RICHOS_MOCK__.attachCalls());
+    assertEqual(calls.filter((call) => call.cmd === "glance_stage_attachment").map((call) => call.chatKey),
+      ["hiring"], "the chosen chat receives the draft");
+    assert(!calls.some((call) => call.cmd === "commit_attachments"), "handoff did not send");
+    await openThread(page, "acme");
+    assertEqual((await readTray(page)).chips.length, 0, "the starting chat has no draft image");
+    await openThread(page, "hiring");
+    await readyChips(page, 1);
+    await page.locator("#attach-list .attach-remove").click();
+    await readyChips(page, 0);
+    await page.close();
+  });
+
   const failed = run.report();
   await browser.close();
   process.exitCode = failed ? 1 : 0;

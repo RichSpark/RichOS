@@ -610,3 +610,4 @@
 [richos] launch engine check: watchers could not reach the app ({})
 [richos] native splash: could not attach the Home page ({})
 [richos] native splash: Home attachment could not reach the main thread ({})
+[richos] RichGlance draft handoff unavailable ({})

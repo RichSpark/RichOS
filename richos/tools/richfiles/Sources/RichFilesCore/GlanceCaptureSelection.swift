@@ -104,6 +104,16 @@ public struct GlanceCaptureSelection {
         second.y += y
     }
 
+    /// Prefill a fixed-size repeat selection whose position remains adjustable.
+    public mutating func restore(_ rect: CGRect) {
+        first = Point(x: Self.snap(rect.minX, to: width), y: Self.snap(rect.minY, to: height))
+        second = Point(x: Self.snap(rect.maxX, to: width), y: Self.snap(rect.maxY, to: height))
+        phase = canRestore ? .refining : .aiming
+        active = .second
+    }
+
+    private var canRestore: Bool { first.x != second.x && first.y != second.y }
+
     public mutating func toggleLens() { showsLens.toggle() }
 
     /// Discard a crop or its first corner without leaving the capture session.

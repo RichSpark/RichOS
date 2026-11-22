@@ -33,9 +33,12 @@ final class CaptureCanvas: NSView {
     }
     let image: CGImage
     private(set) var selection: GlanceCaptureSelection
+    private var fixedRepeat = false
+    var copiesText = false
     var copy: (() -> Void)?
     var edit: (() -> Void)?
     var save: (() -> Void)?
+    var pin: (() -> Void)?
     var scroll: ((Int) -> Void)? { didSet { scrollMenu.isHidden = scroll == nil } }
     var escape: (() -> Void)?
     var cancel: (() -> Void)?
@@ -61,6 +64,7 @@ final class CaptureCanvas: NSView {
     private let hint = NSTextField(labelWithString: "")
     private let copyButton = NSButton(title: "Copy Image", target: nil, action: nil)
     private let editButton = NSButton(title: "Open in Editor", target: nil, action: nil)
+    private let pinButton = NSButton(title: "Pin to Screen", target: nil, action: nil)
     private let saveButton = NSButton(title: "Save PNG…", target: nil, action: nil)
     private let retryButton = NSButton(title: "Back", target: nil, action: nil)
     private let scrollMenu = NSPopUpButton(frame: .zero, pullsDown: true)
@@ -96,7 +100,7 @@ final class CaptureCanvas: NSView {
         actionButtons.spacing = 6
         actions.addArrangedSubview(actionButtons)
         for (button, action) in [(copyButton, #selector(copyPressed)), (editButton, #selector(editPressed)),
-                                 (saveButton, #selector(savePressed)), (retryButton, #selector(startOver))] {
+                                 (saveButton, #selector(savePressed)), (pinButton, #selector(pinPressed)), (retryButton, #selector(startOver))] {
             button.target = self
             button.action = action
             button.bezelStyle = .rounded
@@ -120,7 +124,7 @@ final class CaptureCanvas: NSView {
             menu.font = .systemFont(ofSize: 16)
             menu.controlSize = .large
         }
-        for view in [copyButton, editButton, actionMenu, saveButton, scrollMenu, retryButton] {
+        for view in [copyButton, editButton, actionMenu, saveButton, pinButton, scrollMenu, retryButton] {
             actionButtons.addArrangedSubview(view)
         }
         controls.modeChanged = { [weak self] in self?.changeMode?($0) }
@@ -146,12 +150,28 @@ final class CaptureCanvas: NSView {
         returnAction = action
         originTitle = origin
         controls.update(mode: mode, delay: delay, includesPointer: pointer)
-        controls.isHidden = !active
-        copyButton.title = action == .copy ? "Copy Image ↩" : "Copy Image"
+        controls.isHidden = !active || copiesText
+        editButton.isHidden = copiesText
+        saveButton.isHidden = copiesText
+        pinButton.isHidden = copiesText
+        actionMenu.isHidden = copiesText
+        scrollMenu.isHidden = copiesText || scroll == nil
+        copyButton.title = copiesText ? "Copy Text ↩" : action == .copy ? "Copy Image ↩" : "Copy Image"
+        copyButton.setAccessibilityLabel(copiesText ? "Copy Text" : "Copy Image")
+        retryButton.title = copiesText ? "Adjust Area" : "Back"
         editButton.title = action == .editor ? "Open in Editor ↩" : "Open in Editor"
         actionMenu.item(at: 1)?.state = action == .copy ? .on : .off
         actionMenu.item(at: 2)?.state = action == .editor ? .on : .off
         applyAppearance()
+        refresh()
+    }
+
+    func prefillRepeat(_ regionSize: CGSize) {
+        let width = min(CGFloat(image.width), regionSize.width)
+        let height = min(CGFloat(image.height), regionSize.height)
+        let origin = CGPoint(x: (CGFloat(image.width) - width) / 2, y: (CGFloat(image.height) - height) / 2)
+        selection.restore(CGRect(origin: origin, size: CGSize(width: width, height: height)))
+        fixedRepeat = width == regionSize.width && height == regionSize.height
         refresh()
     }
 
@@ -194,7 +214,7 @@ final class CaptureCanvas: NSView {
         if selection.phase == .refining, let box = selection.crop {
             let local = convert(event.locationInWindow, from: nil)
             let handles = positions(geometry.viewRect(box))
-            if let index = handles.firstIndex(where: { hypot($0.x - local.x, $0.y - local.y) <= 10 }) {
+            if !fixedRepeat, let index = handles.firstIndex(where: { hypot($0.x - local.x, $0.y - local.y) <= 10 }) {
                 regionDrag = (source(event), selection, index)
             } else if geometry.viewRect(box).contains(local) {
                 regionDrag = (source(event), selection, 8)
@@ -259,12 +279,12 @@ final class CaptureCanvas: NSView {
         defer { needsDisplay = true }
         if modifiers == [.shift], event.keyCode == 36, mode == .region {
             if !event.isARepeat { selection.shiftReturn(); refresh(); focusAction() }
-        } else if modifiers == [.command], key == "s" {
+        } else if !copiesText, modifiers == [.command], key == "s" {
             if !event.isARepeat { save?() }
         } else if modifiers.isEmpty || modifiers == .option {
             let direction: [UInt16: (Int, Int)] = [123: (-1, 0), 124: (1, 0), 125: (0, 1), 126: (0, -1)]
             if let move = direction[event.keyCode], mode == .region {
-                if modifiers == .option { selection.translate(dx: move.0, dy: move.1) }
+                if modifiers == .option || fixedRepeat { selection.translate(dx: move.0, dy: move.1) }
                 else { selection.nudge(dx: move.0, dy: move.1) }
                 refresh()
                 return true
@@ -282,17 +302,18 @@ final class CaptureCanvas: NSView {
                     if mode != .region, !ready { chooseTarget?(nil) }
                     else { performReturn() }
                 }
-            case 49: if !event.isARepeat { changeMode?(mode.next) }
+            case 49: if !copiesText, !event.isARepeat { changeMode?(mode.next) }
             default:
                 guard ["m", "r", "t", "p", "c", "e", "s"].contains(key) else { return false }
                 guard !event.isARepeat else { return true }
+                if copiesText, !["m", "r", "c"].contains(key) { return true }
                 switch key {
                 case "m": if mode == .region { selection.toggleLens(); refresh() }
                 case "r": startOver()
                 case "t":
                     let values = [0, 3, 5, 10]
                     changeDelay?(values[((values.firstIndex(of: delay) ?? 0) + 1) % values.count])
-                case "p": changePointer?(!doesIncludePointer)
+                case "p": if ready { pin?() } else { changePointer?(!doesIncludePointer) }
                 case "c": copy?()
                 case "e": edit?()
                 default: if scroll != nil, ready { scrollMenu.performClick(nil) }
@@ -365,6 +386,7 @@ final class CaptureCanvas: NSView {
     @objc private func copyPressed() { copy?() }
     @objc private func editPressed() { edit?() }
     @objc private func savePressed() { save?() }
+    @objc private func pinPressed() { pin?() }
     @objc private func startOver() { if ready { escape?() } }
     @objc private func pickAction() {
         if actionMenu.indexOfSelectedItem > 0 { changeAction?(actionMenu.indexOfSelectedItem == 1 ? .copy : .editor) }
@@ -374,6 +396,7 @@ final class CaptureCanvas: NSView {
     }
 
     func resetSelection() -> Bool {
+        fixedRepeat = false
         guard let window else { return false }
         let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
         guard selection.discardSelection(at: geometry.sourcePoint(point)) else { return false }
@@ -413,7 +436,7 @@ final class CaptureCanvas: NSView {
             let verb = returnAction == .copy ? "copies" : "opens"
             let suffix = delay == 0 ? "" : " after \(delay) s"
             let route = returnAction == .copy && !originTitle.isEmpty ? " and takes you back to \(originTitle)" : ""
-            hint.stringValue = "Return \(verb) \(size)\(suffix)\(route)."
+            hint.stringValue = copiesText ? "Return copies text from this area." : "Return \(verb) \(size)\(suffix)\(route)."
             actions.frame = actionPlacement(around: area, avoiding: placement)
         }
         let controlsSize = controls.fittingSize

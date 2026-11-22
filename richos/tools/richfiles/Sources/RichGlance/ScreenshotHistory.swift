@@ -29,6 +29,7 @@ struct ScreenshotStore: Sendable {
         let edits: ScreenshotEdits
 
         let edited: Bool
+        let redactedGeneration: UUID?
 
         var redactions: Int { edits.marks.filter { $0.tool == .redact }.count }
     }
@@ -40,6 +41,7 @@ struct ScreenshotStore: Sendable {
         let kind: ScreenshotKind?
         let name: String?
         let edits: ScreenshotEdits
+        let redactedGeneration: UUID?
     }
 
     private let root: URL
@@ -62,6 +64,19 @@ struct ScreenshotStore: Sendable {
         }
     }
     var retention: Retention { readSetting("retention").flatMap(Retention.init(rawValue:)) ?? .week }
+    func lastRegion() -> ScreenshotRepeatTarget? {
+        guard let data = try? Data(contentsOf: root.appendingPathComponent("last-region.json")),
+              data.count <= 2048 else { return nil }
+        return try? JSONDecoder().decode(ScreenshotRepeatTarget.self, from: data)
+    }
+
+    func rememberRegion(_ region: ScreenshotRepeatTarget) throws {
+        try withLock {
+            let data = try JSONEncoder().encode(region)
+            try data.write(to: root.appendingPathComponent("last-region.json"), options: .atomic)
+        }
+    }
+
     var showsShelf: Bool { readSetting("shelf-visibility") != "closed" }
 
     func setShelfVisible(_ visible: Bool) throws {
@@ -105,9 +120,10 @@ struct ScreenshotStore: Sendable {
             let existing = try entriesWhileLocked(now: now)
             guard !retention.expires(document.created, at: now) else { return false }
             let destination = folder(document.id)
-            let record = Record(originalSize: document.bounds.size, created: document.created, scale: document.scale, kind: document.kind, name: document.name, edits: document.edits)
+            let record = record(for: document)
             let data = try JSONEncoder().encode(record)
-            if existing.contains(where: { $0.id == document.id }) {
+            if let item = existing.first(where: { $0.id == document.id }) {
+                guard item.redactedGeneration == document.redactedGeneration else { return false }
                 try data.write(to: destination.appendingPathComponent("Edits.json"), options: .atomic)
             } else {
                 guard !existingOnly else { return false }
@@ -130,17 +146,42 @@ struct ScreenshotStore: Sendable {
                   let fresh = try entriesWhileLocked(now: Date()).first(where: { $0.id == entry.id }),
                   let source = CGImageSourceCreateWithURL(folder(entry.id).appendingPathComponent("Original.png") as CFURL, nil),
                   let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
-            return ScreenshotDocument(original: image, scale: fresh.scale, kind: fresh.kind, id: fresh.id, created: fresh.created, name: fresh.name, edits: fresh.edits)
+            return ScreenshotDocument(original: image, scale: fresh.scale, kind: fresh.kind, id: fresh.id, created: fresh.created, name: fresh.name, edits: fresh.edits, redactedGeneration: fresh.redactedGeneration)
         }
     }
 
     func thumbnail(_ entry: Entry) -> CGImage? {
-        guard keepsHistory,
-              let source = CGImageSourceCreateWithURL(folder(entry.id).appendingPathComponent("Original.png") as CFURL, nil),
-              let sourceImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
-        let document = ScreenshotDocument(original: sourceImage, scale: entry.scale, kind: entry.kind,
-                                          id: entry.id, created: entry.created, edits: entry.edits)
+        guard let document = try? load(entry) else { return nil }
         return ScreenshotRenderer.thumbnail(document)
+    }
+
+    func keepOnlyRedacted(_ document: ScreenshotDocument) throws -> ScreenshotDocument {
+        guard document.hasRedactions, let image = ScreenshotRenderer.flattened(document),
+              let png = ScreenshotRenderer.png(image) else { throw CocoaError(.fileWriteUnknown) }
+        let clean = ScreenshotDocument(original: image, scale: document.scale, kind: document.kind,
+                                       id: document.id, created: document.created, name: document.name,
+                                       redactedGeneration: UUID())
+        return try withLock {
+            guard keepsHistory, let previous = try entriesWhileLocked(now: Date()).first(where: { $0.id == document.id }),
+                  previous.redactedGeneration == document.redactedGeneration else { throw CocoaError(.fileNoSuchFile) }
+            let stage = history.appendingPathComponent(".pending-\(UUID().uuidString)", isDirectory: true)
+            let target = folder(document.id)
+            try createPrivateDirectory(stage)
+            defer { try? files.removeItem(at: stage) }
+            try png.write(to: stage.appendingPathComponent("Original.png"), options: .atomic)
+            try JSONEncoder().encode(record(for: clean)).write(to: stage.appendingPathComponent("Edits.json"), options: .atomic)
+            guard renamex_np(stage.path, target.path, UInt32(RENAME_SWAP)) == 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+            try files.removeItem(at: stage)
+            return clean
+        }
+    }
+
+    private func record(for document: ScreenshotDocument) -> Record {
+        Record(originalSize: document.bounds.size, created: document.created, scale: document.scale,
+               kind: document.kind, name: document.name, edits: document.edits,
+               redactedGeneration: document.redactedGeneration)
     }
 
     func remove(_ id: UUID) throws {
@@ -174,7 +215,8 @@ struct ScreenshotStore: Sendable {
             } else {
                 entries.append(Entry(id: id, created: record.created, scale: record.scale, kind: record.kind ?? .region,
                                      name: record.name, edits: record.edits,
-                                     edited: record.originalSize.map { CGRect(origin: .zero, size: $0) != record.edits.crop } ?? false))
+                                     edited: record.originalSize.map { CGRect(origin: .zero, size: $0) != record.edits.crop } ?? false,
+                                     redactedGeneration: record.redactedGeneration))
             }
         }
         return entries.sorted { $0.created == $1.created ? $0.id.uuidString < $1.id.uuidString : $0.created > $1.created }

@@ -22,7 +22,9 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var captureNotice: NSPanel?
     private var noticeCapture: UUID?
     private let screenshotStore = ScreenshotStore()
+    private var lastRegionDocument: ScreenshotDocument?
     private var editor: ScreenshotEditor?
+    private var pins: [ScreenshotPin] = []
     private var captureLaunch = CommandLine.arguments.contains("--capture-request")
     private var launchOrigin = Application.launchOrigin()
 
@@ -70,9 +72,12 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if let request = CaptureRequest.consume(url) {
                 switch request.action {
                 case .capture: beginCapture(originPID: request.originPID)
+                case .captureAgain: beginCapture(originPID: request.originPID, repeatsRegion: true)
+                case .copyText: beginCapture(originPID: request.originPID, copiesText: true)
                 case .editor:
                     captureLaunch = false
                     openWithoutFile()
+                case .closePin: pins.first(where: { $0.id == request.pinID })?.close()
                 case .settings:
                     captureLaunch = false
                     openCaptureSettings()
@@ -103,13 +108,14 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
             DispatchQueue.global(qos: .utility).async { _ = try? store.entries() }
         }
         let arguments = CommandLine.arguments
-        guard captureLaunch, arguments.count >= 4, arguments[2] == "--retry-screen-recording",
+        guard captureLaunch, arguments.count >= 5, arguments[2] == "--retry-screen-recording",
               let originPID = pid_t(arguments[3]), capture == nil else { return }
-        if arguments.count == 5 {
+        if arguments.count == 6 {
             captureLaunch = false
-            open(URL(fileURLWithPath: arguments[4]), activate: originPID == 0)
+            open(URL(fileURLWithPath: arguments[5]), activate: originPID == 0)
         }
-        beginCapture(originPID: originPID > 0 ? originPID : nil)
+        beginCapture(originPID: originPID > 0 ? originPID : nil,
+                     repeatsRegion: arguments[4] == "again", copiesText: arguments[4] == "text")
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
@@ -133,10 +139,11 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        capture == nil && editor == nil
+        capture == nil && editor == nil && pins.isEmpty
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if sender is ScreenshotPin { return true }
         // Hand back foreground ownership before the last window disappears.
         if NSApp.isActive, let origin = returnTo, !origin.isTerminated {
             if #available(macOS 14, *) {
@@ -149,6 +156,11 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        if let pin = notification.object as? ScreenshotPin {
+            pins.removeAll { $0 === pin }
+            GlancePins.publish(pins.map(\.id))
+            return
+        }
         viewer?.stop()
         viewer = nil
         returnTo = nil
@@ -175,6 +187,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         launchOrigin = nil
         let viewer = self.viewer ?? Viewer(preferences: infoPreferences)
         self.viewer = viewer
+        viewer.pinImage = { [weak self] image in self?.pin(image, frame: nil, captureID: nil) }
         viewer.info.preferencesChanged = { [weak self] in self?.updateInfoShortcut() }
         openingPanel?.cancel(nil)
         viewer.window.delegate = self
@@ -214,6 +227,8 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc private func startCapture() { beginCapture(originPID: nil) }
+    @objc private func captureAgain() { beginCapture(originPID: nil, repeatsRegion: true) }
+    @objc private func copyRegionText() { beginCapture(originPID: nil, copiesText: true) }
 
     @objc private func openCaptureSettings() {
         if captureSettings == nil { captureSettings = BackgroundCaptureSettings() }
@@ -222,7 +237,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         else { NSApp.activate(ignoringOtherApps: true) }
     }
 
-    private func beginCapture(originPID: pid_t?, fromEditor: Bool = false) {
+    private func beginCapture(originPID: pid_t?, fromEditor: Bool = false, repeatsRegion: Bool = false, copiesText: Bool = false) {
         if let capture {
             capture.revisitPermission()
             return
@@ -236,11 +251,15 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         let origin = reliableOrigin ?? externalFrontmost
         let keyWindow = origin == nil && NSApp.isActive ? NSApp.keyWindow : nil
+        let baseline = repeatsRegion ? lastRegionBaseline() : nil
         let session = CaptureController(previousWindow: keyWindow,
                                         previousApp: origin ?? previousApplication, store: screenshotStore,
-                                        preferredAction: fromEditor ? .editor : nil, openEditor: { [weak self] document in
+                                        preferredAction: fromEditor ? .editor : nil, repeatsRegion: repeatsRegion, copiesText: copiesText, pinImage: { [weak self] document in
+            self?.pin(document.original, frame: document.screenRect, captureID: document.id)
+        }, openEditor: { [weak self] document in
+            if document.repeatTarget != nil { self?.lastRegionDocument = document }
             self?.showEditor(document, origin: origin ?? self?.previousApplication, previousWindow: keyWindow,
-                             newCapture: true)
+                             newCapture: true, baseline: baseline)
         },
                                         refreshPermission: { [weak self] session, originPID in
             self?.refreshCapturePermission(for: session, originPID: originPID)
@@ -254,6 +273,14 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         capture = session
         openingPanel?.cancel(nil)
         session.start()
+    }
+
+    private func lastRegionBaseline() -> ScreenshotDocument? {
+        guard let region = screenshotStore.lastRegion() else { return nil }
+        if let current = editor?.savedDocument(region.id) { return current }
+        if let lastRegionDocument, lastRegionDocument.id == region.id, !screenshotStore.keepsHistory { return lastRegionDocument }
+        guard let entry = try? screenshotStore.entries().first(where: { $0.id == region.id }) else { return nil }
+        return try? screenshotStore.load(entry)
     }
 
     private func refreshCapturePermission(for session: CaptureController, originPID: pid_t?) {
@@ -283,6 +310,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let helper = Process()
         helper.executableURL = executable
         var arguments = ["--reopen-after-screen-recording", String(getpid()), String(originPID ?? 0)]
+        arguments.append(session.copiesText ? "text" : session.repeatsRegion ? "again" : "capture")
         if let file = viewer?.file { arguments.append(file.path) }
         helper.arguments = arguments
         do {
@@ -309,7 +337,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 try? await Task.sleep(for: .milliseconds(25))
             }
             let configuration = NSWorkspace.OpenConfiguration()
-            configuration.activates = arguments[2] == "0" && arguments.count == 4
+            configuration.activates = arguments[2] == "0" && arguments.count == 5
             configuration.addsToRecentItems = false
             configuration.arguments = ["--capture-request", "--retry-screen-recording"] + arguments.dropFirst(2)
             do {
@@ -372,7 +400,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func endCaptureLaunch() {
-        if captureLaunch, viewer == nil, editor == nil {
+        if captureLaunch, viewer == nil, editor == nil, pins.isEmpty {
             RichFilesDiagnostics.flush()
             NSApp.terminate(nil)
         }
@@ -415,16 +443,22 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func showEditor(_ document: ScreenshotDocument?, origin: NSRunningApplication?, previousWindow: NSWindow?,
-                            newCapture: Bool = false) {
+                            newCapture: Bool = false, baseline: ScreenshotDocument? = nil) {
         captureLaunch = false
         if let editor {
-            if let document { editor.changeDocument(document, newCapture: newCapture) }
+            if let document { editor.changeDocument(document, newCapture: newCapture, baseline: baseline) }
             editor.show()
             return
         }
         let editor = ScreenshotEditor(store: screenshotStore)
         self.editor = editor
         editor.capture = { [weak self] in self?.beginCapture(originPID: nil, fromEditor: true) }
+        editor.captureAgain = { [weak self] in self?.captureAgain() }
+        editor.pinImage = { [weak self] image, id in self?.pin(image, frame: nil, captureID: id) }
+        editor.discardedOriginal = { [weak self] id in
+            for pin in self?.pins.filter({ $0.captureID == id }) ?? [] { pin.close() }
+            if self?.lastRegionDocument?.id == id { self?.lastRegionDocument = nil }
+        }
         editor.closed = { [weak self, weak previousWindow] in
             guard let self else { return }
             self.editor = nil
@@ -435,7 +469,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 else { _ = origin.activate(options: []) }
             }
         }
-        if let document { editor.changeDocument(document, newCapture: newCapture) }
+        if let document { editor.changeDocument(document, newCapture: newCapture, baseline: baseline) }
         editor.show()
     }
 
@@ -453,6 +487,20 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func saveScreenshot() { keyEditor?.saveImage() }
 
     @objc private func openInPreview() { viewer?.openInPreview() }
+
+    @objc private func pinViewer() { viewer?.pinToScreen() }
+
+    private func pin(_ image: CGImage, frame: CGRect?, captureID: UUID?) {
+        let started = ProcessInfo.processInfo.systemUptime
+        let pin = ScreenshotPin(image: image, anchoredAt: frame, captureID: captureID)
+        pin.delegate = self
+        pins.append(pin)
+        pin.orderFrontRegardless()
+        GlancePins.publish(pins.map(\.id))
+        RichFilesDiagnostics.record(.glancePin, id: UUID(), outcome: .complete, started: started, total: 1, confirmed: 1)
+    }
+
+    func applicationWillTerminate(_ notification: Notification) { GlancePins.publish([]) }
     @objc private func showInfo() { viewer?.info.toggleInfo() }
     @objc private func showInfoByDefault() { viewer?.info.toggleDefault() }
     @objc private func changeInfoShortcut() { viewer?.info.beginRecording() }
@@ -493,7 +541,10 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         file.submenu = fileMenu
         fileMenu.addItem(withTitle: "Open…", action: #selector(chooseImage), keyEquivalent: "o").target = self
         fileMenu.addItem(withTitle: "Open in Preview", action: #selector(openInPreview), keyEquivalent: "").target = self
+        fileMenu.addItem(withTitle: "Pin to Screen", action: #selector(pinViewer), keyEquivalent: "").target = self
         fileMenu.addItem(withTitle: "Capture…", action: #selector(startCapture), keyEquivalent: "").target = self
+        fileMenu.addItem(withTitle: "Capture Again", action: #selector(captureAgain), keyEquivalent: "").target = self
+        fileMenu.addItem(withTitle: "Copy Text from Screen…", action: #selector(copyRegionText), keyEquivalent: "").target = self
         let editLast = fileMenu.addItem(withTitle: "Edit Last Capture", action: #selector(editLastCapture), keyEquivalent: "e")
         editLast.keyEquivalentModifierMask = [.command, .shift]
         editLast.target = self

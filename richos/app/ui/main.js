@@ -4034,6 +4034,29 @@ if (window.RichAttachments) {
     },
     onChange: () => syncComposerMode(),
   });
+  Bridge.listen("rich://glance-draft", async ({ payload }) => {
+    if (!payload || typeof payload.requestId !== "string") return;
+    const requestId = payload.requestId;
+    const cancel = () => Bridge.invoke("glance_cancel_attachment", { requestId }).catch(() => {});
+    const add = async (key) => {
+      if (!await window.RichAttachments.addGlance(requestId, key)) await cancel();
+      else inputEl.focus({ preventScroll: true });
+    };
+    try {
+      if (homeIsUp()) window.RichHome.hide("glance-attachment");
+      if (payload.thread) {
+        await openThread(payload.thread);
+        await add(payload.thread);
+      } else {
+        openEntityPicker((entityId) => {
+          startNewChatIn(entityId);
+          void add(ENTITY_DRAFT_PREFIX + entityId);
+        }, { onCancel: cancel });
+      }
+    } catch {
+      await cancel();
+    }
+  });
   // THE PLUS (round 50/51): macOS's own file picker, directly; the caret is back in the box
   // when it closes, whatever he chose.
   attachAddBtn.addEventListener("click", async () => {
@@ -6766,6 +6789,7 @@ async function toggleEntityCollapsed(entityId) {
 // ---------------------------------------------------------------------------------------
 // Entity picker (§3.3) — asked BEFORE the first message, never defaulted (§21).
 // ---------------------------------------------------------------------------------------
+let entityPickerCancel = null;
 let entityPickerResolve = null;
 
 /// THE TITLE FOR EACH OF THE PICKER'S TWO JOBS, and they are two jobs rather than one.
@@ -6841,6 +6865,8 @@ function registryUnreadableLine(path) {
 const FIRST_RUN_ORDER = ["engine", "corpus", "company"];
 
 function openEntityPicker(onPick, opts) {
+  entityPickerCancel?.();
+  entityPickerCancel = null;
   // The company form is borrowed by "+ New chat or company"; closing that menu puts it back here.
   closeNewChatMenu();
   const forCompany = !!(opts && opts.forCompany);
@@ -6854,6 +6880,7 @@ function openEntityPicker(onPick, opts) {
     }
   }
   entityPickerResolve = onPick;
+  entityPickerCancel = opts?.onCancel || null;
   entityPickerTitleEl.textContent = forCompany ? PICKER_TITLE_COMPANY : PICKER_TITLE_THREAD;
   entityPickerNoteEl.textContent = forCompany ? PICKER_NOTE_COMPANY : "";
   entityPickerNoteEl.hidden = !forCompany;
@@ -6895,6 +6922,7 @@ function openEntityPicker(onPick, opts) {
     b.appendChild(meta);
     b.addEventListener("click", () => {
       const pick = entityPickerResolve;
+      entityPickerCancel = null;
       closeEntityPicker();
       if (pick) pick(group.entity.id);
     });
@@ -6911,6 +6939,9 @@ function openEntityPicker(onPick, opts) {
 }
 
 function closeEntityPicker() {
+  const cancel = entityPickerCancel;
+  entityPickerCancel = null;
+  cancel?.();
   entityPickerEl.hidden = true;
   entityPickerResolve = null;
 }

@@ -24,6 +24,7 @@ private struct BackgroundCaptureSettingsView: View {
     @State private var busy = false
     @State private var feedback = ""
     @State private var monitor: Any?
+    @State private var recording: CaptureRequest.Action?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -41,15 +42,9 @@ private struct BackgroundCaptureSettingsView: View {
                 guard let shortcut = status?.shortcut else { return }
                 update { try GlanceHelperControl.setShortcut(shortcut, enabled: value) }
             }))
-            HStack {
-                Text(monitor == nil ? status?.shortcut.label ?? "" : "Press the new shortcut. Esc to cancel.")
-                    .monospacedDigit()
-                Spacer()
-                Button(monitor == nil ? "Change…" : "Cancel") {
-                    if monitor == nil { recordShortcut() }
-                    else { stopRecording() }
-                }
-            }
+            shortcutRow("Capture Region", action: .capture, shortcut: status?.shortcut)
+            shortcutRow("Capture Again", action: .captureAgain, shortcut: status?.againShortcut)
+            shortcutRow("Copy Text", action: .copyText, shortcut: status?.textShortcut)
             if status?.service == "approval" || status?.service == "unavailable" {
                 Text("Allow RichGlance Capture in Login Items to use it when RichOS is quit.")
                 Button("Open Login Items Settings") { SMAppService.openSystemSettingsLoginItems() }
@@ -87,7 +82,35 @@ private struct BackgroundCaptureSettingsView: View {
         }
     }
 
-    private func recordShortcut() {
+    private func shortcutRow(_ title: String, action: CaptureRequest.Action,
+                              shortcut: GlanceHelper.Shortcut?) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            if status?.enabled == true, status?.running == true, !registered(action), recording != action {
+                Text("Unavailable").foregroundStyle(.secondary)
+            }
+            Text(recording == action ? "Press a shortcut" : shortcut?.label ?? "")
+                .monospacedDigit()
+            Button(recording == action ? "Cancel" : "Change…") {
+                if recording == action { stopRecording() }
+                else { stopRecording(); recordShortcut(for: action) }
+            }
+            .accessibilityLabel(recording == action ? "Cancel recording" : "Change \(title) shortcut")
+        }
+    }
+
+    private func registered(_ action: CaptureRequest.Action) -> Bool {
+        switch action {
+        case .capture: status?.registered == true
+        case .captureAgain: status?.againRegistered == true
+        case .copyText: status?.textRegistered == true
+        default: false
+        }
+    }
+
+    private func recordShortcut(for action: CaptureRequest.Action) {
+        recording = action
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let keyCode = event.keyCode
             let repeatKey = event.isARepeat
@@ -105,7 +128,7 @@ private struct BackgroundCaptureSettingsView: View {
                 catch { feedback = error.localizedDescription; return }
                 let enabled = status?.enabled == true
                 stopRecording()
-                update { try GlanceHelperControl.setShortcut(shortcut, enabled: enabled) }
+                update { try GlanceHelperControl.setShortcut(shortcut, enabled: enabled, for: action) }
             }
             return nil
         }
@@ -114,5 +137,6 @@ private struct BackgroundCaptureSettingsView: View {
     private func stopRecording() {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
+        recording = nil
     }
 }

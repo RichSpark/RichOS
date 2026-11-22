@@ -2,7 +2,7 @@ import AppKit
 import ImageIO
 import UniformTypeIdentifiers
 
-enum ScreenshotTool: String, CaseIterable, Codable {
+enum ScreenshotTool: String, CaseIterable, Codable, Sendable {
     case select, arrow, text, box, highlight, steps, redact, crop
 
     var title: String { rawValue.capitalized }
@@ -33,7 +33,7 @@ enum ScreenshotTool: String, CaseIterable, Codable {
     }
 }
 
-enum ScreenshotInk: String, CaseIterable, Codable {
+enum ScreenshotInk: String, CaseIterable, Codable, Sendable {
     case red, yellow, blue, black
 
     var color: NSColor {
@@ -48,7 +48,7 @@ enum ScreenshotInk: String, CaseIterable, Codable {
     var outline: NSColor { self == .yellow ? ScreenshotRenderer.ink : .white }
 }
 
-struct ScreenshotMark: Codable, Equatable, Identifiable {
+struct ScreenshotMark: Codable, Equatable, Identifiable, Sendable {
     var id = UUID()
     var tool: ScreenshotTool
     var start: CGPoint
@@ -67,7 +67,7 @@ struct ScreenshotMark: Codable, Equatable, Identifiable {
     }
 }
 
-struct ScreenshotEdits: Codable, Equatable {
+struct ScreenshotEdits: Codable, Equatable, Sendable {
     var crop: CGRect
     var marks: [ScreenshotMark] = []
 
@@ -83,7 +83,7 @@ struct ScreenshotEdits: Codable, Equatable {
     }
 }
 
-enum ScreenshotKind: String, Codable {
+enum ScreenshotKind: String, Codable, Sendable {
     case region, window, display, scrolling
     var title: String { self == .scrolling ? "Scrolling capture" : rawValue.capitalized }
     var symbol: String {
@@ -96,7 +96,7 @@ enum ScreenshotKind: String, Codable {
     }
 }
 
-struct ScreenshotDocument {
+struct ScreenshotDocument: Sendable {
     let id: UUID
     let created: Date
     let original: CGImage
@@ -104,15 +104,20 @@ struct ScreenshotDocument {
     let kind: ScreenshotKind
     let name: String?
     var edits: ScreenshotEdits
+    var repeatTarget: ScreenshotRepeatTarget?
+    var screenRect: CGRect?
+    var redactedGeneration: UUID?
 
     init(original: CGImage, scale: CGFloat, kind: ScreenshotKind = .region,
-         id: UUID = UUID(), created: Date = Date(), name: String? = nil, edits: ScreenshotEdits? = nil) {
+         id: UUID = UUID(), created: Date = Date(), name: String? = nil, edits: ScreenshotEdits? = nil,
+         redactedGeneration: UUID? = nil) {
         self.id = id
         self.created = created
         self.original = original
         self.scale = max(1, scale)
         self.kind = kind
         self.name = name
+        self.redactedGeneration = redactedGeneration
         self.edits = edits ?? ScreenshotEdits(crop: CGRect(x: 0, y: 0, width: original.width, height: original.height))
     }
 
@@ -131,6 +136,12 @@ enum ScreenshotRenderer {
 
     static func flattened(_ document: ScreenshotDocument) -> CGImage? {
         render(document, crop: document.crop, scale: 1)
+    }
+
+    static func forComparison(_ document: ScreenshotDocument) -> CGImage? {
+        var covered = document
+        covered.edits.marks = document.edits.marks.filter { $0.tool == .redact }
+        return flattened(covered)
     }
 
     static func thumbnail(_ document: ScreenshotDocument) -> CGImage? {

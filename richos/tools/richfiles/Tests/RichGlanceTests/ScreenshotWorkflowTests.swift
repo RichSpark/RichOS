@@ -1,5 +1,6 @@
 import AppKit
 import ImageIO
+import RichFilesCore
 import XCTest
 @testable import RichGlance
 
@@ -68,6 +69,45 @@ final class ScreenshotWorkflowTests: XCTestCase {
         XCTAssertEqual(try sample(decoded, x: 0, y: 0), try sample(original, x: 2, y: 1))
         XCTAssertEqual(try sample(decoded, x: 8, y: 6), try sample(original, x: 10, y: 7))
         XCTAssertNotEqual(try sample(original, x: 5, y: 4), [12, 19, 34, 255])
+    }
+
+    func testRepeatedDragsWriteSeparateFlattenedPNGs() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("glance-drag-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = GlanceHelper.Store(support: root)
+        var document = ScreenshotDocument(original: try fixture(), scale: 2)
+        document.edits.crop = CGRect(x: 2, y: 1, width: 9, height: 7)
+        document.edits.marks = [ScreenshotMark(tool: .redact, start: CGPoint(x: 4, y: 2), end: CGPoint(x: 9, y: 7))]
+        let files = try (1...3).map { _ in try ScreenshotDrag.write(document, store: store) }
+        XCTAssertEqual(Set(files).count, 3)
+        let expected = try XCTUnwrap(ScreenshotRenderer.flattened(document).flatMap(ScreenshotRenderer.png))
+        for file in files {
+            XCTAssertEqual(try Data(contentsOf: file), expected)
+        }
+    }
+
+    func testKeepRedactedReplacesStoredOriginalAndRefusesStaleEditCommit() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("glance-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ScreenshotStore(root: root)
+        var original = ScreenshotDocument(original: try fixture(), scale: 2)
+        original.edits.crop = CGRect(x: 2, y: 1, width: 9, height: 7)
+        original.edits.marks = [ScreenshotMark(tool: .redact, start: CGPoint(x: 4, y: 2), end: CGPoint(x: 9, y: 7))]
+        XCTAssertTrue(try store.retain(original))
+        let entry = try XCTUnwrap(store.entries().first)
+        let clean = try store.keepOnlyRedacted(original)
+        XCTAssertNotNil(clean.redactedGeneration)
+        XCTAssertFalse(try store.retain(original, existingOnly: true))
+        let reopened = try XCTUnwrap(store.load(entry))
+        XCTAssertEqual(reopened.id, original.id)
+        XCTAssertEqual(reopened.created, original.created)
+        XCTAssertEqual(reopened.bounds.size, CGSize(width: 9, height: 7))
+        XCTAssertTrue(reopened.edits.marks.isEmpty)
+        XCTAssertEqual(try sample(reopened.original, x: 4, y: 4), [12, 19, 34, 255])
+        let rootContents = try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("Recent Captures").path)
+        XCTAssertEqual(rootContents, [original.id.uuidString])
+        try store.remove(original.id)
+        XCTAssertNil(try store.load(entry))
     }
 
     func testStepOrderIsEditableAndContiguousAfterDeletion() async throws {
