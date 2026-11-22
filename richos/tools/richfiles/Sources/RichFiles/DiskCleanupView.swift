@@ -758,20 +758,24 @@ struct DiskCleanupView: View {
     private var rightContents: some View {
         VStack(alignment: .leading, spacing: 10) {
             if model.inTrash {
-                Text(model.deletedAllocated != nil || model.observedChange != nil ? "Space released" : "In Trash")
+                Text(trashResultTitle)
                     .font(.system(size: 23 * scale, design: .serif))
                 if let bytes = model.deletedAllocated { fact("Deleted (allocated)", formattedBytes(bytes)) }
                 if !model.moved.isEmpty { fact("In Trash, still on the disk", formattedBytes(model.trashBytes)) }
                 if let before = model.availableBeforeDeletion {
                     fact("Available before clearing", formattedBytes(before))
-                    fact("Available now", available)
+                }
+                if let after = model.availableAfterDeletion {
+                    fact("Available after clearing", formattedBytes(after))
                 }
                 rule
                 fact("Observed change", model.measuringSpace ? "Measuring…" : model.observedChange.map(signedBytes) ?? "None measured yet")
                 if model.observedChange != nil {
                     Text("Shared blocks, snapshots and other disk activity can affect the measured change.")
                         .foregroundStyle(palette.hint)
-                } else {
+                } else if model.deletedCount > 0 && !model.measuringSpace {
+                    Text("Available space could not be measured for this deletion.").foregroundStyle(palette.hint)
+                } else if model.deletedCount == 0 {
                     Text("Moving items to Trash keeps them recoverable and leaves them on the disk.")
                         .foregroundStyle(palette.hint)
                 }
@@ -808,6 +812,11 @@ struct DiskCleanupView: View {
                     .foregroundStyle(palette.hint)
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var trashResultTitle: String {
+        if let change = model.observedChange, change > 0 { return "Space released" }
+        return model.deletedCount > 0 ? "Items deleted" : "In Trash"
     }
 
     private func fact(_ name: String, _ value: String) -> some View {

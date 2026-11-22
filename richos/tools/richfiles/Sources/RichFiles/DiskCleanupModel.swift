@@ -31,7 +31,7 @@ final class DiskCleanupModel: ObservableObject {
         let identity: FileIdentity
 
         init(_ location: URL) throws {
-            volume = try VolumeInfo(containing: location)
+            volume = try VolumeInfo(containing: URL(fileURLWithPath: location.path))
             // The mount root has no parent entry to pin with FileReference.
             identity = try FileEntry(url: volume.url).identity
         }
@@ -56,8 +56,10 @@ final class DiskCleanupModel: ObservableObject {
     @Published private(set) var trashSizes: [String: Int64] = [:]
     @Published private(set) var trashStatus = ""
     @Published private(set) var observedChange: Int64?
+    @Published private(set) var deletedCount = 0
     @Published private(set) var deletedAllocated: Int64?
     @Published private(set) var availableBeforeDeletion: Int64?
+    @Published private(set) var availableAfterDeletion: Int64?
     @Published private(set) var measuringSpace = false
     @Published private(set) var preparing = false
     @Published private(set) var notice = ""
@@ -525,8 +527,10 @@ final class DiskCleanupModel: ObservableObject {
                 let effect = entries.filter { $0.reference.map { removed.contains($0.url) } == true }
                 let selectedSizes = effect.compactMap { sizes[$0.id] }
                 if !effect.isEmpty {
+                    self.deletedCount = effect.count
                     self.deletedAllocated = selectedSizes.count == effect.count ? Self.total(selectedSizes) : nil
                     self.availableBeforeDeletion = before?.identity == volume?.identity ? before?.volume.availableBytes : nil
+                    self.availableAfterDeletion = nil
                 }
                 let records = Set(effect.compactMap { $0.known?.id })
                 self.deleted.append(contentsOf: self.moved.filter { records.contains($0.receipt.id) }.map(\.candidate))
@@ -547,7 +551,19 @@ final class DiskCleanupModel: ObservableObject {
 
     private func measureChange(before: Space?, started: TimeInterval, count: Int, removed: Int) {
         measuringSpace = true
-        let worker = Task.detached(priority: .utility) { before.flatMap { try? Space($0.volume.url) } }
+        let worker = Task.detached(priority: .utility) { () -> Space? in
+            guard let before, let original = before.volume.availableBytes else { return nil }
+            var result: Space?
+            // The filesystem can report the previous capacity immediately after a deletion.
+            for delay in [0, 180, 480] {
+                if delay > 0 { try? await Task.sleep(for: .milliseconds(delay)) }
+                guard !Task.isCancelled, let current = try? Space(before.volume.url),
+                      current.identity == before.identity else { return nil }
+                result = current
+                if let bytes = current.volume.availableBytes, bytes > original { break }
+            }
+            return result
+        }
         Task { [weak self] in
             let after = await worker.value
             guard let self else { return }
@@ -556,6 +572,7 @@ final class DiskCleanupModel: ObservableObject {
                after.identity == self.transactionSpace?.identity {
                 self.transactionSpace = after
                 if let first = before.volume.availableBytes, let last = after.volume.availableBytes {
+                    self.availableAfterDeletion = last
                     self.observedChange = last - first
                 }
             }

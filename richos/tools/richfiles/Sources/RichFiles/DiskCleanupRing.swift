@@ -309,12 +309,12 @@ final class CleanupRingView: NSView {
             var labels: [CGRect] = []
             for slice in shown.prefix(6) {
                 guard let anchor = chips[slice.id], bounds.insetBy(dx: 10, dy: 16).contains(anchor) else { continue }
-                let x = min(bounds.width - 95, max(95, anchor.x))
+                let x = min(bounds.width - 95, max(113, anchor.x))
                 var y = anchor.y - 10
-                var rect = CGRect(x: x - 88, y: y - 22, width: 176, height: 43)
-                while labels.contains(where: { $0.intersects(rect) }) && y > 70 {
-                    y -= 44
-                    rect.origin.y = y - 22
+                var rect = CGRect(x: x - 88, y: y - 26, width: 176, height: 51)
+                while labels.contains(where: { $0.intersects(rect) }) && y > 80 {
+                    y -= 52
+                    rect.origin.y = y - 26
                 }
                 guard bounds.insetBy(dx: 2, dy: 2).contains(rect) else { continue }
                 labels.append(rect)
@@ -326,8 +326,8 @@ final class CleanupRingView: NSView {
                 case .deleted: "Deleted · \(formattedBytes(slice.bytes))"
                 default: "\(formattedBytes(slice.bytes)) · \(slice.days) days"
                 }
-                text(slice.name, at: CGPoint(x: x, y: y - 9), width: 165, ink: ink, bold: true)
-                text(detail, at: CGPoint(x: x, y: y + 10), width: 165, ink: muted)
+                text(slice.name, at: CGPoint(x: x, y: y - 10), width: 162, ink: ink, size: 16, bold: true)
+                text(detail, at: CGPoint(x: x, y: y + 10), width: 162, ink: muted, size: 16)
             }
         }
     }
@@ -361,7 +361,7 @@ final class CleanupRingView: NSView {
         paragraph.lineBreakMode = .byTruncatingTail
         let font = NSFont.systemFont(ofSize: size, weight: bold ? .semibold : .regular)
         (label as NSString).draw(with: CGRect(x: point.x - width / 2, y: point.y - size / 2 - 1,
-            width: width, height: size + 4), options: [.truncatesLastVisibleLine],
+            width: width, height: size + 5), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
             attributes: [.foregroundColor: ink, .font: font, .paragraphStyle: paragraph])
     }
 
