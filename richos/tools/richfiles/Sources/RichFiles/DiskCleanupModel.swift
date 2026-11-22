@@ -3,6 +3,20 @@ import Darwin
 import RichFilesCore
 import SwiftUI
 
+struct CleanupSpaceChange: Equatable {
+    let before: Int64
+    let after: Int64
+    let deletedAllocated: Int64?
+
+    var observed: Int64 { after - before }
+    var canCountUp: Bool { after > before }
+    var releasedAllocation: Int64? { deletedAllocated.map { min($0, max(0, observed)) } }
+    var unaccounted: Int64? {
+        guard let deletedAllocated, let releasedAllocation else { return nil }
+        return deletedAllocated - releasedAllocation
+    }
+}
+
 @MainActor
 final class DiskCleanupModel: ObservableObject {
     enum Filter: String, CaseIterable {
@@ -55,7 +69,6 @@ final class DiskCleanupModel: ObservableObject {
     @Published private(set) var trashEntries: [TrashListEntry] = []
     @Published private(set) var trashSizes: [String: Int64] = [:]
     @Published private(set) var trashStatus = ""
-    @Published private(set) var observedChange: Int64?
     @Published private(set) var deletedCount = 0
     @Published private(set) var deletedAllocated: Int64?
     @Published private(set) var availableBeforeDeletion: Int64?
@@ -106,6 +119,11 @@ final class DiskCleanupModel: ObservableObject {
     var batchBytes: Int64 { Self.total(batch.map(\.candidate.allocated)) }
     var trashBytes: Int64 { Self.total(moved.map(\.candidate.allocated)) }
     var availableBytes: Int64? { (inTrash ? transactionSpace : space)?.volume.availableBytes }
+    var capacityChange: CleanupSpaceChange? {
+        guard let before = availableBeforeDeletion, let after = availableAfterDeletion else { return nil }
+        return CleanupSpaceChange(before: before, after: after, deletedAllocated: deletedAllocated)
+    }
+    var observedChange: Int64? { capacityChange?.observed }
     var selectedTrash: [TrashListEntry] {
         trashEntries.filter { trashSelection.contains($0.id) && $0.canDelete && $0.reference != nil }
     }
@@ -395,10 +413,17 @@ final class DiskCleanupModel: ObservableObject {
             let task = self.actions.trashReviewed(next.map(\.reviewed), keeping: keepers) { [weak self] items, failures in
                 guard let self else { return }
                 let originals = Dictionary(uniqueKeysWithValues: next.map { ($0.reviewed.reference.url, $0.candidate) })
-                self.moved.append(contentsOf: items.compactMap { receipt in
-                    originals[receipt.originalURL].map { Moved(receipt: receipt, candidate: $0) }
-                })
                 if !items.isEmpty {
+                    if self.moved.isEmpty {
+                        self.deleted = []
+                        self.deletedCount = 0
+                        self.deletedAllocated = nil
+                        self.availableBeforeDeletion = nil
+                        self.availableAfterDeletion = nil
+                    }
+                    self.moved.append(contentsOf: items.compactMap { receipt in
+                        originals[receipt.originalURL].map { Moved(receipt: receipt, candidate: $0) }
+                    })
                     self.trashDevice = first.reviewed.reference.identity.device
                     self.transactionSpace = before
                 }
@@ -533,7 +558,9 @@ final class DiskCleanupModel: ObservableObject {
                     self.availableAfterDeletion = nil
                 }
                 let records = Set(effect.compactMap { $0.known?.id })
-                self.deleted.append(contentsOf: self.moved.filter { records.contains($0.receipt.id) }.map(\.candidate))
+                if !effect.isEmpty {
+                    self.deleted = self.moved.filter { records.contains($0.receipt.id) }.map(\.candidate)
+                }
                 self.moved.removeAll { records.contains($0.receipt.id) }
                 self.notice = self.actions.status
                 self.loadTrash()
@@ -541,7 +568,6 @@ final class DiskCleanupModel: ObservableObject {
                     RichFilesDiagnostics.record(.cleanupDelete, id: UUID(), outcome: .issues,
                                                 started: start, total: refs.count, confirmed: 0)
                 } else {
-                    self.observedChange = nil
                     self.measureChange(before: before, started: start, count: refs.count, removed: effect.count)
                 }
             }
@@ -571,10 +597,7 @@ final class DiskCleanupModel: ObservableObject {
             if let before, let after, before.identity == after.identity,
                after.identity == self.transactionSpace?.identity {
                 self.transactionSpace = after
-                if let first = before.volume.availableBytes, let last = after.volume.availableBytes {
-                    self.availableAfterDeletion = last
-                    self.observedChange = last - first
-                }
+                self.availableAfterDeletion = after.volume.availableBytes
             }
             RichFilesDiagnostics.record(.cleanupDelete, id: UUID(),
                 outcome: removed < count ? .issues : self.observedChange == nil ? .unavailable : .complete,

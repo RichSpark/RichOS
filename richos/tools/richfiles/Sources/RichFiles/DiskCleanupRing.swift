@@ -3,7 +3,7 @@ import RichFilesCore
 import SwiftUI
 
 struct CleanupRingSlice: Equatable, Identifiable {
-    enum Disposition: Equatable { case live, reviewed, trash, deleted }
+    enum Disposition: Equatable { case live, reviewed, trash, deleted, released, unaccounted }
 
     let id: URL
     let name: String
@@ -14,6 +14,20 @@ struct CleanupRingSlice: Equatable, Identifiable {
     let disposition: Disposition
 
     var interactive: Bool { disposition == .live || disposition == .reviewed }
+
+    static func deletionResult(_ change: CleanupSpaceChange) -> [Self] {
+        guard let released = change.releasedAllocation, let unaccounted = change.unaccounted else { return [] }
+        var result: [Self] = []
+        if released > 0 {
+            result.append(Self(id: URL(string: "richfiles-cleanup:released")!, name: "Space released",
+                               kind: .document, bytes: released, days: 0, folder: false, disposition: .released))
+        }
+        if unaccounted > 0 {
+            result.append(Self(id: URL(string: "richfiles-cleanup:unaccounted")!, name: "Unaccounted for",
+                               kind: .document, bytes: unaccounted, days: 0, folder: false, disposition: .unaccounted))
+        }
+        return result
+    }
 
     static func color(_ kind: CleanupCandidate.Kind, dark: Bool) -> NSColor {
         let value: UInt32 = switch kind {
@@ -35,6 +49,7 @@ struct CleanupRingSlice: Equatable, Identifiable {
 
 struct DiskCleanupRing: NSViewRepresentable {
     let slices: [CleanupRingSlice]
+    var settledSlices: [CleanupRingSlice]? = nil
     let raised: Bool
     let dark: Bool
     let selected: URL?
@@ -82,6 +97,7 @@ final class CleanupRingView: NSView {
 
     private var input: DiskCleanupRing?
     private var sectors: [Sector] = []
+    private var settledSectors: [Sector]?
     private var hitTargets: [Target] = []
     private var hover: URL?
     private var zoomTarget: URL?
@@ -122,6 +138,9 @@ final class CleanupRingView: NSView {
 
     func update(_ next: DiskCleanupRing) {
         let changed = input?.slices != next.slices
+        if input?.settledSlices != next.settledSlices {
+            settledSectors = next.settledSlices.map(Self.layout)
+        }
         input = next
         if latestReset != next.resetZoom {
             latestReset = next.resetZoom
@@ -216,6 +235,7 @@ final class CleanupRingView: NSView {
             outline.withAlphaComponent(0.42 * raised).setStroke()
             floor.stroke()
         }
+        let sectors = sink == 1 ? (settledSectors ?? self.sectors) : self.sectors
         guard !sectors.isEmpty else {
             text("No measured items", at: center, width: bounds.width - 20, ink: muted)
             return
@@ -227,7 +247,12 @@ final class CleanupRingView: NSView {
             let increment = (sector.end - sector.start) / Double(steps)
             let rise = ease(max(0, min(1, lift * 1.65 - 0.65 * Double(index) / Double(sectors.count))))
             let days = Double(max(0, min(420, sector.slice.days)))
-            let height = (4 + days / 420 * 62) * rise * (sector.slice.disposition == .deleted ? 1 - ease(sink) : 1)
+            let heightScale: Double = switch sector.slice.disposition {
+            case .deleted: 1 - ease(sink)
+            case .released, .unaccounted: 0
+            default: 1
+            }
+            let height = (4 + days / 420 * 62) * rise * heightScale
             for index in 0..<steps {
                 let start = sector.start + Double(index) * increment
                 let end = start + increment
@@ -245,10 +270,13 @@ final class CleanupRingView: NSView {
             let inner = 53.0
             let viewer = slice.id == input.selected || slice.id == hover
             let faded = slice.disposition == .trash
-            let freed = slice.disposition == .deleted && sink > 0.95
+            let flatResult = slice.disposition == .released || slice.disposition == .unaccounted ||
+                (slice.disposition == .deleted && sink > 0.95)
             let hue = switch slice.disposition {
             case .live: CleanupRingSlice.color(slice.kind, dark: dark)
-            case .reviewed, .deleted: signal
+            case .reviewed, .released: signal
+            case .deleted: sink > 0.95 ? outline : signal
+            case .unaccounted: CleanupRingSlice.rgb(dark ? 0xd69b6a : 0x8b541c)
             case .trash: outline
             }
             let tint = viewer ? hue.blended(withFraction: 0.18, of: dark ? .white : .black) ?? hue : hue
@@ -263,10 +291,13 @@ final class CleanupRingView: NSView {
             let top = [project(inner, a, topZ), project(radius, a, topZ),
                        project(radius, b, topZ), project(inner, b, topZ)]
             if tile.index == tile.count / 2 { chips[slice.id] = project(radius + 5, (a + b) / 2, topZ) }
-            if freed {
-                face(top, shade: 0, alpha: 0.12)
-                stroke([top[1], top[2]], color: signal, width: 1.6, dashed: true)
-                stroke([top[0], top[3]], color: signal, width: 1.6, dashed: true)
+            if flatResult {
+                let released = slice.disposition == .released
+                face(top, shade: 0, alpha: released ? 0.12 : 0.22)
+                stroke([top[1], top[2]], color: hue, width: 1.6, dashed: !released)
+                stroke([top[0], top[3]], color: hue, width: 1.6, dashed: !released)
+                if tile.index == 0 { stroke([top[0], top[1]], color: hue, width: 1.6, dashed: !released) }
+                if tile.index == tile.count - 1 { stroke([top[2], top[3]], color: hue, width: 1.6, dashed: !released) }
                 continue
             }
             let alpha = faded ? 0.42 : 1.0
@@ -305,8 +336,9 @@ final class CleanupRingView: NSView {
             }
         }
         if bounds.width > 350 {
-            let prominent = input.slices.filter(\.interactive).prefix(3).map(\.id)
-            let shown = input.slices.filter { $0.id == input.selected || $0.id == hover ||
+            let slices = sectors.map(\.slice)
+            let prominent = slices.filter(\.interactive).prefix(3).map(\.id)
+            let shown = slices.filter { $0.id == input.selected || $0.id == hover ||
                 (raised > 0.65 && zoom < 1.08 && (prominent.contains($0.id) || !$0.interactive)) }
             var labels: [CGRect] = []
             for slice in shown.prefix(6) {
@@ -326,6 +358,7 @@ final class CleanupRingView: NSView {
                 let detail = switch slice.disposition {
                 case .trash: "In Trash · \(formattedBytes(slice.bytes))"
                 case .deleted: "Deleted · \(formattedBytes(slice.bytes))"
+                case .released, .unaccounted: formattedBytes(slice.bytes)
                 default: "\(formattedBytes(slice.bytes)) · \(slice.days) days"
                 }
                 text(slice.name, at: CGPoint(x: x, y: y - 10), width: 162, ink: ink, size: 16, bold: true)

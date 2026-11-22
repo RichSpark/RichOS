@@ -2,6 +2,19 @@ import AppKit
 import RichFilesCore
 import SwiftUI
 
+struct CleanupCapacityLabel: View, Animatable {
+    var bytes: Double
+
+    var animatableData: Double {
+        get { bytes }
+        set { bytes = newValue }
+    }
+
+    var displayedBytes: Int64 { Int64(clamping: UInt64(max(0, bytes.rounded()))) }
+
+    var body: some View { Text(formattedBytes(displayedBytes)) }
+}
+
 @MainActor
 struct DiskCleanupView: View {
     @StateObject private var model: DiskCleanupModel
@@ -39,7 +52,11 @@ struct DiskCleanupView: View {
     private var rule: some View { Rectangle().fill(palette.line).frame(height: 1) }
     private var separator: some View { Rectangle().fill(palette.line).frame(width: 1) }
     private var title: String { model.inTrash ? "Trash" : "Disk Usage: \(model.name)" }
-    private var available: String { model.availableBytes.map(formattedBytes) ?? "Unavailable" }
+    private var displayedAvailableBytes: Int64? {
+        if model.inTrash && model.measuringSpace, let before = model.availableBeforeDeletion { return before }
+        return model.availableBytes
+    }
+    private var available: String { displayedAvailableBytes.map(formattedBytes) ?? "Unavailable" }
     private var allocated: String { model.inventory.map { formattedBytes($0.allocated) } ?? "" }
     private var scale: CGFloat { textSize.scale }
     private var canUse3D: Bool { model.scan == .complete || model.inTrash }
@@ -607,7 +624,8 @@ struct DiskCleanupView: View {
     }
 
     private func visualPanel(wide: Bool) -> some View {
-        VStack(spacing: 6) {
+        let slices = ringSlices
+        return VStack(spacing: 6) {
             HStack(alignment: .top, spacing: 5) {
                 HStack(spacing: 0) {
                     tab("2D", selected: !raised, id: "cleanup-ring-2d") { flatRequested = true; raised = false; clearZoom() }
@@ -616,7 +634,15 @@ struct DiskCleanupView: View {
                 }.fixedSize()
                 Spacer(minLength: 0)
                 VStack(alignment: .trailing, spacing: 2) {
-                    Text(available).font(.system(size: (wide ? 31 : 20) * scale, weight: .semibold)).monospacedDigit()
+                    Group {
+                        if let bytes = displayedAvailableBytes {
+                            CleanupCapacityLabel(bytes: Double(bytes))
+                                .animation(model.inTrash && model.capacityChange?.canCountUp == true && !reduceMotion
+                                           ? .easeOut(duration: 0.8) : nil, value: model.availableAfterDeletion)
+                        } else {
+                            Text(available)
+                        }
+                    }.font(.system(size: (wide ? 31 : 20) * scale, weight: .semibold)).monospacedDigit()
                         .lineLimit(1).minimumScaleFactor(0.65)
                         .accessibilityIdentifier("cleanup-available-space")
                     if wide {
@@ -628,7 +654,7 @@ struct DiskCleanupView: View {
                     }
                 }
             }.padding(.horizontal, 12).padding(.top, 12)
-            DiskCleanupRing(slices: ringSlices, raised: raised && canUse3D, dark: scheme == .dark,
+            DiskCleanupRing(slices: slices, settledSlices: settledRing(slices), raised: raised && canUse3D, dark: scheme == .dark,
                             selected: model.selected?.id, resetZoom: resetRing,
                             available: available, allocation: allocated.isEmpty ? "Available" : "\(allocated) measured",
                             reduceMotion: reduceMotion,
@@ -710,6 +736,14 @@ struct DiskCleanupView: View {
                          bytes: candidate.allocated, days: age(candidate), folder: candidate.isFolder, disposition: state)
     }
 
+    private func settledRing(_ slices: [CleanupRingSlice]) -> [CleanupRingSlice]? {
+        guard model.inTrash, let change = model.capacityChange else { return nil }
+        let result = CleanupRingSlice.deletionResult(change)
+        guard !result.isEmpty else { return nil }
+        return slices.filter { $0.disposition == .trash } + result
+            + slices.filter { $0.interactive }
+    }
+
     private func find(_ id: URL) -> CleanupCandidate? {
         model.displayed.first { $0.id == id }
             ?? model.batch.first { $0.id == id }?.candidate
@@ -761,6 +795,9 @@ struct DiskCleanupView: View {
                 Text(trashResultTitle)
                     .font(.system(size: 23 * scale, design: .serif))
                 if let bytes = model.deletedAllocated { fact("Deleted (allocated)", formattedBytes(bytes)) }
+                if let bytes = model.capacityChange?.unaccounted, bytes > 0 {
+                    fact("Unaccounted for", formattedBytes(bytes))
+                }
                 if !model.moved.isEmpty { fact("In Trash, still on the disk", formattedBytes(model.trashBytes)) }
                 if let before = model.availableBeforeDeletion {
                     fact("Available before clearing", formattedBytes(before))
