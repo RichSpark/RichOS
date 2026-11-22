@@ -341,9 +341,19 @@ class Walk:
         self.facts['pin_guid'] = pin.get('GUID')
         return {'pid': pid, 'version': self.facts['version_before'], 'pin': url, 'guid': pin.get('GUID')}
 
+    def gesture_service_pid(self):
+        target = 'gui/$(id -u)/app.richos.richfiles.window-gestures'
+        status = self.g('launchctl print ' + target + ' 2>/dev/null || true')
+        pid = next((int(line.partition('=')[2].strip()) for line in status.splitlines()
+                    if line.strip().startswith('pid =')), None)
+        return pid if pid in self.gesture_pids() else None
+
     def gestures(self):
-        self.g('open -g ' + q(GESTURES))
-        pid = self.wait(lambda: (self.gesture_pids() or [None])[-1], 'the Window Gestures login item', 30)
+        if self.a.suite:
+            pid = self.wait(self.gesture_service_pid, 'the registered Window Gestures login item', 90)
+        else:
+            self.g('open -g ' + q(GESTURES))
+            pid = self.wait(lambda: (self.gesture_pids() or [None])[-1], 'the Window Gestures login item', 30)
         self.owned['gestures'] = pid
         return {'pid': pid, 'running_from': GESTURES}
 
@@ -500,11 +510,13 @@ return resultRows as text
         report = {}
         if self.a.suite != 'legacy':
             old_gestures = self.owned['gestures']
-            new_gestures = self.wait(lambda: next((pid for pid in self.gesture_pids()
-                 if pid != old_gestures and self.running_build('gestures', pid, self.a.update_version)), None),
-                 'Window Gestures to report the new running version', 90)
+            def updated_gestures():
+                pid = self.gesture_service_pid()
+                return pid if pid and self.running_build('gestures', pid, self.a.update_version) else None
+            new_gestures = self.wait(updated_gestures, 'the registered Window Gestures service to report the new build', 90)
             self.owned['gestures-after'] = new_gestures
-            report['gestures'] = self.running_build('gestures', new_gestures, self.a.update_version)
+            report['gestures'] = {'old_pid': old_gestures,
+                                  'running': self.running_build('gestures', new_gestures, self.a.update_version)}
         for name, before in self.facts['suite_windows'].items():
             old = self.owned[name + '-before']
             if self.a.suite == 'legacy':

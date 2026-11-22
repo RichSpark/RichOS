@@ -16,18 +16,16 @@ if CommandLine.arguments.dropFirst().first == "--check-gesture-permission" {
 }
 
 MainActor.assumeIsolated {
-    if SuiteRestart.runCommand(Array(CommandLine.arguments.dropFirst())) { exit(EXIT_SUCCESS) }
-    _ = SuiteRestart.restore(Bool.self)
-
     let application = NSApplication.shared
     application.setActivationPolicy(.accessory)
     let controller = GestureController()
     controller.refresh()
     let timer = Timer(timeInterval: 1, repeats: true) { _ in controller.refresh() }
     RunLoop.main.add(timer, forMode: .common)
-    let suiteRestart = SuiteRestart(operation: .gesturesSuiteRestart) {
+    let suiteRestart = SuiteRestart(operation: .gesturesSuiteRestart, restartInPlace: true) {
         guard controller.canRestartAfterUpdate else { return nil }
         return try? JSONEncoder().encode(true)
     }
+    WindowGesturePreferences.markRestartContract()
     withExtendedLifetime(suiteRestart) { application.run() }
 }

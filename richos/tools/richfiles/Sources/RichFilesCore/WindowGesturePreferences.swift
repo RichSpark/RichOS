@@ -10,6 +10,7 @@ public enum WindowGesturePreferences {
     private static let desktopDeleteKey = "desktopDelete.enabled"
     private static let statusKey = "windowGestures.status"
     private static let processKey = "windowGestures.process"
+    private static let restartContractKey = "windowGestures.restartContract"
 
     public struct Selection: OptionSet {
         public let rawValue: Int
@@ -47,6 +48,18 @@ public enum WindowGesturePreferences {
     public static func publish(_ status: Status) {
         defaults.set(status.rawValue, forKey: statusKey)
         defaults.set(Int(ProcessInfo.processInfo.processIdentifier), forKey: processKey)
+    }
+
+    public static func markRestartContract() {
+        defaults.set(["pid": Int(ProcessInfo.processInfo.processIdentifier), "ready": Date()],
+                     forKey: restartContractKey)
+    }
+
+    public static func handlesOwnRestart(process: pid_t, launched: Date?) -> Bool {
+        guard process > 0, let launched, let mark = defaults.dictionary(forKey: restartContractKey),
+              mark["pid"] as? Int == Int(process), let ready = mark["ready"] as? Date
+        else { return false }
+        return launched <= ready
     }
 
     public static var nativeTitleBarIsOff: Bool {

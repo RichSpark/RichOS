@@ -14,13 +14,15 @@ public final class SuiteRestart: NSObject {
     private let runningVersion = Bundle.main.object(forInfoDictionaryKey: SuiteRestart.versionKey) as? String
     private let operation: RichFilesDiagnostics.Operation
     private let prepare: () -> Data?
+    private let restartInPlace: Bool
     private let relaunchArguments: (pid_t) -> [String]
     private var retry: Timer?
     private var releasing = false
 
-    public init(operation: RichFilesDiagnostics.Operation, prepare: @escaping () -> Data?,
-                relaunchArguments: @escaping (pid_t) -> [String] = { _ in [] }) {
+    public init(operation: RichFilesDiagnostics.Operation, restartInPlace: Bool = false,
+                prepare: @escaping () -> Data?, relaunchArguments: @escaping (pid_t) -> [String] = { _ in [] }) {
         self.operation = operation
+        self.restartInPlace = restartInPlace
         self.prepare = prepare
         self.relaunchArguments = relaunchArguments
         super.init()
@@ -73,9 +75,17 @@ public final class SuiteRestart: NSObject {
     }
 
     private func attempt(version: String, owner: pid_t, id: UUID, since: TimeInterval) {
-        guard Self.info(at: bundle)?[Self.versionKey] as? String == version else { return }
+        guard let installed = Self.info(at: bundle), installed[Self.versionKey] as? String == version,
+              let executable = installed["CFBundleExecutable"] as? String else { return }
         guard !Self.hasBlockingWindow, let snapshot = prepare() else {
             record(operation, .interrupted, id: id, since: since)
+            schedule(version: version, owner: owner, id: id, since: since)
+            return
+        }
+        let nextExecutable = bundle.appendingPathComponent("Contents/MacOS/\(executable)")
+        if restartInPlace {
+            replaceProcess(with: nextExecutable)
+            record(operation, .issues, id: id, since: since)
             schedule(version: version, owner: owner, id: id, since: since)
             return
         }
@@ -84,10 +94,7 @@ public final class SuiteRestart: NSObject {
             try Self.write(snapshot, token: token)
             do {
                 let next = Process()
-                guard let executable = Self.info(at: bundle)?["CFBundleExecutable"] as? String else {
-                    throw CocoaError(.fileNoSuchFile)
-                }
-                next.executableURL = bundle.appendingPathComponent("Contents/MacOS/\(executable)")
+                next.executableURL = nextExecutable
                 next.currentDirectoryURL = URL(fileURLWithPath: "/")
                 next.arguments = ["--suite-reopen", String(getpid()), version, token.uuidString,
                                   NSApp.isActive ? "active" : (NSApp.isHidden ? "hidden" : "background")]
@@ -107,6 +114,16 @@ public final class SuiteRestart: NSObject {
             record(operation, .issues, id: id, since: since)
         }
         schedule(version: version, owner: owner, id: id, since: since)
+    }
+
+    private func replaceProcess(with executable: URL) {
+        // The Window Gestures login item stays in its existing launchd job and
+        // keeps its approval when the executable changes.
+        guard let argument = strdup(executable.path) else { return }
+        RichFilesDiagnostics.flush()
+        var arguments: [UnsafeMutablePointer<CChar>?] = [argument, nil]
+        execv(argument, &arguments)
+        free(argument)
     }
 
     private func schedule(version: String, owner: pid_t, id: UUID, since: TimeInterval) {
