@@ -202,7 +202,7 @@ mod workflow {
 }
 
 #[cfg(target_os = "macos")]
-pub fn restore() {
+pub fn restore(_app: tauri::AppHandle) {
     tauri::async_runtime::spawn_blocking(|| {
         if mac::application().is_some_and(|app| mac::command(&app, &["restore"]).is_err()) {
             eprintln!("[RichGlance] could not restore the capture shortcut");

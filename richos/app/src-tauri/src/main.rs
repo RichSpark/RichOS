@@ -4427,7 +4427,8 @@ fn main() {
                 first_frame::after_page(app, move || late_check::spawn_late_full_checks(late_engine));
                 #[cfg(target_os = "macos")]
                 {
-                    first_frame::after_page(app, glance_capture_shortcut::restore);
+                    let capture_app = app.clone();
+                    first_frame::after_page(app, move || glance_capture_shortcut::restore(capture_app));
                     first_frame::after_page(app, richfiles_integration::start_window_gestures);
                 }
                 // The first window is up. Optional private starter I/O stays off startup.

@@ -396,7 +396,13 @@
         }
       });
     }
-    bindBackgroundSettings($("gp-background-settings"), surface.message);
+    const backgroundSettings = document.createElement("button");
+    backgroundSettings.type = "button";
+    backgroundSettings.id = "gp-background-settings";
+    backgroundSettings.className = "gp-btn";
+    backgroundSettings.textContent = "Capture Settings…";
+    $("gp-key-error").after(backgroundSettings);
+    bindBackgroundSettings(backgroundSettings, surface.message);
     external($("gp-capture"), "glance_capture_open", {}, "Opening capture…");
     external($("gp-richfiles"), "richfiles_open", { imageViewerSettings: true }, "Opening RichFiles Settings…");
 
