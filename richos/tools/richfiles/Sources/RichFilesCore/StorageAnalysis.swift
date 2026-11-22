@@ -129,7 +129,8 @@ public enum StorageAnalysis {
         return overflow ? .max : value
     }
 
-    static func digest(_ url: URL, expected: FileVersion, isCancelled: () -> Bool) throws -> String {
+    static func digest(_ url: URL, expected: FileVersion, isCancelled: () -> Bool,
+                       onActivity: (() -> Void)? = nil) throws -> String {
         if isCancelled() { throw CancellationError() }
         let previous = try TextContentReader.disableDatalessMaterialization()
         defer { TextContentReader.restoreDatalessMaterialization(previous) }
@@ -154,6 +155,7 @@ public enum StorageAnalysis {
             bytes += Int64(block.count)
             guard bytes <= expected.size else { throw FileOperationError.sourceChanged(url) }
             hash.update(data: block)
+            onActivity?()
         }
         var after = stat()
         var named = stat()

@@ -304,24 +304,31 @@ func requireLocalFileURL(_ url: URL) throws {
     }
 }
 
-public struct FileSort: Sendable {
-    public enum Column: Sendable {
+public struct FileSort: Equatable, Sendable {
+    public enum Column: Equatable, Sendable {
         case name, fileExtension, type, size, modified
     }
 
-    public let column: Column
-    public let ascending: Bool
-    public let foldersFirst: Bool
+    public var column: Column
+    public var ascending: Bool
+    public var foldersFirst: Bool
+    public var groupByType: Bool
 
-    public init(column: Column = .name, ascending: Bool = true, foldersFirst: Bool = true) {
+    public init(column: Column = .name, ascending: Bool = true, foldersFirst: Bool = true,
+                groupByType: Bool = false) {
         self.column = column
         self.ascending = ascending
         self.foldersFirst = foldersFirst
+        self.groupByType = groupByType
     }
 
     public func precedes(_ left: FileEntry, _ right: FileEntry) -> Bool {
         if foldersFirst && (left.kind == .directory) != (right.kind == .directory) {
             return left.kind == .directory
+        }
+        if groupByType, column != .type {
+            let typeOrder = compareTypes(left, right)
+            if typeOrder != .orderedSame { return typeOrder == .orderedAscending }
         }
         let order: ComparisonResult
         switch column {
@@ -330,7 +337,7 @@ public struct FileSort: Sendable {
         case .fileExtension:
             order = left.url.pathExtension.localizedStandardCompare(right.url.pathExtension)
         case .type:
-            order = (left.typeDescription ?? "").localizedStandardCompare(right.typeDescription ?? "")
+            order = compareTypes(left, right)
         case .size:
             if (left.size == nil) != (right.size == nil) { return left.size != nil }
             order = compare(left.size ?? 0, right.size ?? 0)
@@ -342,6 +349,13 @@ public struct FileSort: Sendable {
         let nameOrder = left.name.localizedStandardCompare(right.name)
         if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
         return left.url.path.utf8.lexicographicallyPrecedes(right.url.path.utf8)
+    }
+
+    private func compareTypes(_ left: FileEntry, _ right: FileEntry) -> ComparisonResult {
+        // With folders first, every directory is in the same partition.
+        if foldersFirst && left.kind == .directory && right.kind == .directory { return .orderedSame }
+        return (left.typeDescription ?? left.url.pathExtension)
+            .localizedStandardCompare(right.typeDescription ?? right.url.pathExtension)
     }
 }
 

@@ -138,29 +138,30 @@ struct WindowBrowserView: View {
     @State private var paneRatio: CGFloat = 0.5
     @AppStorage("richfiles.restoreSession") private var restoreSession = false
     @AppStorage("richfiles.lastBrowserSession.v1") private var lastBrowserSession = Data()
-    @AppStorage("richfiles.primaryWindowFrame") private var primaryWindowFrame = ""
     @SceneStorage("richfiles.browserSession.v1") private var savedSession: Data?
+    @SceneStorage("richfiles.windowPlacementSlot.v2") private var savedPlacementSlot = -1
     @State private var appeared = false
     @State private var nativeWindowNumber: Int?
+    @State private var placementSlot: BrowserWindowPlacement.Slot?
     @State private var cleanLaunchDeadline: TimeInterval?
     @State private var switchError = ""
     @State private var showSwitchError = false
 
     private let start: URL
     private let supportsSessionRestore: Bool
-    private let remembersWindowFrame: Bool
+    private let placementFamily: BrowserWindowPlacement.Family?
     private let handoffID: String?
     private let launchHandoffID: String?
 
     init(start: URL, actions: BrowserActions, openRequests: FolderOpenDelegate,
-         supportsSessionRestore: Bool = false, remembersWindowFrame: Bool = false,
+         supportsSessionRestore: Bool = false, placementFamily: BrowserWindowPlacement.Family? = nil,
          handoffID: String? = nil, launchHandoffID: String? = nil) {
         _workspace = StateObject(wrappedValue: WindowWorkspace(start: start))
         self.start = start
         self.actions = actions
         self.openRequests = openRequests
         self.supportsSessionRestore = supportsSessionRestore
-        self.remembersWindowFrame = remembersWindowFrame
+        self.placementFamily = placementFamily
         self.handoffID = handoffID
         self.launchHandoffID = launchHandoffID
     }
@@ -187,7 +188,7 @@ struct WindowBrowserView: View {
         .background { BrowserWindowReference(report: attachWindow) }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notice in
             if let window = notice.object as? NSWindow, window.windowNumber == nativeWindowNumber {
-                receiveFolderOpen()
+                attachWindow(window)
                 workspace.git.refreshOnWindowFocus()
             }
         }
@@ -226,11 +227,6 @@ struct WindowBrowserView: View {
         .onChange(of: scenePhase) { if $0 != .active { saveSession() } }
         .onChange(of: restoreSession) { _ in saveSession(rememberWindow: true) }
         .onChange(of: openRequests.requestID) { _ in receiveFolderOpen() }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notice in
-            if (notice.object as? NSWindow)?.windowNumber == nativeWindowNumber {
-                receiveFolderOpen()
-            }
-        }
         .onDisappear { saveSession() }
     }
 
@@ -299,28 +295,32 @@ struct WindowBrowserView: View {
     }
 
     private func attachWindow(_ window: NSWindow?) {
-        if nativeWindowNumber != window?.windowNumber {
+        if nativeWindowNumber != window?.windowNumber || (placementFamily != nil && placementSlot == nil) {
+            releasePlacement()
+            if let placementFamily, let window {
+                let slot = openRequests.windowPlacement.claim(placementFamily, preferred: savedPlacementSlot)
+                openRequests.windowPlacement.restore(slot, to: window)
+                placementSlot = slot
+                savedPlacementSlot = slot.index
+            }
             nativeWindowNumber = window?.windowNumber
             updateTitle(of: window, folder: workspace.activeModel.folder)
-            if remembersWindowFrame, let window, openRequests.claimPrimaryPlacement(for: window),
-               !primaryWindowFrame.isEmpty {
-                window.setFrame(from: primaryWindowFrame)
-                if !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(window.frame) }) {
-                    window.center()
-                }
-            }
         }
         receiveFolderOpen()
     }
 
     private func saveWindowFrame(_ notice: Notification) {
-        guard remembersWindowFrame, let window = notice.object as? NSWindow,
-              window.windowNumber == nativeWindowNumber, openRequests.savesPrimaryPlacement(for: window) else { return }
+        guard let slot = placementSlot, let window = notice.object as? NSWindow,
+              window.windowNumber == nativeWindowNumber else { return }
         if !window.isMiniaturized, !window.styleMask.contains(.fullScreen) {
-            let frame = window.frameDescriptor
-            if frame != primaryWindowFrame { primaryWindowFrame = frame }
+            openRequests.windowPlacement.save(window.frame, in: slot)
         }
-        if notice.name == NSWindow.willCloseNotification { openRequests.releasePrimaryPlacement(for: window) }
+        if notice.name == NSWindow.willCloseNotification { releasePlacement() }
+    }
+
+    private func releasePlacement() {
+        if let slot = placementSlot { openRequests.windowPlacement.release(slot) }
+        placementSlot = nil
     }
 
     private func acceptHandoff(_ id: UUID) {

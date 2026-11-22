@@ -36,13 +36,15 @@ struct FolderInventorySnapshot {
     let entries: [String: FileInventory.Entry]
     let coverage: FileInventory.Report
 
-    init(_ location: URL, includePackages: Bool = true, isCancelled: () -> Bool) throws {
+    init(_ location: URL, includePackages: Bool = true, isCancelled: () -> Bool,
+         onActivity: (() -> Void)? = nil) throws {
         let root = try OpenFolder(location)
         var items: [String: FileInventory.Entry] = [:]
         coverage = try FileInventory.walk(root.url, includePackages: includePackages, isCancelled: isCancelled) {
             guard items.updateValue($0, forKey: $0.relativePath) == nil else {
                 throw CocoaError(.fileReadInvalidFileName)
             }
+            onActivity?()
         }
         try root.verifyLocation()
         folder = root.url

@@ -40,6 +40,8 @@ struct BrowserFileConflict: Sendable {
 }
 
 struct BrowserTransfer: Sendable {
+    static let noProgressInterval: TimeInterval = 15
+
     struct CopyProgress: Sendable {
         let source: URL?
         let written: Int64
@@ -61,6 +63,7 @@ struct BrowserTransfer: Sendable {
     let destination: URL
     let move: Bool
     let total: Int
+    var lastAdvance = ProcessInfo.processInfo.systemUptime
     var revision = 0
     var completed = 0
     var succeeded = 0
@@ -72,6 +75,19 @@ struct BrowserTransfer: Sendable {
     var cancelled = false
 
     var title: String { move ? "Moving files" : "Copying files" }
+
+    func secondsUntilStall(at now: TimeInterval) -> TimeInterval? {
+        running ? max(0, lastAdvance + Self.noProgressInterval - now) : nil
+    }
+
+    mutating func updateCopyProgress(_ sample: CopyProgress, at now: TimeInterval) {
+        let previous = copyProgress?.source == sample.source ? copyProgress?.written ?? 0 : 0
+        guard sample.written >= previous else { return }
+        if sample.written > previous {
+            lastAdvance = now
+        }
+        copyProgress = sample
+    }
 }
 
 enum BrowserTransferSource: Sendable {
@@ -288,6 +304,7 @@ enum BrowserTransferJob {
             result.progress.currentSource = input.url
             result.progress.copyProgress = nil
             result.progress.verifyingCopy = false
+            result.progress.lastAdvance = ProcessInfo.processInfo.systemUptime
             result.progress.revision += 1
             await publish(result.progress)
             if Task.isCancelled {
@@ -319,11 +336,20 @@ enum BrowserTransferJob {
                 retrySource = .captured(source)
                 let copyStarted = ProcessInfo.processInfo.systemUptime
                 var lastSample: TimeInterval = 0
-                func publishBytes(_ bytes: BrowserTransfer.CopyProgress) {
-                    result.progress.copyProgress = bytes
+                func publishProgress() {
                     result.progress.revision += 1
                     let snapshot = result.progress
                     Task { await publish(snapshot) }
+                }
+                func reportActivity() {
+                    let now = ProcessInfo.processInfo.systemUptime
+                    guard now - result.progress.lastAdvance >= 1 else { return }
+                    result.progress.lastAdvance = now
+                    publishProgress()
+                }
+                func publishBytes(_ bytes: BrowserTransfer.CopyProgress) {
+                    result.progress.updateCopyProgress(bytes, at: ProcessInfo.processInfo.systemUptime)
+                    publishProgress()
                 }
                 func showBytes(_ written: Int64, _ total: Int64) {
                     let elapsed = ProcessInfo.processInfo.systemUptime - copyStarted
@@ -344,12 +370,12 @@ enum BrowserTransferJob {
                             source, into: destination.url, expectedFolder: destination.identity,
                             conflictPolicy: request.conflict == .keepBoth ? .keepBoth : .refuse,
                             isCancelled: { Task.isCancelled }, onNestedProgress: showNestedBytes,
+                            onActivity: reportActivity,
                             onProgress: showBytes, onVerify: {
                                 result.progress.verifyingCopy = true
                                 result.progress.copyProgress = nil
-                                result.progress.revision += 1
-                                let snapshot = result.progress
-                                Task { await publish(snapshot) }
+                                result.progress.lastAdvance = ProcessInfo.processInfo.systemUptime
+                                publishProgress()
                             }
                         )
                         result.moves.append(.crossVolume(moved.receipt))
@@ -364,7 +390,8 @@ enum BrowserTransferJob {
                         into: destination.url,
                         expectedFolder: destination.identity,
                         conflictPolicy: request.conflict == .keepBoth ? .keepBoth : .refuse,
-                        isCancelled: { Task.isCancelled }, onNestedProgress: showNestedBytes, onProgress: showBytes
+                        isCancelled: { Task.isCancelled }, onNestedProgress: showNestedBytes,
+                        onActivity: reportActivity, onProgress: showBytes
                     )
                     if let staging = receipt.remainingStagingFolder {
                         result.progress.issues.append(BrowserTransferIssue(
@@ -409,6 +436,7 @@ enum BrowserTransferJob {
             }
             result.progress.copyProgress = nil
             result.progress.verifyingCopy = false
+            result.progress.lastAdvance = ProcessInfo.processInfo.systemUptime
             result.progress.revision += 1
             await publish(result.progress)
         }

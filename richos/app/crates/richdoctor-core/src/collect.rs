@@ -820,7 +820,7 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64, gestures: bo
                 | "windowGestureDockMinimize" | "windowGestureDockRestore" | "desktopDeleteShortcut")
         } else {
             matches!(operation, "listing" | "copy" | "move" | "recovery" | "gitHistory" | "gitComparison" | "railVideoFrame"
-                | "cleanupScan" | "cleanupDuplicates" | "cleanupTrash" | "cleanupDelete"
+                | "windowPlacement" | "transferStall" | "cleanupScan" | "cleanupDuplicates" | "cleanupTrash" | "cleanupDelete"
                 | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata"
                 | "glanceCaptureFrame" | "glanceCaptureOutput" | "glanceCaptureSession" | "glanceScrollCapture")
         };
@@ -1109,6 +1109,7 @@ mod tests {
         ));
         write(&root.join("launch.log"), &format!(
             "{when} RichOS 1.2.1 pid 11 [richos] launch timing: splash started playing 350 ms\n\
+             {when} RichOS 1.2.1 pid 11 [richos] native splash: audio output ready at 551 ms after process start\n\
              {when} RichOS 1.2.1 pid 11 [richos] native splash: audio cue scheduling refused at 552 ms after process start\n\
              {when} RichOS 1.2.1 pid 11 [richos] native splash: renderer missed the authored endpoint, falling back at 2999 ms of playback at 3349 ms after process start\n\
              {when} RichOS 1.2.1 pid 11 [richos] launch engine check completed: full, once for this runtime (6535 files read), 1090 ms\n\
@@ -1120,6 +1121,7 @@ mod tests {
         assert_eq!(timing.status, Status::Collected);
         assert_eq!(timing.coverage, Coverage::InWindow);
         assert!(timing.text.contains("1.2.1 pid 11") && timing.text.contains("350 ms"));
+        assert!(timing.text.contains("audio output ready at 551 ms after process start"));
         assert!(timing.text.contains("audio cue scheduling refused at 552 ms after process start"));
         assert!(timing.text.contains("2999 ms of playback at 3349 ms after process start"));
         assert!(timing.text.contains("renderer counted 300 frames, 45 dropped, 0 corrupted"));
@@ -1180,6 +1182,8 @@ mod tests {
             "glanceCaptureOutput",
             "glanceScrollCapture",
             "railVideoFrame",
+            "windowPlacement",
+            "transferStall",
         ]
         .map(|stage| {
             let mut capture = record.clone();
@@ -1225,6 +1229,8 @@ mod tests {
         assert!(!timing.text.contains("scroll_failure=lostOverlap"));
         assert!(!timing.text.contains("Private text pretending"));
         assert!(timing.text.contains("operation=railVideoFrame"));
+        assert!(timing.text.contains("operation=windowPlacement"));
+        assert!(timing.text.contains("operation=transferStall"));
         for stage in ["cleanupScan", "cleanupDuplicates", "cleanupTrash", "cleanupDelete"] {
             assert!(timing.text.contains(&format!("operation={stage}")));
         }

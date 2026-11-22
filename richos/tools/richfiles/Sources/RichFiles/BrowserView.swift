@@ -567,12 +567,11 @@ struct BrowserView: View {
             sortButton("Size", .size)
             sortButton("Modified", .modified)
             Divider()
-            Toggle("Ascending", isOn: Binding(get: { model.sort.ascending }, set: { ascending in
-                model.sort = FileSort(column: model.sort.column, ascending: ascending, foldersFirst: model.sort.foldersFirst)
-            }))
-            Toggle("Folders First", isOn: Binding(get: { model.sort.foldersFirst }, set: { foldersFirst in
-                model.sort = FileSort(column: model.sort.column, ascending: model.sort.ascending, foldersFirst: foldersFirst)
-            }))
+            Toggle("Ascending", isOn: $model.sort.ascending)
+            Toggle("Folders First", isOn: $model.sort.foldersFirst)
+            if model.sort.column != .type {
+                Toggle("Group by Type", isOn: $model.sort.groupByType)
+            }
             Toggle("Show Hidden Files", isOn: $model.showHidden)
             Toggle("Remember View for This Folder", isOn: Binding(get: { model.remembersFolderView }, set: {
                 model.setFolderViewOverride($0)
@@ -601,8 +600,14 @@ struct BrowserView: View {
     }
 
     private func sortButton(_ title: String, _ column: FileSort.Column) -> some View {
-        Button(title) {
-            model.sort = FileSort(column: column, ascending: model.sort.ascending, foldersFirst: model.sort.foldersFirst)
+        Button {
+            model.sort.column = column
+        } label: {
+            if model.sort.column == column {
+                Label(title, systemImage: "checkmark")
+            } else {
+                Text(title)
+            }
         }
     }
 
@@ -1265,7 +1270,8 @@ struct BrowserView: View {
             }
             if let transfer = actions.transfer {
                 let queued = actions.queuedTransfers.count
-                let title = transfer.running ? "Transfers \(transfer.completed)/\(transfer.total)" : "Transfers"
+                let title = actions.transferAppearsStalled ? "Transfer May Be Stalled"
+                    : transfer.running ? "Transfers \(transfer.completed)/\(transfer.total)" : "Transfers"
                 Button(queued > 0 ? title + " · \(queued) queued" : title) {
                     transfersVisible.toggle()
                 }.buttonStyle(.borderless)

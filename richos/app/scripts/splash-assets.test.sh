@@ -47,15 +47,48 @@ if [ "$(uname -s)" = Darwin ]; then
     scratch="$(mktemp -d "${TMPDIR:?}/richos-splash-assets.XXXXXXXX")"
     trap 'rm -rf "$scratch"' EXIT
     xcrun clang -fobjc-arc -mmacosx-version-min=13.0 -Wno-deprecated-declarations \
-        -framework AppKit -framework AVFoundation -framework CoreMedia -framework CoreVideo -framework QuartzCore \
-        -x objective-c "$app/native/splash/player.m" -o "$scratch/prepare" - <<'C'
-#include <stdint.h>
-#include <stdio.h>
-void *richos_splash_prepare(const char *, int, const char *, void (*)(int, double),
-                            void (*)(uint64_t, uint64_t, uint64_t), void (*)(int));
-void richos_splash_discard_prepared(void *);
+        -framework AppKit -framework AVFoundation -framework AudioToolbox -framework CoreAudio \
+        -framework CoreMedia -framework CoreVideo -framework QuartzCore \
+        -I "$app/native/splash" -x objective-c -o "$scratch/prepare" - <<'C'
+#import "player.m"
+#include <assert.h>
+#include <stddef.h>
+
+static void cueFollowsTheHostClock(void) {
+    float authored[] = {1, 2, 3, 4, 5, 6};
+    float output[2][4];
+    AudioBufferList *buffers = calloc(1, offsetof(AudioBufferList, mBuffers) + 2 * sizeof(AudioBuffer));
+    assert(buffers);
+    buffers->mNumberBuffers = 2;
+    for (int i = 0; i < 2; i++) {
+        buffers->mBuffers[i] = (AudioBuffer){1, sizeof(output[i]), output[i]};
+    }
+    RichSplashPCM cue = {.channels = {authored, authored}, .frames = 6, .ticksPerFrame = 1};
+    AudioTimeStamp time = {.mHostTime = 100, .mFlags = kAudioTimeStampHostTimeValid};
+
+    // The output is already running before video commits its host-time anchor.
+    renderCue(&cue, NULL, &time, 0, 4, buffers);
+    assert(output[0][0] == 0 && output[0][3] == 0 && atomic_load(&cue.progress) == 0);
+    atomic_store(&cue.start, 103);
+    renderCue(&cue, NULL, &time, 0, 4, buffers);
+    assert(output[0][2] == 0 && output[0][3] == 1 && atomic_load(&cue.progress) == 1);
+    time.mHostTime = 104;
+    renderCue(&cue, NULL, &time, 0, 4, buffers);
+    assert(output[0][0] == 2 && output[0][3] == 5 && atomic_load(&cue.progress) == 5);
+    time.mHostTime = 108;
+    renderCue(&cue, NULL, &time, 0, 4, buffers);
+    assert(output[1][0] == 6 && output[1][1] == 0 && atomic_load(&cue.progress) == cue.frames);
+
+    atomic_store(&cue.progress, 0);
+    time.mHostTime = 110;
+    renderCue(&cue, NULL, &time, 0, 4, buffers);
+    assert(atomic_load(&cue.late) && atomic_load(&cue.progress) == 0);
+    assert(output[0][0] == 0 && output[0][3] == 0);
+    free(buffers);
+}
 
 int main(int argc, char **argv) {
+    cueFollowsTheHostClock();
     for (int i = 1; i < argc; i++) {
         void *player = richos_splash_prepare(argv[i], 180, NULL, NULL, NULL, NULL);
         if (!player) {
