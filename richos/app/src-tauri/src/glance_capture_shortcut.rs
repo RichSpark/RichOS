@@ -272,8 +272,9 @@ mod mac {
         }
         drop(ticket);
         let url = format!("richglance-capture://request/{id}");
-        let opened = std::process::Command::new("/usr/bin/open")
-            .arg("-g").arg("-a").arg(app).arg(url).args(["--args", "--capture-request"]).status();
+        let mut launch = Command::new("/usr/bin/open");
+        if !settings { launch.arg("-g"); }
+        let opened = launch.arg("-a").arg(app).arg(url).args(["--args", "--capture-request"]).status();
         if opened.is_ok_and(|status| status.success()) { return Ok(()); }
         drop(fs::remove_file(path));
         Err(std::io::Error::other("macOS could not open RichGlance"))

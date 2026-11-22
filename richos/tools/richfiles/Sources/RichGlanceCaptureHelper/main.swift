@@ -225,7 +225,8 @@ final class CaptureHelper: NSObject, NSApplicationDelegate {
             let origin = front?.activationPolicy == .regular ? front : previousApplication
             let request = try CaptureRequest.issue(action, originPID: origin?.processIdentifier)
             let configuration = NSWorkspace.OpenConfiguration()
-            configuration.activates = false
+            // Capture keeps the source app active until the overlay is ready.
+            configuration.activates = action != .capture
             configuration.arguments = ["--capture-request"]
             let logger = self.logger
             NSWorkspace.shared.open([request.url], withApplicationAt: glance, configuration: configuration) { app, error in

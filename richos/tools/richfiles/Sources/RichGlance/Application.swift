@@ -118,6 +118,10 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return false
         }
         guard !captureLaunch else { return false }
+        if let window = captureSettings?.window, window.isVisible {
+            window.makeKeyAndOrderFront(nil)
+            return true
+        }
         if viewer == nil, editor == nil { openWithoutFile() }
         else if !hasVisibleWindows { if let editor { editor.show() } else { viewer?.show() } }
         return true
