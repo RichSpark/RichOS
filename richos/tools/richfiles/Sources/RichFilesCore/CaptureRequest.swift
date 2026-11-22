@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 
 public struct CaptureRequest {
-    public enum Action: String, CaseIterable, Sendable {
+    public enum Action: String, Codable, CaseIterable, Sendable {
         case capture, captureAgain, copyText, editor, settings, closePin
 
         public var startsCapture: Bool { self == .capture || self == .captureAgain || self == .copyText }

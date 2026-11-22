@@ -123,10 +123,12 @@ public enum GlanceHelper {
         public enum Action: String, Codable { case status, configure, stopSession }
         public var action: Action
         public var preferences: Preferences?
+        public var requiredShortcut: CaptureRequest.Action?
 
-        public init(_ action: Action, preferences: Preferences? = nil) {
+        public init(_ action: Action, preferences: Preferences? = nil, requiredShortcut: CaptureRequest.Action? = nil) {
             self.action = action
             self.preferences = preferences
+            self.requiredShortcut = requiredShortcut
         }
     }
 
@@ -134,10 +136,14 @@ public enum GlanceHelper {
         public var registered: Bool
         public var session: Bool
         public var error: String?
+        public var againRegistered: Bool?
+        public var textRegistered: Bool?
 
-        public init(registered: Bool, session: Bool) {
+        public init(registered: Bool, session: Bool, againRegistered: Bool? = nil, textRegistered: Bool? = nil) {
             self.registered = registered
             self.session = session
+            self.againRegistered = againRegistered
+            self.textRegistered = textRegistered
         }
     }
 

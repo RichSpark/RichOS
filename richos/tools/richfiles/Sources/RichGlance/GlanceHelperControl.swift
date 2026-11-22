@@ -10,6 +10,8 @@ enum GlanceHelperControl {
         let available: Bool
         let enabled: Bool
         let registered: Bool
+        let againRegistered: Bool
+        let textRegistered: Bool
         let running: Bool
         let shortcut: Shortcut
         let againShortcut: Shortcut
@@ -85,6 +87,7 @@ enum GlanceHelperControl {
         @unknown default: name = "unavailable"
         }
         return Status(available: installed, enabled: preference.enabled, registered: endpoint?.registered == true,
+                      againRegistered: endpoint?.againRegistered == true, textRegistered: endpoint?.textRegistered == true,
                       running: endpoint != nil, shortcut: preference.shortcut,
                       againShortcut: preference.againShortcut, textShortcut: preference.textShortcut, background: preference.background, menuBar: preference.menuBar,
                       service: name)
@@ -92,7 +95,7 @@ enum GlanceHelperControl {
 
     static func setShortcut(_ shortcut: Shortcut, enabled: Bool, for action: CaptureRequest.Action = .capture) throws -> Status {
         _ = try shortcut.carbon()
-        return try update {
+        return try update(requiring: action) {
             $0[action] = shortcut
             $0.enabled = enabled
         }
@@ -102,7 +105,8 @@ enum GlanceHelperControl {
         try update { $0.menuBar = enabled }
     }
 
-    private static func update(_ change: (inout GlanceHelper.Preferences) -> Void) throws -> Status {
+    private static func update(requiring required: CaptureRequest.Action? = nil,
+                               _ change: (inout GlanceHelper.Preferences) -> Void) throws -> Status {
         guard installed else { throw GlanceHelper.Problem("The RichGlance capture helper could not be found in this installation.") }
         let lock = try store.lock("settings")
         defer { try? lock?.close() }
@@ -116,7 +120,7 @@ enum GlanceHelperControl {
             }
         }
         if shouldRunSession(next, loginEnabled: service.status == .enabled) { _ = try startSessionIfNeeded() }
-        let command = GlanceHelper.Request(.configure, preferences: next)
+        let command = GlanceHelper.Request(.configure, preferences: next, requiredShortcut: required)
         if try store.send(command) == nil { try store.write(next) }
         return try status()
     }

@@ -83,10 +83,13 @@ private struct BackgroundCaptureSettingsView: View {
     }
 
     private func shortcutRow(_ title: String, action: CaptureRequest.Action,
-                             shortcut: GlanceHelper.Shortcut?) -> some View {
+                              shortcut: GlanceHelper.Shortcut?) -> some View {
         HStack {
             Text(title)
             Spacer()
+            if status?.enabled == true, status?.running == true, !registered(action), recording != action {
+                Text("Unavailable").foregroundStyle(.secondary)
+            }
             Text(recording == action ? "Press a shortcut" : shortcut?.label ?? "")
                 .monospacedDigit()
             Button(recording == action ? "Cancel" : "Change…") {
@@ -94,6 +97,15 @@ private struct BackgroundCaptureSettingsView: View {
                 else { stopRecording(); recordShortcut(for: action) }
             }
             .accessibilityLabel(recording == action ? "Cancel recording" : "Change \(title) shortcut")
+        }
+    }
+
+    private func registered(_ action: CaptureRequest.Action) -> Bool {
+        switch action {
+        case .capture: status?.registered == true
+        case .captureAgain: status?.againRegistered == true
+        case .copyText: status?.textRegistered == true
+        default: false
         }
     }
 

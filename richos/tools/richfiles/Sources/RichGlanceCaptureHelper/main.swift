@@ -146,7 +146,7 @@ final class CaptureHelper: NSObject, NSApplicationDelegate {
                 guard let next = request.preferences, next.background == preferences.background else {
                     throw GlanceHelper.Problem("RichGlance Capture is restarting. Try again.")
                 }
-                try replaceShortcut(with: next, saving: true)
+                try replaceShortcut(with: next, saving: true, requiring: request.requiredShortcut)
                 updateMenu()
                 response.registered = hotkey != nil
             case .stopSession:
@@ -156,10 +156,13 @@ final class CaptureHelper: NSObject, NSApplicationDelegate {
         } catch {
             response.error = error.localizedDescription
         }
+        response.againRegistered = shortcuts[.captureAgain] != nil
+        response.textRegistered = shortcuts[.copyText] != nil
         return try? JSONEncoder().encode(response)
     }
 
-    private func replaceShortcut(with next: GlanceHelper.Preferences, saving: Bool) throws {
+    private func replaceShortcut(with next: GlanceHelper.Preferences, saving: Bool,
+                                 requiring required: CaptureRequest.Action? = nil) throws {
         var replacement: [CaptureRequest.Action: Registration] = [:]
         var added: [Registration] = []
         do {
@@ -173,7 +176,10 @@ final class CaptureHelper: NSObject, NSApplicationDelegate {
                             added.append(registered)
                             replacement[action] = registered
                         } catch {
-                            if saving { throw error }
+                            if action == required {
+                                let labels: [CaptureRequest.Action: String] = [.capture: "Capture Region", .captureAgain: "Capture Again", .copyText: "Copy Text"]
+                                throw GlanceHelper.Problem("\(labels[action] ?? "Capture") shortcut unavailable. Choose another combination.")
+                            }
                         }
                     }
                 }
