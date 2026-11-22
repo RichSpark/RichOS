@@ -26,15 +26,16 @@ final class ScreenshotPin: NSPanel {
         let initial = frame?.size ?? CGSize(width: pixelSize.width / scale, height: pixelSize.height / scale)
         let factor = frame == nil ? min(1, maxWidth / initial.width, maxHeight / initial.height) : 1
         let art = CGSize(width: initial.width * factor, height: initial.height * factor)
-        let width = max(490, art.width)
-        let place = frame?.origin ?? CGPoint(x: min(point.x + 16, visible.maxX - art.width - 10),
+        let surface = PinSurface(picture: picture, opacity: opacity, levelLabel: levelLabel,
+                                 buttons: [actualSize, through, closeButton])
+        let width = max(surface.headerWidth, art.width)
+        let place = frame?.origin ?? CGPoint(x: min(point.x + 16, visible.maxX - width - 10),
                                              y: max(visible.minY + 10, point.y - art.height - 25))
         let content = CGRect(x: place.x, y: place.y, width: width, height: art.height + 46)
-        layout = PinSurface(picture: picture)
+        layout = surface
         super.init(contentRect: content, styleMask: [.borderless, .nonactivatingPanel, .resizable],
                    backing: .buffered, defer: false)
         setFrame(content, display: false)
-        layout.header = [opacity, levelLabel, actualSize, through, closeButton]
         layout.pictureWidth = art.width
         layout.windowDrag = { [weak self] event in self?.performDrag(with: event) }
         layout.resize = { [weak self] point, delta in self?.resize(from: point, by: delta) }
@@ -53,7 +54,7 @@ final class ScreenshotPin: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         setAccessibilityTitle("Pinned image")
         title = "Pinned image"
-        minSize = CGSize(width: 490, height: 74)
+        minSize = CGSize(width: layout.headerWidth, height: 74)
         picture.image = NSImage(cgImage: image, size: pixelSize)
         picture.imageScaling = .scaleAxesIndependently
         picture.setAccessibilityElement(true)
@@ -100,7 +101,7 @@ final class ScreenshotPin: NSPanel {
     private func adjust(to size: CGSize) {
         layout.pictureWidth = size.width
         var frame = frame
-        frame.size = CGSize(width: max(490, size.width), height: size.height + 46)
+        frame.size = CGSize(width: max(layout.headerWidth, size.width), height: size.height + 46)
         setFrame(frame, display: true)
     }
 
@@ -148,11 +149,17 @@ final class ScreenshotPin: NSPanel {
 
 @MainActor
 private final class PinSurface: NSView {
+    private static let inset: CGFloat = 10
+    private static let gap: CGFloat = 6
+
     let picture: NSImageView
+    let headerWidth: CGFloat
     private let bar = ScreenshotSurface(.floating, radius: 9, outline: true)
-    private let caption = screenshotLabel("Opacity")
+    private let caption: NSTextField
+    private let levelLabel: NSTextField
+    private let controls: [NSView]
+    private let controlWidths: [CGFloat]
     private let grip = NSView()
-    var header: [NSView] = [] { didSet { header.forEach(bar.addSubview) } }
     var pictureWidth: CGFloat = 1 { didSet { needsLayout = true } }
     var startWidth: CGFloat = 1
     var windowDrag: ((NSEvent) -> Void)?
@@ -160,8 +167,16 @@ private final class PinSurface: NSView {
     var key: ((NSEvent) -> Bool)?
     private var anchor: CGPoint?
 
-    init(picture: NSImageView) {
+    init(picture: NSImageView, opacity: NSSlider, levelLabel: NSTextField, buttons: [ScreenshotButton]) {
         self.picture = picture
+        self.levelLabel = levelLabel
+        let caption = screenshotLabel("Opacity")
+        self.caption = caption
+        controls = [caption, opacity, levelLabel] + buttons
+        let widths = [max(62, ceil(caption.fittingSize.width)), 83, max(49, ceil(levelLabel.fittingSize.width))]
+            + buttons.map { $0.naturalWidth() }
+        controlWidths = widths
+        headerWidth = widths.reduce(2 * Self.inset, +) + CGFloat(widths.count - 1) * Self.gap
         super.init(frame: .zero)
         addSubview(picture)
         addSubview(grip)
@@ -170,7 +185,7 @@ private final class PinSurface: NSView {
         grip.layer?.borderColor = NSColor.black.cgColor
         grip.layer?.borderWidth = 1
         addSubview(bar)
-        bar.addSubview(caption)
+        controls.forEach(bar.addSubview)
         setAccessibilityLabel("Pinned image controls")
     }
 
@@ -182,14 +197,18 @@ private final class PinSurface: NSView {
 
     override func layout() {
         super.layout()
-        bar.frame = CGRect(x: 0, y: 0, width: 490, height: 46)
-        caption.textColor = ScreenshotEditorPalette(self).ink
-        caption.frame = CGRect(x: 10, y: 12, width: 62, height: 22)
+        bar.frame = CGRect(x: 0, y: 0, width: headerWidth, height: 46)
+        let ink = ScreenshotEditorPalette(self).ink
+        caption.textColor = ink
+        levelLabel.textColor = ink
         picture.frame = CGRect(x: 0, y: 46, width: pictureWidth, height: bounds.height - 46)
         grip.frame = CGRect(x: max(0, pictureWidth - 18), y: bounds.height - 18, width: 18, height: 18)
-        let frames = [(75.0, 83.0), (163.0, 49.0), (217.0, 93.0), (316.0, 110.0), (432.0, 52.0)]
-        for (view, frame) in zip(header, frames) { view.frame = CGRect(x: frame.0, y: 7, width: frame.1, height: 32) }
-        (header[safe: 1] as? NSTextField)?.textColor = ScreenshotEditorPalette(self).ink
+        var x = Self.inset
+        for (control, width) in zip(controls, controlWidths) {
+            let height: CGFloat = control === caption ? 22 : 32
+            control.frame = CGRect(x: x, y: (bar.bounds.height - height) / 2, width: width, height: height)
+            x += width + Self.gap
+        }
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -215,8 +234,4 @@ private final class PinSurface: NSView {
 
     override func mouseUp(with event: NSEvent) { anchor = nil }
     override func keyDown(with event: NSEvent) { if key?(event) != true { super.keyDown(with: event) } }
-}
-
-private extension Array {
-    subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
 }
