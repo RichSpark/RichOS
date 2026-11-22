@@ -27,91 +27,110 @@ typedef enum {
     SoundOutputReady,
 } SoundOutcome;
 
-// Sound is owned by the launch cue even after the native window is removed.
+// The audio queue owns the output from preparation through the end of the cue.
 @interface RichSplashCue : NSObject
 @property(nonatomic, strong) AVAudioEngine *engine;
+@property(nonatomic, strong) AVAudioPlayerNode *node;
+@property(nonatomic, strong) AVAudioPCMBuffer *buffer;
+@property(nonatomic, strong) dispatch_queue_t queue;
 @property(nonatomic) RichSplashAudio report;
+- (instancetype)initWithPath:(NSString *)path report:(RichSplashAudio)report;
+- (void)playAt:(CMTime)time;
+- (void)cancel;
 @end
 
 @implementation RichSplashCue
-- (void)finish:(SoundOutcome)outcome {
-    AVAudioEngine *engine = self.engine;
-    if (!engine) return;
-    self.engine = nil;
-    [engine stop];
-    if (self.report) self.report(outcome);
-}
-@end
-
-static void scheduleCue(NSString *path, double length, CMTime anchor, RichSplashAudio report) {
-    dispatch_queue_t queue = dispatch_queue_create("com.richos.splash.sound",
+- (instancetype)initWithPath:(NSString *)path report:(RichSplashAudio)report {
+    self = [super init];
+    if (!self) return nil;
+    self.report = report;
+    self.queue = dispatch_queue_create("com.richos.splash.sound",
         dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0));
-    dispatch_async(queue, ^{
-        if (!path) {
-            if (report) report(SoundDisabled);
-            return;
-        }
-        AVAudioFile *file = [[AVAudioFile alloc] initForReading:[NSURL fileURLWithPath:path] error:NULL];
-        if (file.length <= 0 || file.length > UINT32_MAX) {
-            if (report) report(SoundPrepareFailed);
-            return;
-        }
-        AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:file.processingFormat
-                                                               frameCapacity:(AVAudioFrameCount)file.length];
-        if (!buffer || ![file readIntoBuffer:buffer error:NULL] || buffer.frameLength != file.length) {
-            if (report) report(SoundPrepareFailed);
-            return;
-        }
+    dispatch_async(self.queue, ^{ [self prepare:path]; });
+    return self;
+}
 
-        // Open the output while the video runs. The inactive player node feeds
-        // silence until the authored host time, through the same output graph.
-        AVAudioEngine *engine = [AVAudioEngine new];
-        AVAudioPlayerNode *node = [AVAudioPlayerNode new];
+- (void)prepare:(NSString *)path {
+    AVAudioFile *file = [[AVAudioFile alloc] initForReading:[NSURL fileURLWithPath:path] error:NULL];
+    if (file.length <= 0 || file.length > UINT32_MAX) return;
+    AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:file.processingFormat
+                                                           frameCapacity:(AVAudioFrameCount)file.length];
+    if (!buffer || ![file readIntoBuffer:buffer error:NULL] || buffer.frameLength != file.length) return;
+
+    // Prepare an output while AppKit constructs the window. The inactive node
+    // initially feeds silence, and only the video clock may authorize playback.
+    AVAudioEngine *engine = [AVAudioEngine new];
+    AVAudioPlayerNode *node = [AVAudioPlayerNode new];
+    @try {
         [engine attachNode:node];
         [engine connect:node to:engine.mainMixerNode format:buffer.format];
-        if (![engine startAndReturnError:NULL]) {
-            if (report) report(SoundPrepareFailed);
+        if (![engine startAndReturnError:NULL]) return;
+    } @catch (NSException *exception) {
+        return;
+    }
+    self.engine = engine;
+    self.node = node;
+    self.buffer = buffer;
+    if (self.report) self.report(SoundOutputReady);
+}
+
+- (void)clearOutput {
+    AVAudioEngine *engine = self.engine;
+    self.engine = nil;
+    self.node = nil;
+    self.buffer = nil;
+    [engine stop];
+}
+
+- (void)finish:(SoundOutcome)outcome {
+    // Completion and the timeout may both arrive. Only the first may report.
+    if (!self.engine) return;
+    [self clearOutput];
+    if (self.report) self.report(outcome);
+}
+
+- (void)cancel {
+    dispatch_async(self.queue, ^{ [self clearOutput]; });
+}
+
+- (void)playAt:(CMTime)time {
+    dispatch_async(self.queue, ^{
+        if (!self.engine) {
+            if (self.report) self.report(SoundPrepareFailed);
             return;
         }
-        if (report) report(SoundOutputReady);
-
-        // Start the cue 130 ms before the bar lands, 800 ms from the end.
-        CMTime cueTime = CMTimeAdd(anchor, CMTimeMakeWithSeconds(length - 0.930, 1000));
-        double lead = CMTimeGetSeconds(CMTimeSubtract(cueTime, CMClockGetTime(CMClockGetHostTimeClock())));
-        if (lead <= 0 || !engine.isRunning) {
-            [engine stop];
-            if (report) report(lead <= 0 ? SoundDeadlineMissed : SoundScheduleRefused);
+        double lead = CMTimeGetSeconds(CMTimeSubtract(time, CMClockGetTime(CMClockGetHostTimeClock())));
+        if (lead <= 0 || !self.engine.isRunning) {
+            [self finish:lead <= 0 ? SoundDeadlineMissed : SoundScheduleRefused];
             return;
         }
 
-        RichSplashCue *cue = [RichSplashCue new];
-        cue.engine = engine;
-        cue.report = report;
-        __weak RichSplashCue *weak = cue;
-        [node scheduleBuffer:buffer completionCallbackType:AVAudioPlayerNodeCompletionDataPlayedBack
-           completionHandler:^(AVAudioPlayerNodeCompletionCallbackType type) {
-            // Stopping an engine from its completion callback can deadlock.
-            dispatch_async(queue, ^{
-                RichSplashCue *owner = weak;
-                [owner finish:owner.engine.isRunning ? SoundFinished : SoundInterrupted];
-            });
-        }];
+        double duration = self.buffer.frameLength / self.buffer.format.sampleRate;
+        dispatch_queue_t queue = self.queue;
+        __weak RichSplashCue *weak = self;
         @try {
-            [node playAtTime:[AVAudioTime timeWithHostTime:CMClockConvertHostTimeToSystemUnits(cueTime)]];
+            [self.node scheduleBuffer:self.buffer completionCallbackType:AVAudioPlayerNodeCompletionDataPlayedBack
+                   completionHandler:^(AVAudioPlayerNodeCompletionCallbackType type) {
+                // Stopping an engine from its completion callback can deadlock.
+                dispatch_async(queue, ^{
+                    RichSplashCue *owner = weak;
+                    [owner finish:owner.engine.isRunning ? SoundFinished : SoundInterrupted];
+                });
+            }];
+            [self.node playAtTime:[AVAudioTime timeWithHostTime:CMClockConvertHostTimeToSystemUnits(time)]];
         } @catch (NSException *exception) {
             // The output can disappear between the running check and play.
-            [cue finish:SoundScheduleRefused];
+            [self finish:SoundScheduleRefused];
             return;
         }
 
-        // Keep the cue alive until the device has played the buffer. Allow the
-        // output to go away without delivering its callback.
-        double duration = buffer.frameLength / buffer.format.sampleRate;
+        // Keep the cue alive after the video view has gone away.
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((lead + duration + 2.0) * NSEC_PER_SEC)),
-                       queue, ^{ [cue finish:SoundCompletionTimedOut]; });
-        if (report) report(SoundScheduled);
+                       queue, ^{ [self finish:SoundCompletionTimedOut]; });
+        if (self.report) self.report(SoundScheduled);
     });
 }
+@end
 
 @interface RichSplashCover : NSView
 @property(nonatomic, copy) dispatch_block_t lostWindow;
@@ -172,7 +191,7 @@ static NSRect contentOnScreen(NSView *view) {
 @property(nonatomic, strong) dispatch_queue_t timeline;
 @property(nonatomic, strong) dispatch_queue_t media;
 @property(nonatomic, strong) AVSampleBufferRenderSynchronizer *clock;
-@property(nonatomic, copy) NSString *soundPath;
+@property(nonatomic, strong) RichSplashCue *cue;
 @property(nonatomic) double anchorMs;
 @property(nonatomic) RichSplashPhase phase;
 @property(nonatomic) RichSplashMetrics metrics;
@@ -215,6 +234,7 @@ static NSRect contentOnScreen(NSView *view) {
 }
 
 - (void)dealloc {
+    [self.cue cancel];
     for (int i = 0; i < PrerollFrames; i++) {
         if (_preroll[i]) CFRelease(_preroll[i]);
     }
@@ -339,7 +359,15 @@ static NSRect contentOnScreen(NSView *view) {
         }
     }];
     [self.clock setRate:1 time:kCMTimeZero atHostTime:time];
-    scheduleCue(self.soundPath, (double)_frameCount / FPS, time, self.audioOutcome);
+    if (self.cue) {
+        // Start the cue 130 ms before the bar lands, 800 ms from the end.
+        CMTime offset = CMTimeMake(_frameCount * 1000 / FPS - 930, 1000);
+        [self.cue playAt:CMTimeAdd(time, offset)];
+        self.cue = nil;
+    } else if (self.audioOutcome) {
+        RichSplashAudio report = self.audioOutcome;
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ report(SoundDisabled); });
+    }
     self.phase(VideoPlaying, self.anchorMs);
 
     // If the page never painted, the final frame may stay briefly while it loads.
@@ -521,11 +549,18 @@ void *richos_splash_prepare(const char *file, int frames, const char *sound,
                             RichSplashPhase phase, RichSplashMetrics metrics, RichSplashAudio audioOutcome) {
     @autoreleasepool {
         NSString *path = [NSFileManager.defaultManager stringWithFileSystemRepresentation:file length:strlen(file)];
+        NSString *soundPath = sound ? [NSFileManager.defaultManager
+            stringWithFileSystemRepresentation:sound length:strlen(sound)] : nil;
+        RichSplashCue *cue = soundPath ? [[RichSplashCue alloc] initWithPath:soundPath report:audioOutcome] : nil;
         RichSplashPlayer *player = [[RichSplashPlayer alloc] initWithPack:path frames:frames];
+        if (!player) {
+            [cue cancel];
+            return NULL;
+        }
+        player.cue = cue;
         player.phase = phase;
         player.metrics = metrics;
         player.audioOutcome = audioOutcome;
-        if (sound) player.soundPath = [NSFileManager.defaultManager stringWithFileSystemRepresentation:sound length:strlen(sound)];
         if (![player prepare]) return NULL;
         return (__bridge_retained void *)player;
     }
