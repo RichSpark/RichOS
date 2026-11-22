@@ -540,6 +540,12 @@ keystroke "v" using command down
         pressed = time.monotonic()
         self.press('Download update')
         if self.a.suite == 'busy':
+            # Staging the signed archive can take longer than the copy. Use the
+            # real updater's ready transition to start the copy before the swap.
+            timing = self.home + '/Library/Application Support/com.richos.app/update-timing.log'
+            self.wait(lambda: self.g('grep -F ' + q('pid=%d ' % old) + ' ' + q(timing)
+                      + " | grep -F 'phase=ready outcome=restarting' || true"),
+                      'the signed update to finish staging', self.a.within)
             self.suite_copy()
         seen = set()
 
@@ -729,8 +735,8 @@ keystroke "v" using command down
                 self.quit_app(app)
             except (StepFailed, RuntimeError, subprocess.SubprocessError):
                 self.g('kill -TERM %d 2>/dev/null || true' % app)
-        for name in ('RichFiles', 'RichGlance') if self.a.suite else ():
-            for pid in self.suite_pids(name):
+        for name, pid in self.owned.items():
+            if name.startswith(('RichFiles-', 'RichGlance-')):
                 self.g('kill -TERM %d 2>/dev/null || true' % pid)
         if getattr(self, 'mount', None):
             self.g('hdiutil detach -quiet ' + q(self.mount) + ' || true')
