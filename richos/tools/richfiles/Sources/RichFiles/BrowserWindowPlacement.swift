@@ -62,8 +62,9 @@ final class BrowserWindowPlacement {
         let fitted = Self.fit(frame, to: NSScreen.screens.map(\.visibleFrame),
                               fallback: NSScreen.main?.visibleFrame)
         window.setFrame(fitted, display: false)
-        RichFilesDiagnostics.record(.windowPlacement, id: UUID(), outcome: .complete,
-                                    started: started, total: 1, confirmed: window.frame == fitted ? 1 : 0)
+        let restored = window.frame == fitted
+        RichFilesDiagnostics.record(.windowPlacement, id: UUID(), outcome: restored ? .complete : .issues,
+                                    started: started, total: 1, confirmed: restored ? 1 : 0)
     }
 
     private static func valid(_ frame: NSRect) -> Bool {
@@ -72,13 +73,21 @@ final class BrowserWindowPlacement {
     }
 
     static func fit(_ frame: NSRect, to screens: [NSRect], fallback: NSRect?) -> NSRect {
+        // Keep intentional placement across screens or edges when a user can still grab the title bar.
+        let grabHeight = min(22, frame.height)
+        let titleBar = NSRect(x: frame.minX, y: frame.maxY - grabHeight, width: frame.width, height: grabHeight)
+        if screens.contains(where: { screen in
+            let reachable = screen.intersection(titleBar)
+            return reachable.width >= min(80, titleBar.width) && reachable.height >= grabHeight
+        }) { return frame }
+
         func overlap(_ screen: NSRect) -> CGFloat {
             let intersection = screen.intersection(frame)
             return intersection.isEmpty ? 0 : intersection.width * intersection.height
         }
         let best = screens.max { overlap($0) < overlap($1) }
         let screen = best.flatMap { overlap($0) > 0 ? $0 : nil } ?? fallback ?? screens.first
-        guard let screen, !screen.contains(frame) else { return frame }
+        guard let screen else { return frame }
         let width = min(frame.width, screen.width)
         let height = min(frame.height, screen.height)
         let origin = overlap(screen) > 0 ? frame.origin : NSPoint(x: screen.midX - width / 2,

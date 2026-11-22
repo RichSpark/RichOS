@@ -43,4 +43,14 @@ final class BrowserWindowPlacementTests: XCTestCase {
         XCTAssertEqual(BrowserWindowPlacement.fit(obscuredTitleBar, to: [main], fallback: main),
                        NSRect(x: 500, y: 400, width: 900, height: 500))
     }
+
+    @MainActor
+    func testKeepsWindowsSpanningDisplaysOrAnEdgeWhenTheTitleBarIsReachable() {
+        let main = NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let second = NSRect(x: 1440, y: 0, width: 1920, height: 1080)
+        let spanning = NSRect(x: 1000, y: 100, width: 1000, height: 600)
+        let beyondBottom = NSRect(x: 20, y: -25, width: 800, height: 600)
+        XCTAssertEqual(BrowserWindowPlacement.fit(spanning, to: [main, second], fallback: main), spanning)
+        XCTAssertEqual(BrowserWindowPlacement.fit(beyondBottom, to: [main], fallback: main), beyondBottom)
+    }
 }
