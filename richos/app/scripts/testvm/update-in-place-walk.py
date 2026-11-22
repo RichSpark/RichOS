@@ -346,7 +346,9 @@ class Walk:
         status = self.g('launchctl print ' + target + ' 2>/dev/null || true')
         pid = next((int(line.partition('=')[2].strip()) for line in status.splitlines()
                     if line.strip().startswith('pid =')), None)
-        return pid if pid in self.gesture_pids() else None
+        # launchd presents registered login items under their service label in ps.
+        # Check the job's PID and use its own diagnostics to prove the running build.
+        return pid if pid and self.g('kill -0 %d 2>/dev/null && echo alive || true' % pid) else None
 
     def gestures(self):
         if self.a.suite:
