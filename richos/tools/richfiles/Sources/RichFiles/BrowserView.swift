@@ -1770,8 +1770,7 @@ struct BrowserView: View {
                 else if let template = request.template { actions.create(from: template, named: name) }
                 else {
                     let tab = model.currentTabID
-                    actions.create(in: request.folder, named: name, directory: request.directory,
-                                   expectedFolder: request.expectedFolder) { item in
+                    actions.create(from: request, named: name) { item in
                         guard model.folder == request.folder, model.currentTabID == tab,
                               workspace.active == side, sheet == nil else { return }
                         model.selectCreatedItem(item)
