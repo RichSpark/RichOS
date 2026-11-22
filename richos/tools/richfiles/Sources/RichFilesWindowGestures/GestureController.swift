@@ -314,7 +314,12 @@ final class GestureController {
               let display = GestureDisplay.current().first(where: { $0.frame.contains(point) }),
               let tile = WindowTile.atEdge(point, of: display.frame) else { return }
         let revision = pointerRevision
-        DispatchQueue.main.async { [weak self] in
+        // On macOS 15 and later WindowServer may handle the same mouse-up.
+        // Let it settle before deciding whether RichFiles needs to move the window.
+        let delay: DispatchTimeInterval
+        if #available(macOS 15, *) { delay = .milliseconds(350) }
+        else { delay = .milliseconds(0) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, self.pointerRevision == revision else { return }
             self.applyTile(tile, to: drag.window, on: display, from: drag.original)
         }
@@ -345,15 +350,23 @@ final class GestureController {
         let previous = tiled[window]
         let original = previous.flatMap { before.nearlyEquals($0.applied) ? $0.original : nil } ?? before
         let frame = tile.frame(in: display.usable)
-        let accepted = window.setFrame(frame)
-        if let actual = window.frame, !actual.nearlyEquals(original) {
+        let accepted: Bool
+        let actual: CGRect?
+        if #available(macOS 15, *), beforeDrag != nil,
+           current.edgesAreNear(tile == .top ? display.usable : frame, within: Self.layoutTolerance) {
+            // Native top-edge tiling fills the screen. Side and corner tiles can include margins.
+            accepted = true
+            actual = current
+        } else {
+            let moved = window.setFrame(frame)
+            actual = window.frame
+            accepted = moved && actual?.edgesAreNear(frame, within: Self.layoutTolerance) == true
+        }
+        if let actual, accepted || !actual.nearlyEquals(original) {
             tiled[window] = RestorableFrame(original: original, applied: actual, display: display.id)
             observe(window)
-            record(.windowGestureTile, accepted && actual.edgesAreNear(frame, within: Self.layoutTolerance)
-                ? .complete : .issues, started: started)
-        } else {
-            record(.windowGestureTile, .issues, started: started)
         }
+        record(.windowGestureTile, accepted ? .complete : .issues, started: started)
     }
 
     private func restoreTile(_ window: AXUIElement, current: CGRect, on display: GestureDisplay) {
