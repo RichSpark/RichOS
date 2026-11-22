@@ -2,7 +2,7 @@ import AppKit
 import ImageIO
 import UniformTypeIdentifiers
 
-enum ScreenshotTool: String, CaseIterable, Codable {
+enum ScreenshotTool: String, CaseIterable, Codable, Sendable {
     case select, arrow, text, box, highlight, steps, redact, crop
 
     var title: String { rawValue.capitalized }
@@ -33,7 +33,7 @@ enum ScreenshotTool: String, CaseIterable, Codable {
     }
 }
 
-enum ScreenshotInk: String, CaseIterable, Codable {
+enum ScreenshotInk: String, CaseIterable, Codable, Sendable {
     case red, yellow, blue, black
 
     var color: NSColor {
@@ -48,7 +48,7 @@ enum ScreenshotInk: String, CaseIterable, Codable {
     var outline: NSColor { self == .yellow ? ScreenshotRenderer.ink : .white }
 }
 
-struct ScreenshotMark: Codable, Equatable, Identifiable {
+struct ScreenshotMark: Codable, Equatable, Identifiable, Sendable {
     var id = UUID()
     var tool: ScreenshotTool
     var start: CGPoint
@@ -67,7 +67,7 @@ struct ScreenshotMark: Codable, Equatable, Identifiable {
     }
 }
 
-struct ScreenshotEdits: Codable, Equatable {
+struct ScreenshotEdits: Codable, Equatable, Sendable {
     var crop: CGRect
     var marks: [ScreenshotMark] = []
 
@@ -83,7 +83,7 @@ struct ScreenshotEdits: Codable, Equatable {
     }
 }
 
-enum ScreenshotKind: String, Codable {
+enum ScreenshotKind: String, Codable, Sendable {
     case region, window, display, scrolling
     var title: String { self == .scrolling ? "Scrolling capture" : rawValue.capitalized }
     var symbol: String {
@@ -96,7 +96,7 @@ enum ScreenshotKind: String, Codable {
     }
 }
 
-struct ScreenshotDocument {
+struct ScreenshotDocument: Sendable {
     let id: UUID
     let created: Date
     let original: CGImage

@@ -34,7 +34,15 @@ enum ScreenshotText {
     }
 
     static func read(_ input: Input) async throws -> [Line] {
-        let worker = Task.detached(priority: .userInitiated) { try recognize(input) }
+        try await read(preparing: { input })
+    }
+
+    static func read(preparing makeInput: @escaping @Sendable () -> Input?) async throws -> [Line] {
+        let worker = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            guard let input = makeInput() else { throw CocoaError(.fileReadUnknown) }
+            return try recognize(input)
+        }
         return try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
     }
 

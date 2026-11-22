@@ -1,7 +1,7 @@
 import AppKit
 import ColorSync
 
-struct ScreenshotRepeatTarget: Codable, Equatable {
+struct ScreenshotRepeatTarget: Codable, Equatable, Sendable {
     let id: UUID
     let display: String
     let pixels: CGRect

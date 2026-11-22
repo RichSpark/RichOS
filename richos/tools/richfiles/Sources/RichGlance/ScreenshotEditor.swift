@@ -503,8 +503,10 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
                         document = await loader.value
                     }
                     guard !Task.isCancelled else { return }
-                    guard let document, let input = ScreenshotText.Input(document: document),
-                          let recognized = try? await ScreenshotText.read(input) else { continue }
+                    guard let document,
+                          let recognized = try? await ScreenshotText.read(preparing: {
+                              ScreenshotText.Input(document: document)
+                          }) else { continue }
                     lines = recognized
                     if !(isCurrent && dirty) { indexed[entry.id] = TextIndexEntry(entry: entry, lines: lines) }
                 }

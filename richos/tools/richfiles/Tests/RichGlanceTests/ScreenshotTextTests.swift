@@ -25,6 +25,32 @@ final class ScreenshotTextTests: XCTestCase {
         XCTAssertFalse(results.contains { redaction.intersects($0.bounds) }, "\(results)")
     }
 
+    @MainActor
+    func testRasterPreparationLeavesTheMainActorAvailable() async throws {
+        let context = try XCTUnwrap(CGContext(data: nil, width: 1280, height: 720, bitsPerComponent: 8, bytesPerRow: 0,
+                                               space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                               bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        let document = ScreenshotDocument(original: try XCTUnwrap(context.makeImage()), scale: 1)
+        let rasterStarted = expectation(description: "uncached raster preparation is off the main thread")
+        let unpause = DispatchSemaphore(value: 0)
+        let indexing = Task {
+            for capture in 0..<6 {
+                _ = try await ScreenshotText.read(preparing: {
+                    XCTAssertFalse(Thread.isMainThread)
+                    if capture == 0 {
+                        rasterStarted.fulfill()
+                        XCTAssertEqual(unpause.wait(timeout: .now() + 5), .success)
+                    }
+                    return ScreenshotText.Input(document: document)
+                })
+            }
+        }
+        await fulfillment(of: [rasterStarted], timeout: 5)
+        XCTAssertTrue(Thread.isMainThread)
+        unpause.signal()
+        try await indexing.value
+    }
+
     func testVisionReadsScannedPixels() throws {
         let image = NSImage(size: CGSize(width: 480, height: 100), flipped: false) { rect in
             NSColor.white.setFill()
