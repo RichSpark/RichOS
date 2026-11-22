@@ -74,7 +74,6 @@ Everything this walk starts is stopped before it returns (CEO §54).
 Exit 0 when every step passes.
 """
 import argparse
-import base64
 import json
 import os
 from pathlib import Path
@@ -92,8 +91,7 @@ SYSTEM = '/Applications/RichOS.app'
 FILES = SYSTEM + '/Contents/Applications/RichFiles.app'
 GLANCE = FILES + '/Contents/Applications/RichGlance.app'
 SUITE_LOG = 'Library/Logs/RichOS/richfiles-timing.jsonl'
-VIEWER_IMAGE = ('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB'
-                '/aXdl1sAAAAASUVORK5CYII=')
+VIEWER_IMAGE = HERE.parents[2] / 'tools/richfiles/Tests/RichFilesCoreTests/Fixtures/Glance/sample.bmp'
 EXE = SYSTEM + '/Contents/MacOS/richos-tauri'
 GESTURES = SYSTEM + '/Contents/Applications/RichFiles.app/Contents/Library/LoginItems/RichFiles Window Gestures.app'
 PORT = 8765
@@ -420,10 +418,8 @@ return resultRows as text
     def suite_open(self):
         self.source = self.work + '/Source'
         self.destination = self.work + '/Destination'
-        image = self.out / 'Suite-Walk.png'
-        image.write_bytes(base64.b64decode(VIEWER_IMAGE))
         self.g('mkdir -p ' + q(self.source) + ' ' + q(self.destination))
-        self.push(image, self.source + '/Suite-Walk.png')
+        self.push(VIEWER_IMAGE, self.source + '/Suite-Walk.bmp')
         if self.a.suite == 'busy':
             # Cross-volume copy exercises the real transfer. A clone on APFS can
             # otherwise finish before the update reaches the other application.
@@ -446,7 +442,7 @@ return resultRows as text
                   'Destination window', 30)
         self.suite_ax('RichFiles', 'set position of (first window whose name begins with "Source") to {55, 100}\n'
                                   'set position of (first window whose name begins with "Destination") to {520, 210}')
-        self.g('open -a ' + q(GLANCE) + ' ' + q(self.source + '/Suite-Walk.png'))
+        self.g('open -a ' + q(GLANCE) + ' ' + q(self.source + '/Suite-Walk.bmp'))
         glance_pid = self.wait(lambda: next(iter(self.suite_pids('RichGlance')), None), 'RichGlance', 30)
         self.owned['RichGlance-before'] = glance_pid
         self.wait(lambda: len(self.windows('RichGlance')) == 1, 'the RichGlance image window', 30)
