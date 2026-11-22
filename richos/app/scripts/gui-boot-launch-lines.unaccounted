@@ -611,3 +611,5 @@
 [richos] native splash: could not attach the Home page ({})
 [richos] native splash: Home attachment could not reach the main thread ({})
 [richos] RichGlance draft handoff unavailable ({})
+[richos] could not mark the RichScribe update exit: {}
+[richos] suite restart: could not notify the running applications
