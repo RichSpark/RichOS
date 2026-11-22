@@ -1545,7 +1545,7 @@ struct BrowserView: View {
         let name = directory ? "New Folder" : "New File" + (ext.map { "." + $0 } ?? "")
         let folder = model.folder
         let tab = model.currentTabID
-        guard model.currentVolume?.supportsExclusiveRename == true else {
+        guard !directory, model.currentVolume?.supportsExclusiveRename == true else {
             sheet = .name(NameRequest(source: nil, folder: destination.url, directory: directory, name: name,
                                       expectedFolder: destination.identity))
             return
@@ -1773,8 +1773,15 @@ struct BrowserView: View {
                 if let source = request.source { actions.rename(source, to: name) }
                 else if let template = request.template { actions.create(from: template, named: name) }
                 else {
+                    let tab = model.currentTabID
                     actions.create(in: request.folder, named: name, directory: request.directory,
-                                   expectedFolder: request.expectedFolder)
+                                   expectedFolder: request.expectedFolder) { item in
+                        guard model.folder == request.folder, model.currentTabID == tab,
+                              workspace.active == side, sheet == nil else { return }
+                        model.selectCreatedItem(item)
+                        model.selection.rangeAnchor = item.url
+                        model.selection.moveCursor(to: item.url, scrolling: true)
+                    }
                 }
                 sheet = nil
             }
