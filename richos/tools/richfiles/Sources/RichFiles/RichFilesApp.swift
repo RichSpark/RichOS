@@ -42,6 +42,13 @@ struct FolderWindowRequest: Codable, Hashable {
     let folder: URL
 }
 
+struct SuiteBrowserWindow: Codable {
+    let session: Data
+    let frame: CGRect
+    let layout: BrowserWindowPlacement.Layout
+    let minimized: Bool
+}
+
 @MainActor
 public struct RichFilesScenes: Scene {
     private static let browserEvents: Set<String> = ["file://", "richfiles-workspace://"]
@@ -68,6 +75,15 @@ public struct RichFilesScenes: Scene {
         .commands {
             BrowserCommands()
         }
+
+        WindowGroup("RichFiles", id: "richfiles-after-update", for: Int.self) { $index in
+            WindowBrowserView(start: FileManager.default.homeDirectoryForCurrentUser,
+                              actions: actions, openRequests: delegate, supportsSessionRestore: true,
+                              placementFamily: .browser, suiteWindowIndex: index)
+                .frame(minWidth: 720, minHeight: 420)
+                .defaultAppStorage(RichFilesInstallation.preferences)
+        }
+        .defaultSize(width: 1120, height: 700)
 
         WindowGroup("RichFiles", id: "richfiles-folder", for: FolderWindowRequest.self) { $request in
             WindowBrowserView(start: request?.folder ?? FileManager.default.homeDirectoryForCurrentUser,
@@ -118,8 +134,23 @@ public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, Observab
     private var openedInitialBrowser = false
     let windowPlacement = BrowserWindowPlacement(defaults: RichFilesInstallation.preferences)
     private var windowRecording: WindowRecording?
+    private var suiteRestart: SuiteRestart?
+    var updateWindows = SuiteRestart.restore([SuiteBrowserWindow].self)
+    private var restoredWindowIndices: Set<Int> = []
+
+    func didRestoreUpdateWindow(_ index: Int) {
+        restoredWindowIndices.insert(index)
+        if restoredWindowIndices.count >= (updateWindows?.count ?? 0) {
+            updateWindows = nil
+        }
+    }
+    var suiteWindows: [Int: () -> SuiteBrowserWindow?] = [:]
+    weak var actions: BrowserActions?
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
+        suiteRestart = SuiteRestart(operation: .richFilesSuiteRestart) { [weak self] in
+            self?.snapshotForUpdate()
+        }
         NSApp.servicesProvider = self
         NSUpdateDynamicServices()
         DispatchQueue.global(qos: .utility).async {
@@ -130,6 +161,18 @@ public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, Observab
         Task {
             _ = await WindowGestureService.request("register-if-desktop-enabled", in: Bundle.main.bundleURL)
         }
+    }
+
+    private func snapshotForUpdate() -> Data? {
+        guard actions?.canRestartAfterUpdate == true,
+              pending.isEmpty, handoffs.isEmpty, !imageViewerSettingsRequested else { return nil }
+        let windows = NSApp.windows.filter { $0.canBecomeMain && ($0.isVisible || $0.isMiniaturized || NSApp.isHidden) }
+        guard windows.allSatisfy({ suiteWindows[$0.windowNumber] != nil }) else { return nil }
+        let ordered = NSApp.orderedWindows.filter { suiteWindows[$0.windowNumber] != nil }
+        let remaining = windows.filter { window in !ordered.contains { $0 === window } }
+        let snapshots = (ordered + remaining).compactMap { suiteWindows[$0.windowNumber]?() }
+        guard snapshots.count == ordered.count + remaining.count else { return nil }
+        return try? JSONEncoder().encode(snapshots)
     }
 
     public func applicationWillTerminate(_ notification: Notification) {

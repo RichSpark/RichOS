@@ -1,10 +1,12 @@
 import RichFiles
+import RichFilesCore
 import SwiftUI
 
 @main
 enum RichFilesEntry {
     @MainActor static func main() {
-        if !WindowGestureService.runCommandIfRequested() {
+        if !SuiteRestart.runCommand(Array(CommandLine.arguments.dropFirst())),
+           !WindowGestureService.runCommandIfRequested() {
             RichFilesApplication.main()
         }
     }

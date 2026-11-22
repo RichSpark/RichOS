@@ -15,6 +15,7 @@ final class CaptureHelper: NSObject, NSApplicationDelegate {
     private var preferences: GlanceHelper.Preferences
     private var lease: FileHandle?
     private var port: CFMessagePort?
+    private var suiteRestart: SuiteRestart?
     private struct Registration {
         let ref: EventHotKeyRef
         let id: UInt32
@@ -60,6 +61,12 @@ final class CaptureHelper: NSObject, NSApplicationDelegate {
             do { try replaceShortcut(with: preferences, saving: false) }
             catch { logger.notice("start shortcut=unavailable") }
             updateMenu()
+            let isSession = session != nil
+            suiteRestart = SuiteRestart(operation: .captureHelperSuiteRestart, prepare: {
+                try? JSONEncoder().encode(true)
+            }, relaunchArguments: { owner in
+                isSession ? ["--richos-session", String(owner)] : []
+            })
             outcome = preferences.enabled && hotkey == nil ? .unavailable : .complete
             logger.info("start outcome=ready session=\(self.session != nil) shortcut=\(self.hotkey != nil) menu=\(self.item != nil)")
         } catch {
@@ -314,10 +321,13 @@ final class CaptureHelper: NSObject, NSApplicationDelegate {
 }
 
 MainActor.assumeIsolated {
-    let arguments = CommandLine.arguments
-    let login = arguments.count == 1
-    let session = arguments.count == 3 && arguments[1] == "--richos-session"
-        ? pid_t(arguments[2]).flatMap(NSRunningApplication.init(processIdentifier:)) : nil
+    let arguments = Array(CommandLine.arguments.dropFirst())
+    if SuiteRestart.runCommand(arguments) { return }
+    let restored = SuiteRestart.restore(Bool.self) == true
+    let mode = restored ? Array(arguments.dropFirst(4)) : arguments
+    let login = mode.isEmpty
+    let session = mode.count == 2 && mode[0] == "--richos-session"
+        ? pid_t(mode[1]).flatMap(NSRunningApplication.init(processIdentifier:)) : nil
     if !login && session?.bundleIdentifier != GlanceHelper.richOSID { exit(EXIT_SUCCESS) }
     if let helper = CaptureHelper(session: session, login: login) {
         let app = NSApplication.shared

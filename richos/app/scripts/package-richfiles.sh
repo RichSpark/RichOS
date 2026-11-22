@@ -27,6 +27,11 @@ mkdir "$output"
 complete=0
 trap 'if [ "$complete" -eq 0 ]; then rm -rf -- "$output"; fi' EXIT
 configuration=debug
+stamp_suite_version() {
+  if [ "$embedded" -eq 1 ] && [ -n "${RICHOS_SUITE_VERSION:-}" ]; then
+    /usr/libexec/PlistBuddy -c "Add :RichOSSuiteVersion string $RICHOS_SUITE_VERSION" "$1"
+  fi
+}
 swift_args=(--package-path "$package" --scratch-path "$build")
 if [ "$embedded" -eq 1 ]; then
   configuration=release
@@ -99,8 +104,10 @@ if [ "$embedded" -eq 1 ]; then
   drop_build_machine_rpaths "$capture_helper/Contents/MacOS/RichGlanceCaptureHelper"
 fi
 /usr/libexec/PlistBuddy -c "Add :RichOSSourceRevision string $(git -C "$root" rev-parse HEAD)" "$capture_helper/Contents/Info.plist"
+stamp_suite_version "$capture_helper/Contents/Info.plist"
 plutil -lint "$capture_helper/Contents/Info.plist"
 codesign --force --sign - "$capture_helper"
+stamp_suite_version "$glance/Contents/Info.plist"
 plutil -lint "$glance/Contents/Info.plist"
 codesign --force --sign - "$glance"
 gestures="$app/Contents/Library/LoginItems/RichFiles Window Gestures.app"
@@ -111,8 +118,10 @@ install -m 644 "$package/RichFilesWindowGestures-Info.plist" "$gestures/Contents
 if [ "$embedded" -eq 1 ]; then
   drop_build_machine_rpaths "$gestures/Contents/MacOS/RichFilesWindowGestures"
 fi
+stamp_suite_version "$gestures/Contents/Info.plist"
 plutil -lint "$gestures/Contents/Info.plist"
 codesign --force --sign - "$gestures"
+stamp_suite_version "$app/Contents/Info.plist"
 plutil -lint "$app/Contents/Info.plist"
 codesign --force --sign - "$app/Contents/MacOS/richfiles-archive"
 codesign --force --sign - "$app"

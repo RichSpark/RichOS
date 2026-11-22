@@ -63,12 +63,17 @@ fn now_ms() -> u64 {
 /// When the kernel started this process, in milliseconds since the Unix epoch.
 #[cfg(target_os = "macos")]
 pub fn process_started_ms() -> Option<u64> {
+    process_started_ms_for(std::process::id())
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn process_started_ms_for(pid: u32) -> Option<u64> {
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
     // SAFETY: `info` is a writable `proc_bsdinfo` of exactly `size` bytes.
     let written = unsafe {
         libc::proc_pidinfo(
-            std::process::id() as libc::c_int,
+            pid as libc::c_int,
             libc::PROC_PIDTBSDINFO,
             0,
             (&mut info as *mut libc::proc_bsdinfo).cast(),

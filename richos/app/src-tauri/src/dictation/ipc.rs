@@ -32,6 +32,9 @@ pub enum AppMessage {
     /// Who is connecting: its version, its bundle and its data folder.
     #[serde(rename_all = "camelCase")]
     Hello { version: String, bundle: String, data_dir: String },
+    /// Sent by the updated, verified installation to the tool that still holds the key.
+    #[serde(rename_all = "camelCase")]
+    RestartAfterUpdate { version: String, bundle: String, data_dir: String },
     /// Re-read `dictation.json`.
     SettingsChanged,
     /// Accessibility may have been allowed: create the tap now.
@@ -157,6 +160,24 @@ pub fn prepare_dir(dir: &Path, uid: u32) -> std::io::Result<()> {
         return refuse("open to other users");
     }
     Ok(())
+}
+
+/// The parent marks a committed update exit in the same private runtime directory
+/// as the key owner. Include its kernel birth time so a later PID cannot inherit it.
+pub(crate) fn update_exit_marker(dir: &Path, pid: u32, started_ms: u64) -> PathBuf {
+    dir.join(format!("dictation-update-exit-{pid}-{started_ms}"))
+}
+
+pub(crate) fn mark_update_exit() -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let pid = std::process::id();
+    let started = crate::launch_timing::process_started_ms()
+        .ok_or_else(|| std::io::Error::other("could not identify the exiting RichOS process"))?;
+    let dir = runtime_dir();
+    prepare_dir(&dir, unsafe { libc::geteuid() })?;
+    std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+        .open(update_exit_marker(&dir, pid, started)).map(drop)
 }
 
 /// The key, held: the lock and the socket. Dropping it releases both.

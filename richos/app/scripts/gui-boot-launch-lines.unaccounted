@@ -537,8 +537,6 @@
 [richos] turn interrupted [{}]: {}
 [richos] update ready and nothing is running: relaunching into {}
 [richos] update relaunch: RichOS did not quit, so nothing was started
-[richos] update relaunch: a RichOS session still holds the update lease; starting anyway
-[richos] update relaunch: could not read the update lease ({}); starting anyway
 [richos] update relaunch: could not start RichOS again: {}
 [richos] update relaunch: could not start the helper: {}
 [richos] update remains deferred: {}
@@ -611,3 +609,5 @@
 [richos] native splash: could not attach the Home page ({})
 [richos] native splash: Home attachment could not reach the main thread ({})
 [richos] RichGlance draft handoff unavailable ({})
+[richos] could not mark the RichScribe update exit: {}
+[richos] suite restart: could not notify the running applications

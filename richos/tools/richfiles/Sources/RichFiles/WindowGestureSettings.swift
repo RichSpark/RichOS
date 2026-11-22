@@ -58,6 +58,9 @@ public enum WindowGestureService {
     private static func refreshInstalledHelper() {
         let helper = Bundle.main.bundleURL.appendingPathComponent(WindowGesturePreferences.helperPath)
         guard let installed = Bundle(url: helper)?.executableURL?.resolvingSymlinksInPath() else { return }
+        // A contract-capable helper replaces its executable once the gesture is idle.
+        // Keep kickstart for older builds that cannot receive a suite restart.
+        guard !WindowGesturePreferences.runningHelperHandlesOwnRestart() else { return }
         let running = NSRunningApplication.runningApplications(withBundleIdentifier: WindowGesturePreferences.helperID)
             .first { !$0.isTerminated }
         if let running {

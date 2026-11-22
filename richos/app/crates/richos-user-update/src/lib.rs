@@ -1584,6 +1584,8 @@ fn clear_rollback(root: &Path) -> io::Result<()> {
         Err(e) => Err(e),
     }
 }
+const RECLAMATION_BATCH_SIZE: usize = 8;
+
 /// Reclaim proven updater payloads at a later exclusive startup. The caller must first
 /// prove its loaded bundle still matches its startup inode/version. Errors retain bytes
 /// and must not prevent the normal runtime. This never runs while any participating
@@ -1698,7 +1700,7 @@ pub fn collect_retired(lease: &mut StartupLease, loaded_bundle: &Path) -> io::Re
         fs::rename(&journal, transaction.join("collected.json"))?;
         sync(&transaction)?;
         reclaimed += 1;
-        if reclaimed == 8 {
+        if reclaimed == RECLAMATION_BATCH_SIZE {
             break;
         }
     }
@@ -2182,39 +2184,90 @@ pub fn needs_install_migration(home: &Path, opened: &Path) -> bool {
     root(home).is_ok_and(|root| install_path::may_migrate(&root, opened))
 }
 
-/// AN UPDATE IS PUT IN PLACE WHEN THE APP CLOSES, NOT WHEN IT NEXT OPENS (Sage's plan
-/// 2026-11-14, rule 4). Run by the helper the quitting app leaves behind, once every RichOS session
-/// has ended: it takes the exclusive side of the session lease, reclaims payloads earlier updates
-/// left (as a launch used to, before its window), and publishes the prepared update by the same
-/// atomic exchange a launch performs. The next click then starts the new copy directly, with no
-/// swap and no second program start in front of its window. `running_version` is the version of the
-/// app that just quit; `loaded_bundle` is the bundle it ran from. Returns what the activation did,
-/// or `None` when nothing was prepared, or when a session is still open (the next launch then puts
-/// it in place, exactly as before: that path stays the recovery for an interrupted helper).
+const DEFERRED_RECLAMATION: &str = "reclaim-after-relaunch.json";
+
+/// The ordinary quit helper also runs after an automatic relaunch left cleanup pending.
+pub fn has_deferred_reclamation(home: &Path) -> bool {
+    metadata(&home.join("Applications/.richos-updater").join(DEFERRED_RECLAMATION))
+        .is_ok_and(|m| m.is_file())
+}
+
+/// Publish at a normal quit and clear old payloads while no RichOS session is open.
 pub fn activate_at_quit(
     home: &Path,
     running_version: &str,
     loaded_bundle: &Path,
 ) -> io::Result<Option<Activation>> {
+    activate_after_quit(home, running_version, loaded_bundle, false).map(|(activation, _)| activation)
+}
+
+/// Publish for an automatic restart and return the executable at its current location.
+/// Reclamation waits for a later ordinary quit, when the replacement has released its lease.
+pub fn activate_for_relaunch(
+    home: &Path,
+    running_version: &str,
+    loaded_bundle: &Path,
+    executable: &Path,
+) -> io::Result<(Option<Activation>, PathBuf)> {
+    let (activation, installed) = activate_after_quit(home, running_version, loaded_bundle, true)?;
+    let target = if let Some(installed) = installed {
+        let name = activation.as_ref().map(|done| std::ffi::OsStr::new(&done.entered.executable_name))
+            .or_else(|| executable.file_name()).ok_or_else(|| refuse("missing relaunch executable name"))?;
+        installed.join("Contents/MacOS").join(name)
+    } else {
+        executable.to_owned()
+    };
+    Ok((activation, target))
+}
+
+fn activate_after_quit(
+    home: &Path,
+    running_version: &str,
+    loaded_bundle: &Path,
+    relaunch: bool,
+) -> io::Result<(Option<Activation>, Option<PathBuf>)> {
     let mut lease = StartupLease::acquire(home)?;
     if !lease.can_activate() {
-        return Ok(None);
+        return Ok((None, None));
     }
     lease.remember_installation(loaded_bundle, running_version)?;
     let root = root(home)?;
     let migrated = {
         let _lock = Lock::acquire_startup(&root)?;
-        install_path::migrate(&root, loaded_bundle, running_version)?
+        let migrated = install_path::migrate(&root, loaded_bundle, running_version)?;
+        if relaunch {
+            if let Err(error) = write_document(&root, DEFERRED_RECLAMATION, &true) {
+                eprintln!("[richos] update at quit: payload reclamation deferred: {error}");
+            }
+        }
+        migrated
     };
-    let loaded = loaded_bundle.canonicalize()?;
     if migrated {
         eprintln!("[richos] update at quit: moved the active installation into Applications");
     }
-    if let Err(error) = collect_retired(&mut lease, &loaded) {
-        // Reclaiming is housekeeping: a failure never holds back the update.
-        eprintln!("[richos] update at quit: payload reclamation deferred: {error}");
+    if !relaunch {
+        let loaded = loaded_bundle.canonicalize()?;
+        let reclamation = collect_retired(&mut lease, &loaded).and_then(|count| {
+            if count == RECLAMATION_BATCH_SIZE {
+                return Ok(());
+            }
+            match fs::remove_file(root.join(DEFERRED_RECLAMATION)) {
+                Ok(()) => sync(&root),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error),
+            }
+        });
+        if let Err(error) = reclamation {
+            eprintln!("[richos] update at quit: payload reclamation deferred: {error}");
+        }
     }
-    activate_prepared(&mut lease, running_version)
+    let activation = activate_prepared(&mut lease, running_version)?;
+    let installed = if relaunch && (activation.is_some() || migrated) {
+        Some(install_path::destination(&root)?)
+    } else {
+        None
+    };
+    Ok((activation, installed))
 }
 
 #[cfg(test)]

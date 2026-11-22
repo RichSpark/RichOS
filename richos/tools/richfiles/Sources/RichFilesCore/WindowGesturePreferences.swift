@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 public enum WindowGesturePreferences {
@@ -10,6 +11,7 @@ public enum WindowGesturePreferences {
     private static let desktopDeleteKey = "desktopDelete.enabled"
     private static let statusKey = "windowGestures.status"
     private static let processKey = "windowGestures.process"
+    private static let restartContractKey = "windowGestures.restartContract"
 
     public struct Selection: OptionSet {
         public let rawValue: Int
@@ -47,6 +49,25 @@ public enum WindowGesturePreferences {
     public static func publish(_ status: Status) {
         defaults.set(status.rawValue, forKey: statusKey)
         defaults.set(Int(ProcessInfo.processInfo.processIdentifier), forKey: processKey)
+    }
+
+    public static func markRestartContract() {
+        defaults.set(["pid": Int(ProcessInfo.processInfo.processIdentifier), "ready": Date()],
+                     forKey: restartContractKey)
+    }
+
+    public static func runningHelperHandlesOwnRestart() -> Bool {
+        guard let mark = defaults.dictionary(forKey: restartContractKey),
+              let pid = mark["pid"] as? Int, pid > 1, let process = pid_t(exactly: pid),
+              let ready = mark["ready"] as? Date else { return false }
+        // A login item can have a running launchd job without an AppKit
+        // application registration. Use the recorded process's kernel identity.
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(process, PROC_PIDTBSDINFO, 0, &info, size) == size,
+              info.pbi_uid == getuid() else { return false }
+        let launched = Double(info.pbi_start_tvsec) + Double(info.pbi_start_tvusec) / 1_000_000
+        return launched <= ready.timeIntervalSince1970
     }
 
     public static var nativeTitleBarIsOff: Bool {

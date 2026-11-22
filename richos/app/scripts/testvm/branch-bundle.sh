@@ -78,7 +78,7 @@ gui_bundle "$STAGE/RichOS.app" "$EXE" "$IDENTIFIER" "$VERSION"
 python3 "$APP_DIR/scripts/chat-sounds.py" --copy "$STAGE/RichOS.app/Contents/Resources"
 if [ "$RICHFILES" -eq 1 ]; then
   echo "branch-bundle.sh: building RichFiles from this checkout" >&2
-  bash "$APP_DIR/scripts/package-richfiles.sh" --embedded "$STAGE/richfiles"
+  RICHOS_SUITE_VERSION="$VERSION" bash "$APP_DIR/scripts/package-richfiles.sh" --embedded "$STAGE/richfiles"
   mkdir -p "$STAGE/RichOS.app/Contents/Applications" "$STAGE/RichOS.app/Contents/Frameworks"
   ditto "$STAGE/richfiles/RichFiles.app" "$STAGE/RichOS.app/Contents/Applications/RichFiles.app"
   install -m 755 "$STAGE/richfiles/libRichFilesIntegration.dylib" "$STAGE/RichOS.app/Contents/Frameworks/libRichFilesIntegration.dylib"

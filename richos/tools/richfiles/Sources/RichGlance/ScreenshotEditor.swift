@@ -148,11 +148,16 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
         refresh()
     }
 
-    func show() {
+    func show(activate: Bool = true) {
         if !window.isVisible {
             let visible = (NSScreen.main ?? window.screen)?.visibleFrame ?? window.frame
             window.setContentSize(CGSize(width: min(1360, visible.width - 32), height: min(810, visible.height - 28)))
             window.center()
+        }
+        if !activate {
+            window.orderFront(nil)
+            refresh()
+            return
         }
         if #available(macOS 14, *) { NSApp.activate() }
         else { NSApp.activate(ignoringOtherApps: true) }
@@ -789,6 +794,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
         do {
             guard try store.retain(document, existingOnly: true) else { return false }
             persisted = document.edits
+            window.isDocumentEdited = false
             record(.complete, for: document, from: started)
             return true
         } catch {
@@ -833,6 +839,15 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
             window.performClose(nil)
         }
         return false
+    }
+
+    var restartDocument: UUID? { canvas?.document.id }
+
+    var canRestartAfterUpdate: Bool {
+        guard !sheetOpen, pendingCaptures.isEmpty, comparison == nil else { return false }
+        guard let canvas else { return true }
+        return !canvas.isInteracting && canvas.previewCrop == nil && canvas.document.edits == persisted
+            && store.keepsHistory && entries.contains(where: { $0.id == canvas.document.id })
     }
 
     func allowApplicationQuit() -> Bool {
@@ -1042,7 +1057,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
             meta.stringValue = "Screenshot editor"
         }
         let hasEdits = canvas?.hasChanges == true
-        window.isDocumentEdited = hasEdits
+        window.isDocumentEdited = canvas?.document.edits != persisted
         let isRedactedCopy = document?.redactedGeneration != nil
         edited.stringValue = isRedactedCopy ? "Redacted copy" : "Edited"
         edited.isHidden = !hasEdits && !isRedactedCopy

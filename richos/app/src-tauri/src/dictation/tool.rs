@@ -46,6 +46,7 @@ pub const HANDOVER_WAIT: Duration = Duration::from_secs(2);
 /// A quit that reaches the control loop (the parent gone, SIGTERM) ends the tool there, where
 /// the writing worker can be stopped and joined; this is the backstop if the loop never answers.
 const QUIT_BACKSTOP: Duration = Duration::from_secs(5);
+const UPDATE_RETRY: Duration = Duration::from_secs(60);
 
 fn cleaner_targets(context: &serde_json::Value) -> &[serde_json::Value] {
     context["targets"]
@@ -263,13 +264,24 @@ enum Control {
     BarExpired(u64),
     FlightDone(u64),
     Secure(Option<Option<String>>),
-    /// The app that started this child tool has ended, or SIGTERM arrived: end here, where the
-    /// writing worker is stopped and joined (review finding 1).
+    /// This tool can finish its active dictation when the app closes for an update.
+    ParentExitedForUpdate,
+    /// The retry is scoped to the same update target throughout the wait.
+    RetryUpdate,
+    /// SIGTERM arrived: stop and join the writing worker.
     Quit(&'static str),
     /// The handover's bound passed (review finding 2).
     HandoverTimeout(u64),
     /// A `voice-yielded` from connection `client` for handover `seq` (fourth review, finding 1).
     Yielded { seq: u64, client: u64, bundle: String },
+}
+
+fn parent_exit_control(update_marker: Option<&std::path::Path>) -> Control {
+    if update_marker.is_some_and(|marker| std::fs::remove_file(marker).is_ok()) {
+        Control::ParentExitedForUpdate
+    } else {
+        Control::Quit("the app that started this tool has ended")
+    }
 }
 
 /// What the state message reports, shared with the socket thread.
@@ -403,15 +415,21 @@ pub fn main(context: tauri::Context<tauri::Wry>, args: &[String]) -> i32 {
     };
     let (tx, rx) = channel::<Control>();
     if let Some(parent) = args.parent {
+        let pid = parent as u32;
+        let update_marker = crate::launch_timing::process_started_ms_for(pid)
+            .map(|started| ipc::update_exit_marker(&ipc::runtime_dir(), pid, started));
         let tx = tx.clone();
         std::thread::Builder::new()
             .name("dictation-parent".into())
             .spawn(move || loop {
                 // SAFETY: getppid has no failure mode.
                 if unsafe { libc::getppid() } != parent {
-                    // Through the control loop, which stops and joins the writing worker
-                    // (finding 1); the backstop is for a loop that never answers.
-                    tx.send(Control::Quit("the app that started this tool has ended")).ok();
+                    let control = parent_exit_control(update_marker.as_deref());
+                    let for_update = matches!(control, Control::ParentExitedForUpdate);
+                    let _parent_exited = tx.send(control);
+                    if for_update {
+                        break;
+                    }
                     std::thread::sleep(QUIT_BACKSTOP);
                     insert::settle();
                     std::process::exit(0);
@@ -636,6 +654,8 @@ struct Tool {
     ending: bool,
     /// This tool's compiled version, logged with each app's `hello`.
     version: String,
+    update_target: Option<(String, PathBuf)>,
+    parent_exited: bool,
     /// The dictation being written down, owned (finding 1).
     writing: Option<Writing>,
     /// `will-listen` is out and the microphone waits for the answers (finding 2).
@@ -708,6 +728,8 @@ impl Tool {
             flights: 0,
             ending: false,
             version: String::new(),
+            update_target: None,
+            parent_exited: false,
             writing: None,
             handover: None,
             handovers: 0,
@@ -1073,6 +1095,33 @@ impl Tool {
                         self.fly(words);
                     }
                 }
+                Control::ParentExitedForUpdate => {
+                    self.parent_exited = true;
+                    if self.update_target.is_none() && self.check_update_restart() {
+                        return self.end();
+                    }
+                }
+                Control::App(AppMessage::RestartAfterUpdate { version, bundle, data_dir }) => {
+                    if version == self.version || data_dir != self.data_dir.to_string_lossy()
+                        || self.shared.lock().unwrap_or_else(|p| p.into_inner()).owner != bundle
+                    {
+                        continue;
+                    }
+                    let target = (version, PathBuf::from(bundle));
+                    if self.update_target.as_ref() == Some(&target) {
+                        continue;
+                    }
+                    let already_waiting = self.update_target.is_some() || self.parent_exited;
+                    self.update_target = Some(target);
+                    if !already_waiting && self.check_update_restart() {
+                        return self.end();
+                    }
+                }
+                Control::RetryUpdate => {
+                    if self.check_update_restart() {
+                        return self.end();
+                    }
+                }
                 Control::Quit(why) => {
                     log::line(&format!("{why}; the tool ends"));
                     return self.end();
@@ -1234,6 +1283,29 @@ impl Tool {
             }
         }
         0
+    }
+
+    fn check_update_restart(&mut self) -> bool {
+        if let Some((version, bundle)) = &self.update_target {
+            if richos_user_update::bundle_version(bundle).ok().as_ref() != Some(version) {
+                self.update_target = None;
+            }
+        }
+        if self.update_target.is_none() && !self.parent_exited {
+            return false;
+        }
+        let busy = matches!(self.session.phase(), Phase::Listening { .. } | Phase::Writing)
+            || self.handover.is_some() || self.capture.is_some() || self.writing.is_some()
+            || self.assistance.is_some() || self.cleaner_pending.is_some() || self.cleaner_lookup.is_some()
+            || self.cleaner_target.is_some() || self.menu.is_open() || self.recovery_open
+            || self.drafts.protects_unresolved(draft_now());
+        if busy {
+            log::line("suite update restart deferred: RichScribe is busy");
+            later(&self.tx, UPDATE_RETRY, Control::RetryUpdate);
+            return false;
+        }
+        log::line(&format!("suite update restart ready: RichScribe version {}", self.version));
+        true
     }
 
     /// Stop everything and say the exit code. The writing worker, if one runs, is stopped (its
@@ -1944,6 +2016,18 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn parent_exit_waits_only_for_a_marked_update() {
+        let temp = tempfile::tempdir().unwrap();
+        let old_marker = ipc::update_exit_marker(temp.path(), 123, 10);
+        let marker = ipc::update_exit_marker(temp.path(), 123, 11);
+        std::fs::write(old_marker, []).unwrap();
+        assert!(matches!(parent_exit_control(Some(&marker)), Control::Quit(_)));
+        std::fs::write(&marker, []).unwrap();
+        assert!(matches!(parent_exit_control(Some(&marker)), Control::ParentExitedForUpdate));
+        assert!(matches!(parent_exit_control(Some(&marker)), Control::Quit(_)));
     }
 
     #[test]

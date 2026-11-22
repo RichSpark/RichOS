@@ -41,6 +41,13 @@ final class BrowserActions: ObservableObject {
     @Published private(set) var redoName: String?
     @Published private(set) var mutationRevision = UUID()
 
+    var canRestartAfterUpdate: Bool {
+        !busy && transfer?.running != true && transferTask == nil && preparingQueue.isEmpty
+            && queuedTransfers.isEmpty && !replacingFile && currentDrag == nil && cutURLs.isEmpty
+            && !canRetryTransfer && shelf.isEmpty
+            && (undoRedoPersisted || (undoHistory.isEmpty && redoHistory.isEmpty))
+    }
+
     var didMutate: (() -> Void)?
     var operationIssues: [String] { issuesAreFromTransfer ? [] : issues }
 
@@ -56,6 +63,7 @@ final class BrowserActions: ObservableObject {
     private var retryRequest: BrowserTransferRequest?
     private var settledTransferID: UUID?
     private var unreadableRecoveryStore = false
+    private var undoRedoPersisted = false
     private var undoHistory: [HistoryGroup] = []
     private var redoHistory: [HistoryGroup] = []
 
@@ -75,6 +83,7 @@ final class BrowserActions: ObservableObject {
                     trashItems = saved.trash
                     undoHistory = saved.undo
                     redoHistory = saved.redo
+                    undoRedoPersisted = true
                     interruptedTransfer = saved.interruptedTransfer
                     settledTransferID = saved.settledTransferID
                     updateHistoryNames()
@@ -924,6 +933,7 @@ final class BrowserActions: ObservableObject {
     }
 
     private func persistRecovery() -> Bool {
+        undoRedoPersisted = false
         guard let recoveryURL else { return true }
         do {
             if unreadableRecoveryStore {
@@ -935,6 +945,8 @@ final class BrowserActions: ObservableObject {
             try RecoveryState(trash: trashItems, undo: undoHistory, redo: redoHistory,
                               interruptedTransfer: interruptedTransfer, settledTransferID: settledTransferID)
                 .save(to: recoveryURL)
+            // An update preserves the same bounded history as an ordinary reopen.
+            undoRedoPersisted = true
             return true
         } catch {
             let message = "Could not save recovery history for the next launch."
