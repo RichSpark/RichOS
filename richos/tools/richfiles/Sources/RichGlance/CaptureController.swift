@@ -16,6 +16,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
             scale = screen.backingScaleFactor
         }
 
+        var identifier: String { ScreenshotRepeatTarget.displayIdentifier(id) }
         var size: CGSize { CGSize(width: (frame.width * scale).rounded(), height: (frame.height * scale).rounded()) }
         func matches(_ screen: NSScreen) -> Bool {
             guard let other = Display(screen) else { return false }
@@ -42,6 +43,10 @@ final class CaptureController: NSObject, NSWindowDelegate {
     private let store: ScreenshotStore
     private let preferredAction: ScreenshotStore.Action?
     private let openEditor: (ScreenshotDocument) -> Void
+    private let repeatsRegion: Bool
+    private let copiesText: Bool
+    private var repeatSeed: ScreenshotRepeatTarget?
+    private var repeatSize: CGSize?
     private weak var previousWindow: NSWindow?
     private let previousApp: NSRunningApplication?
     private var display: Display?
@@ -74,7 +79,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
     private var keyLoss: Task<Void, Never>?
 
     init(previousWindow: NSWindow?, previousApp: NSRunningApplication?, store: ScreenshotStore,
-         preferredAction: ScreenshotStore.Action? = nil, openEditor: @escaping (ScreenshotDocument) -> Void,
+         preferredAction: ScreenshotStore.Action? = nil, repeatsRegion: Bool = false, copiesText: Bool = false, openEditor: @escaping (ScreenshotDocument) -> Void,
          refreshPermission: @escaping (_ session: CaptureController, _ originPID: pid_t?) -> Void,
          finish: @escaping (_ copied: String?, _ display: CGRect?, _ retained: UUID?) -> Void) {
         self.previousWindow = previousWindow
@@ -82,6 +87,8 @@ final class CaptureController: NSObject, NSWindowDelegate {
         self.store = store
         self.preferredAction = preferredAction
         self.openEditor = openEditor
+        self.repeatsRegion = repeatsRegion
+        self.copiesText = copiesText
         self.refreshPermission = refreshPermission
         self.finish = finish
         super.init()
@@ -99,9 +106,9 @@ final class CaptureController: NSObject, NSWindowDelegate {
         let point = NSEvent.mouseLocation
         pointerPosition = point
         sourceCursor = NSCursor.currentSystem ?? .arrow
-        delay = store.delay
-        includesPointer = store.includesPointer
-        action = preferredAction ?? store.action
+        delay = copiesText ? 0 : store.delay
+        includesPointer = !copiesText && store.includesPointer
+        action = copiesText ? .copy : preferredAction ?? store.action
         guard let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }) ?? NSScreen.main,
               let display = Display(screen) else {
             stop(.unavailable, operation: .glanceCaptureFrame)
@@ -122,6 +129,10 @@ final class CaptureController: NSObject, NSWindowDelegate {
         dismissPermissionHelp()
         acquisition?.cancel()
         let displays = NSScreen.screens.compactMap(Display.init)
+        if repeatsRegion, repeatSeed == nil {
+            beginRepeat(displays: displays)
+            return
+        }
         acquisition = Task { [weak self] in
             do {
                 let image = try await CaptureFrame.read(displayID: display.id, size: display.size, excludingOwnWindows: true)
@@ -138,6 +149,70 @@ final class CaptureController: NSObject, NSWindowDelegate {
                 guard !Task.isCancelled, let self else { return }
                 record(.glanceCaptureFrame, .issues, since: began)
                 showCaptureError()
+            }
+        }
+    }
+
+    private func beginRepeat(displays: [Display]) {
+        let last = store.lastRegion()
+        let matching = last.flatMap { region in displays.first { $0.identifier == region.display } }
+        let box = matching.flatMap { display in last?.crop(at: display.scale, within: display.size) }
+        if let last, let matching, let box, matching.scale == last.scale {
+            captureAgain(last, display: matching, crop: box)
+            return
+        }
+
+        activate()
+        let alert = NSAlert()
+        alert.messageText = last == nil ? "Nothing to capture again yet" : "That area can’t be captured again"
+        if let last, let matching, box != nil {
+            alert.informativeText = "The display changed from \(last.scale.formatted())× to \(matching.scale.formatted())×."
+            alert.addButton(withTitle: "Capture at \(matching.scale.formatted())×")
+        } else {
+            alert.informativeText = last == nil
+                ? "Capture a region first. Capture Again takes another picture of those same pixels."
+                : "The saved display or area is unavailable. Choose where to capture it now."
+        }
+        let rescaled = alert.buttons.count == 1
+        alert.addButton(withTitle: last == nil ? "Capture Region…" : "Select Area Again")
+        alert.addButton(withTitle: "Cancel").keyEquivalent = "\u{1b}"
+        let response = alert.runModal()
+        if rescaled, response == .alertFirstButtonReturn, let last, let matching, let box {
+            captureAgain(last, display: matching, crop: box)
+        } else if response == (rescaled ? .alertSecondButtonReturn : .alertFirstButtonReturn) {
+            repeatSeed = last
+            repeatSize = last?.pixels.size
+            if last == nil { repeatsFirstCapture() }
+            else { start() }
+        } else { stop(.cancelled) }
+    }
+
+    private func repeatsFirstCapture() {
+        repeatSeed = ScreenshotRepeatTarget(id: UUID(), display: "", pixels: .zero, scale: 1)
+        start()
+    }
+
+    private func captureAgain(_ last: ScreenshotRepeatTarget, display: Display, crop: CGRect) {
+        repeatSeed = last
+        self.display = display
+        let started = ProcessInfo.processInfo.systemUptime
+        acquisition = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let frame = try await CaptureFrame.read(displayID: display.id, size: display.size,
+                                                        pointer: includesPointer, excludingOwnWindows: true)
+                guard !Task.isCancelled, !isFinished else { return }
+                guard let cropped = frame.cropping(to: crop),
+                      cropped.width == Int(crop.width), cropped.height == Int(crop.height) else {
+                    throw CaptureFrame.Failure.displayUnavailable
+                }
+                var document = ScreenshotDocument(original: cropped, scale: display.scale)
+                document.repeatTarget = ScreenshotRepeatTarget(id: document.id, display: display.identifier, pixels: crop, scale: display.scale)
+                publish(document, route: .editor, started: started)
+            } catch {
+                guard !Task.isCancelled, !isFinished else { return }
+                repeatSize = last.pixels.size
+                start()
             }
         }
     }
@@ -223,6 +298,8 @@ final class CaptureController: NSObject, NSWindowDelegate {
             let geometry = GlanceCaptureGeometry(frame: CGSize(width: image.width, height: image.height), view: frame.size)
             let pointer = geometry.sourcePoint(CGPoint(x: point.x - screen.frame.minX, y: screen.frame.maxY - point.y))
             let canvas = CaptureCanvas(image: image, frame: frame, pointer: pointer)
+            if let repeatSize { canvas.prefillRepeat(repeatSize) }
+            canvas.copiesText = copiesText
             window.canvas = canvas
             canvas.copy = { [weak self] in self?.deliver(.copy) }
             canvas.edit = { [weak self] in self?.deliver(.editor) }
@@ -541,8 +618,9 @@ final class CaptureController: NSObject, NSWindowDelegate {
             canvas?.showError("Choose an area to capture.")
             return
         }
-        if delay > 0 { beginCountdown(shot, route: route) }
-        else { acquireOutput(shot, route: route, fresh: false) }
+        let destination = repeatsRegion && repeatSeed?.display.isEmpty == false ? .editor : route
+        if delay > 0 { beginCountdown(shot, route: destination) }
+        else { acquireOutput(shot, route: destination, fresh: false) }
     }
 
     private func acquireOutput(_ shot: Shot, route: Route, fresh: Bool) {
@@ -552,13 +630,33 @@ final class CaptureController: NSObject, NSWindowDelegate {
             do {
                 let document = try await read(shot, fresh: fresh)
                 guard !Task.isCancelled, !isFinished else { return }
-                output = nil
-                publish(document, route: route, started: started)
+                if copiesText {
+                    let lines = try await ScreenshotText.read(.init(image: document.original))
+                    guard !Task.isCancelled, !isFinished else { return }
+                    output = nil
+                    if ScreenshotText.copy(lines) {
+                        record(.glanceOCR, .complete, since: started)
+                        stop(.complete, copied: "Copied \(lines.count) \(lines.count == 1 ? "line" : "lines") of text")
+                    } else {
+                        record(.glanceOCR, lines.isEmpty ? .unavailable : .issues, since: started)
+                        canvas?.showError(lines.isEmpty ? "No text found in that area" : "Could not copy the recognized text")
+                        focusCapture()
+                    }
+                } else {
+                    output = nil
+                    publish(document, route: route, started: started)
+                }
             } catch {
                 guard !Task.isCancelled, !isFinished else { return }
                 output = nil
                 if fresh { prepareOverlay(); focusCapture() }
-                outputFailed("Could not capture the selected target. Choose it again and try once more.", since: started)
+                if copiesText {
+                    record(.glanceOCR, .issues, since: started)
+                    canvas?.showError("Could not read text in this area.")
+                    focusCapture()
+                } else {
+                    outputFailed("Could not capture the selected target. Choose it again and try once more.", since: started)
+                }
             }
         }
     }
@@ -570,6 +668,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
         let crop: CGRect?
         let pointerOrigin: CGPoint
         var name: String?
+        var regionDisplay: String?
         switch shot {
         case .region(let display, let box, let frozen):
             kind = .region
@@ -577,6 +676,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
                                                         excludingOwnWindows: true) : frozen
             scale = CGFloat(source.width) / display.frame.width
             crop = box
+            regionDisplay = display.identifier
             pointerOrigin = CGPoint(x: display.frame.minX, y: display.frame.maxY)
         case .display(let display, let frozen):
             kind = .display
@@ -599,7 +699,11 @@ final class CaptureController: NSObject, NSWindowDelegate {
         if let crop {
             guard let cropped = image.cropping(to: crop), cropped.width == Int(crop.width),
                   cropped.height == Int(crop.height) else { throw CaptureFrame.Failure.displayUnavailable }
-            return ScreenshotDocument(original: cropped, scale: scale, kind: kind)
+            var document = ScreenshotDocument(original: cropped, scale: scale, kind: kind)
+            if let regionDisplay {
+                document.repeatTarget = ScreenshotRepeatTarget(id: document.id, display: regionDisplay, pixels: crop, scale: scale)
+            }
+            return document
         }
         return ScreenshotDocument(original: image, scale: scale, kind: kind, name: name)
     }
@@ -647,6 +751,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
     private func retain(_ document: ScreenshotDocument) -> UUID? {
         let start = ProcessInfo.processInfo.systemUptime
         do {
+            if let target = document.repeatTarget { try store.rememberRegion(target) }
             if try store.retain(document) { return document.id }
         } catch {
             record(.glanceCaptureOutput, .issues, since: start)

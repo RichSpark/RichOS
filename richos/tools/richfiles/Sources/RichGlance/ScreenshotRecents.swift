@@ -28,6 +28,20 @@ final class ScreenshotRecents: NSView {
     private let menuDescription = NSTextField(wrappingLabelWithString: "")
     private var cards: [ScreenshotShelfCard] = []
     private var selected: UUID?
+    private var before: UUID?
+    private var after: UUID?
+
+    func setComparison(before: UUID?, after: UUID?) {
+        self.before = before
+        self.after = after
+        updateBadges()
+    }
+
+    private func updateBadges() {
+        for card in cards {
+            card.badge = card.entry.id == before ? "Before" : card.entry.id == after ? "After" : nil
+        }
+    }
     private var keepsHistory = true
     private var policy = ScreenshotStore.Retention.week
     private var observer: NSObjectProtocol?
@@ -75,7 +89,8 @@ final class ScreenshotRecents: NSView {
     override var isFlipped: Bool { true }
 
     func update(entries: [ScreenshotStore.Entry], selected: UUID?, enabled: Bool, retention: ScreenshotStore.Retention,
-                unavailable: Bool = false, newCapture: Bool = false) {
+                unavailable: Bool = false, newCapture: Bool = false, matches: [UUID: String]? = nil,
+                searching: Bool = false) {
         let previousSelection = self.selected
         self.selected = selected
         keepsHistory = enabled
@@ -92,12 +107,18 @@ final class ScreenshotRecents: NSView {
         }
         for card in cards where !nextCards.contains(where: { $0 === card }) { card.removeFromSuperview() }
         cards = nextCards
-        for card in cards { card.selected = card.entry.id == selected }
+        for card in cards {
+            card.selected = card.entry.id == selected
+            card.match = matches?[card.entry.id]
+        }
+        updateBadges()
         clear.isEnabled = !entries.isEmpty
         descriptionLabel.isHidden = !entries.isEmpty
         scroller.isHidden = entries.isEmpty
         if unavailable {
             descriptionLabel.stringValue = "Could not read Recent Captures. Reopen the editor to try again."
+        } else if let matches, matches.isEmpty {
+            descriptionLabel.stringValue = searching ? "Searching captures…" : "No matches"
         } else {
             updateWords()
         }
@@ -194,6 +215,8 @@ final class ScreenshotRecents: NSView {
         }
     }
 
+    func focusFirstMatch() { if !cards.isEmpty { focusCard(0) } }
+
     func handle(_ event: NSEvent) -> Bool {
         guard let window, let index = cards.firstIndex(where: {
             $0.button === window.firstResponder || $0.delete === window.firstResponder
@@ -251,6 +274,13 @@ private final class ScreenshotShelfCard: NSView {
     let entry: ScreenshotStore.Entry
     let button = ScreenshotShelfEntryButton()
     let delete = ScreenshotButton("Delete capture", symbol: "xmark", style: .deleteCapture)
+    var badge: String? { didSet { needsDisplay = true } }
+    var match: String? {
+        didSet {
+            button.setAccessibilityValue(match ?? (selected ? "Selected" : ""))
+            needsDisplay = true
+        }
+    }
     var requested = false
     var image: NSImage? { didSet { needsDisplay = true } }
     var selected = false {
@@ -343,11 +373,19 @@ private final class ScreenshotShelfCard: NSView {
         p.control.setStroke()
         picture.lineWidth = 0.5
         picture.stroke()
+        if let badge {
+            let label = NSAttributedString(string: badge, attributes: [.font: NSFont.systemFont(ofSize: 16, weight: .semibold),
+                                                                     .foregroundColor: NSColor.black])
+            let frame = CGRect(x: thumbnail.minX + 3, y: thumbnail.minY + 3, width: label.size().width + 12, height: 22)
+            NSColor.white.setFill()
+            NSBezierPath(roundedRect: frame, xRadius: 10, yRadius: 10).fill()
+            label.draw(at: CGPoint(x: frame.minX + 6, y: frame.minY + 1))
+        }
         let clock = Calendar.current.isDateInToday(entry.created)
             ? entry.created.formatted(date: .omitted, time: .shortened)
             : entry.created.formatted(.dateTime.weekday(.abbreviated).hour().minute())
         let ink = selected ? p.ink : p.muted
-        let label = NSAttributedString(string: clock, attributes: [
+        let label = NSAttributedString(string: match ?? clock, attributes: [
             .font: NSFont.monospacedDigitSystemFont(ofSize: 16, weight: selected ? .semibold : .regular),
             .foregroundColor: ink
         ])

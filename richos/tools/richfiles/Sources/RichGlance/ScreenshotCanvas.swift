@@ -16,6 +16,7 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
 
     var document: ScreenshotDocument
     var selected: UUID?
+    var textMatches: [CGRect] = [] { didSet { needsDisplay = true } }
     var tool = ScreenshotTool.select {
         didSet {
             if tool == .crop, oldValue != .crop { pendingCrop = document.crop }
@@ -143,6 +144,17 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
         }
         context.restoreGState()
         outline(imageRect, dashed: false, in: context)
+        if !textMatches.isEmpty, pendingCrop == nil {
+            for match in textMatches {
+                let rect = viewRect(match.offsetBy(dx: document.crop.minX, dy: document.crop.minY)).insetBy(dx: -2, dy: -2)
+                context.setStrokeColor(NSColor.black.cgColor)
+                context.setLineWidth(4)
+                context.stroke(rect)
+                context.setStrokeColor(NSColor.systemYellow.cgColor)
+                context.setLineWidth(2)
+                context.stroke(rect)
+            }
+        }
         if let crop = pendingCrop {
             let cut = viewRect(crop)
             let shade = CGMutablePath()

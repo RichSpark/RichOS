@@ -2,7 +2,11 @@ import Darwin
 import Foundation
 
 public struct CaptureRequest {
-    public enum Action: String, Sendable { case capture, editor, settings }
+    public enum Action: String, CaseIterable, Sendable {
+        case capture, captureAgain, copyText, editor, settings
+
+        public var startsCapture: Bool { self == .capture || self == .captureAgain || self == .copyText }
+    }
     public let originPID: pid_t?
     public let action: Action
 
@@ -23,7 +27,7 @@ public struct CaptureRequest {
         guard descriptor >= 0 else { throw GlanceHelper.Problem("RichGlance could not write a capture request.") }
         let file = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         do {
-            let value = action == .capture ? String(originPID ?? 0) : action.rawValue
+            let value = action.startsCapture ? "\(action.rawValue):\(originPID ?? 0)" : action.rawValue
             try file.write(contentsOf: Data(value.utf8))
             try file.close()
         } catch {
@@ -67,15 +71,20 @@ public struct CaptureRequest {
         defer { try? file.close() }
         guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
               info.st_uid == getuid(), info.st_mode & 0o077 == 0, info.st_nlink == 1,
-              (0...10).contains(info.st_size), unlink(ticket.path) == 0 else { return nil }
+              (1...32).contains(info.st_size), unlink(ticket.path) == 0 else { return nil }
         let age = Date().timeIntervalSince1970 - Double(info.st_mtimespec.tv_sec)
         guard age >= 0, age < 30 else { return nil }
-        let data = (try? file.read(upToCount: 11)) ?? Data()
+        let data = (try? file.read(upToCount: 33)) ?? Data()
         guard let value = String(data: data, encoding: .utf8) else { return nil }
         if let pid = pid_t(value) {
             return Self(originPID: pid > 0 ? pid : nil, action: .capture)
         }
-        guard let action = Action(rawValue: value), action != .capture else { return nil }
+        let fields = value.split(separator: ":", omittingEmptySubsequences: false)
+        if fields.count == 2, let action = Action(rawValue: String(fields[0])), action.startsCapture,
+           let pid = pid_t(fields[1]) {
+            return Self(originPID: pid > 0 ? pid : nil, action: action)
+        }
+        guard let action = Action(rawValue: value), !action.startsCapture else { return nil }
         return Self(originPID: nil, action: action)
     }
 }

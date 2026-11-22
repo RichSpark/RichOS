@@ -15,11 +15,16 @@ final class CaptureHelper: NSObject, NSApplicationDelegate {
     private var preferences: GlanceHelper.Preferences
     private var lease: FileHandle?
     private var port: CFMessagePort?
-    private var hotkey: EventHotKeyRef?
+    private struct Registration {
+        let ref: EventHotKeyRef
+        let id: UInt32
+    }
+    private static let captureActions: [CaptureRequest.Action] = [.capture, .captureAgain, .copyText]
+    private var shortcuts: [CaptureRequest.Action: Registration] = [:]
+    private var hotkey: EventHotKeyRef? { shortcuts[.capture]?.ref }
     private var handler: EventHandlerRef?
-    private var hotkeyID: UInt32 = 0
     private var nextID: UInt32 = 0
-    private var lastPress: TimeInterval = -.infinity
+    private var lastPress: [CaptureRequest.Action: TimeInterval] = [:]
     private var item: NSStatusItem?
     private var previousApplication: NSRunningApplication?
 
@@ -100,7 +105,7 @@ final class CaptureHelper: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        if let hotkey { UnregisterEventHotKey(hotkey) }
+        for registration in shortcuts.values { UnregisterEventHotKey(registration.ref) }
         if let handler { RemoveEventHandler(handler) }
         if let port { CFMessagePortInvalidate(port) }
         if lease != nil { try? FileManager.default.removeItem(at: store.endpoint) }
@@ -151,26 +156,38 @@ final class CaptureHelper: NSObject, NSApplicationDelegate {
     }
 
     private func replaceShortcut(with next: GlanceHelper.Preferences, saving: Bool) throws {
-        let replacement: EventHotKeyRef?
-        let keep = hotkey != nil && next.enabled && next.shortcut == preferences.shortcut
-        if next.enabled && !keep { replacement = try register(next.shortcut) }
-        else { replacement = nil }
+        var replacement: [CaptureRequest.Action: Registration] = [:]
+        var added: [Registration] = []
         do {
+            if next.enabled {
+                for action in Self.captureActions {
+                    if let existing = shortcuts[action], next[action] == preferences[action] {
+                        replacement[action] = existing
+                    } else {
+                        do {
+                            let registered = try register(next[action])
+                            added.append(registered)
+                            replacement[action] = registered
+                        } catch {
+                            if saving { throw error }
+                        }
+                    }
+                }
+            }
             if saving { try store.write(next) }
         } catch {
-            if let replacement { UnregisterEventHotKey(replacement) }
+            for registration in added { UnregisterEventHotKey(registration.ref) }
             throw error
         }
-        if !keep {
-            if let hotkey { UnregisterEventHotKey(hotkey) }
-            hotkey = replacement
-            hotkeyID = nextID
-            lastPress = -.infinity
+        for (action, registration) in shortcuts where replacement[action]?.id != registration.id {
+            UnregisterEventHotKey(registration.ref)
         }
+        shortcuts = replacement
+        lastPress.removeAll()
         preferences = next
     }
 
-    private func register(_ shortcut: GlanceHelper.Shortcut) throws -> EventHotKeyRef {
+    private func register(_ shortcut: GlanceHelper.Shortcut) throws -> Registration {
         let chord = try shortcut.carbon()
         let target = GetApplicationEventTarget()
         if handler == nil {
@@ -190,18 +207,18 @@ final class CaptureHelper: NSObject, NSApplicationDelegate {
             logger.notice("shortcut outcome=unavailable")
             throw GlanceHelper.Problem("That shortcut is unavailable. Choose another combination.")
         }
-        return replacement
+        return Registration(ref: replacement, id: nextID)
     }
 
     private func pressed(_ event: EventRef) -> OSStatus {
         var id = EventHotKeyID()
         guard GetEventParameter(event, UInt32(kEventParamDirectObject), Self.hotkeyType, nil,
                                 MemoryLayout<EventHotKeyID>.size, nil, &id) == noErr,
-              id.signature == Self.signature, id.id == hotkeyID, hotkey != nil else { return OSStatus(eventNotHandledErr) }
+              id.signature == Self.signature, let action = shortcuts.first(where: { $0.value.id == id.id })?.key else { return OSStatus(eventNotHandledErr) }
         let now = ProcessInfo.processInfo.systemUptime
-        if now - lastPress >= 0.25 {
-            lastPress = now
-            launch(.capture, source: "shortcut")
+        if now - (lastPress[action] ?? -.infinity) >= 0.25 {
+            lastPress[action] = now
+            launch(action, source: "shortcut")
         }
         return noErr
     }
@@ -220,13 +237,21 @@ final class CaptureHelper: NSObject, NSApplicationDelegate {
         let capture = menu.addItem(withTitle: "Capture…", action: #selector(captureFromMenu), keyEquivalent: "")
         capture.target = self
         if hotkey != nil { capture.title = "Capture…    \(preferences.shortcut.label)" }
+        let again = menu.addItem(withTitle: "Capture Again", action: #selector(againFromMenu), keyEquivalent: "")
+        again.target = self
+        if shortcuts[.captureAgain] != nil { again.title += "    \(preferences.againShortcut.label)" }
+        let text = menu.addItem(withTitle: "Copy Text", action: #selector(copyTextFromMenu), keyEquivalent: "")
+        text.target = self
+        if shortcuts[.copyText] != nil { text.title += "    \(preferences.textShortcut.label)" }
         menu.addItem(withTitle: "Open Editor", action: #selector(openEditor), keyEquivalent: "").target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Capture Settings…", action: #selector(openSettings), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Shortcuts…", action: #selector(openSettings), keyEquivalent: "").target = self
         item?.menu = menu
     }
 
     @objc private func captureFromMenu() { launch(.capture, source: "menu") }
+    @objc private func againFromMenu() { launch(.captureAgain, source: "menu") }
+    @objc private func copyTextFromMenu() { launch(.copyText, source: "menu") }
     @objc private func openEditor() { launch(.editor, source: "menu") }
     @objc private func openSettings() { launch(.settings, source: "menu") }
 
@@ -240,13 +265,13 @@ final class CaptureHelper: NSObject, NSApplicationDelegate {
             let request = try CaptureRequest.issue(action, originPID: origin?.processIdentifier)
             let configuration = NSWorkspace.OpenConfiguration()
             // Capture keeps the source app active until the overlay is ready.
-            configuration.activates = action != .capture
+            configuration.activates = !action.startsCapture
             configuration.arguments = ["--capture-request"]
             let logger = self.logger
             NSWorkspace.shared.open([request.url], withApplicationAt: glance, configuration: configuration) { app, error in
                 let accepted = error == nil && app != nil
                 if !accepted { try? FileManager.default.removeItem(at: request.ticket) }
-                if action == .capture {
+                if action.startsCapture {
                     RichFilesDiagnostics.record(operation, id: id, outcome: accepted ? .complete : .unavailable,
                                                 started: start, total: 1, confirmed: accepted ? 1 : 0)
                 }
@@ -254,7 +279,7 @@ final class CaptureHelper: NSObject, NSApplicationDelegate {
                 logger.info("launch source=\(source, privacy: .public) action=\(action.rawValue, privacy: .public) accepted=\(error == nil && app != nil) milliseconds=\(duration)")
             }
         } catch {
-            if action == .capture {
+            if action.startsCapture {
                 RichFilesDiagnostics.record(operation, id: id, outcome: .issues, started: start, total: 1, confirmed: 0)
             }
             logger.error("launch source=\(source, privacy: .public) outcome=request-failed")

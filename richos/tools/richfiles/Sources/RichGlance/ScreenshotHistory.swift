@@ -62,6 +62,19 @@ struct ScreenshotStore: Sendable {
         }
     }
     var retention: Retention { readSetting("retention").flatMap(Retention.init(rawValue:)) ?? .week }
+    func lastRegion() -> ScreenshotRepeatTarget? {
+        guard let data = try? Data(contentsOf: root.appendingPathComponent("last-region.json")),
+              data.count <= 2048 else { return nil }
+        return try? JSONDecoder().decode(ScreenshotRepeatTarget.self, from: data)
+    }
+
+    func rememberRegion(_ region: ScreenshotRepeatTarget) throws {
+        try withLock {
+            let data = try JSONEncoder().encode(region)
+            try data.write(to: root.appendingPathComponent("last-region.json"), options: .atomic)
+        }
+    }
+
     var showsShelf: Bool { readSetting("shelf-visibility") != "closed" }
 
     func setShelfVisible(_ visible: Bool) throws {

@@ -18,11 +18,30 @@ enum ScreenshotChrome {
 }
 
 @MainActor
-final class ScreenshotEditor: NSObject, NSWindowDelegate {
+final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
     typealias LeaveSheetPresenter = @MainActor (NSAlert, NSWindow, @escaping (NSApplication.ModalResponse) -> Void) -> Void
     let window: ScreenshotEditorWindow
     var closed: (() -> Void)?
     var capture: (() -> Void)?
+    var captureAgain: (() -> Void)?
+    private var comparison: ScreenshotCompareView?
+    private var incomingBaselines: [UUID: ScreenshotDocument] = [:]
+    private let moreButton = ScreenshotButton("More", symbol: "ellipsis")
+    private let searchField = NSSearchField()
+    private let searchStatus = screenshotLabel()
+    private var search: Task<Void, Never>?
+    private var copyTextTask: Task<Void, Never>?
+    private var searchMatches: [UUID: [ScreenshotText.Line]] = [:]
+    private var cachedText: [UUID: TextIndexEntry] = [:]
+    private var indexedCurrentEdits: ScreenshotEdits?
+
+    private struct TextIndexEntry: Sendable {
+        let entry: ScreenshotStore.Entry
+        let lines: [ScreenshotText.Line]
+    }
+
+    private let compareButton = ScreenshotButton("Compare", symbol: "rectangle.split.2x1")
+    private let againButton = ScreenshotButton("Capture Again", symbol: "viewfinder.circle")
     private(set) var canvas: ScreenshotCanvas?
     var hasDocument: Bool { canvas != nil }
 
@@ -157,14 +176,15 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
     }
 
     private func focusPicture() {
-        if let canvas { window.makeFirstResponder(canvas) }
+        if let comparison { window.makeFirstResponder(comparison) }
+        else if let canvas { window.makeFirstResponder(canvas) }
         else { window.makeFirstResponder(emptyCapture) }
     }
 
     private func build() {
         window.contentView = root
         for view in [titleBar, rail, work, bottom, shelf] { root.addSubview(view) }
-        for view in [titleRule, titleDivider, newCapture, name, meta, edited, undoButton, redoButton, saveButton, copyButton] {
+        for view in [titleRule, titleDivider, newCapture, againButton, name, meta, edited, undoButton, redoButton, compareButton, moreButton, saveButton, copyButton] {
             titleBar.addSubview(view)
         }
         rail.addSubview(railRule)
@@ -209,9 +229,16 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
         emptyMessage.maximumNumberOfLines = 3
         toast.addSubview(toastText)
         toast.isHidden = true
-        for view in [shelfToggle, openNewCapture, privacy, zoomModes, zoomOutButton, zoomReadout, zoomInButton] { bottom.addSubview(view) }
+        for view in [shelfToggle, searchField, searchStatus, openNewCapture, privacy, zoomModes, zoomOutButton, zoomReadout, zoomInButton] { bottom.addSubview(view) }
 
         newCapture.onPress = { [weak self] in self?.startCapture() }
+        againButton.onPress = { [weak self] in self?.captureAgain?() }
+        compareButton.onPress = { [weak self] in self?.toggleCompare() }
+        moreButton.onPress = { [weak self] in self?.showMore() }
+        searchField.delegate = self
+        searchField.font = .systemFont(ofSize: 16)
+        searchField.placeholderString = "Search text in captures"
+        searchField.setAccessibilityLabel("Search text in captures")
         emptyCapture.onPress = newCapture.onPress
         undoButton.onPress = { [weak self] in self?.canvas?.undo(); self?.focusPicture() }
         redoButton.onPress = { [weak self] in self?.canvas?.redo(); self?.focusPicture() }
@@ -248,7 +275,8 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
         return NSFont(name: "Newsreader-Regular", size: 34) ?? NSFont(name: "Georgia", size: 34) ?? .systemFont(ofSize: 34)
     }()
 
-    func changeDocument(_ document: ScreenshotDocument, newCapture: Bool = false) {
+    func changeDocument(_ document: ScreenshotDocument, newCapture: Bool = false, baseline: ScreenshotDocument? = nil) {
+        if let baseline { incomingBaselines[document.id] = baseline }
         if canvas?.document.id == document.id { focusPicture(); return }
         if newCapture {
             pendingCaptures.append(document)
@@ -266,6 +294,10 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
 
     private func install(_ document: ScreenshotDocument?, newCapture: Bool = false) {
         if let document { pendingCaptures.removeAll { $0.id == document.id } }
+        comparison?.stop()
+        comparison?.removeFromSuperview()
+        comparison = nil
+        shelf.setComparison(before: nil, after: nil)
         changingDocument = true
         persistSoon?.cancel()
         let previous = canvas
@@ -275,6 +307,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
                                                             scrollPosition: scroll.contentView.bounds.origin)
         }
         canvas = document.map(ScreenshotCanvas.init)
+        indexedCurrentEdits = canvas?.document.edits
         if let previous, let canvas {
             canvas.commonInk = previous.commonInk
             canvas.highlightInk = previous.highlightInk
@@ -295,10 +328,66 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
         refresh()
         scroll.contentView.scroll(to: session?.scrollPosition ?? .zero)
         scroll.reflectScrolledClipView(scroll.contentView)
+        if let document, let before = incomingBaselines.removeValue(forKey: document.id) {
+            beginCompare(before)
+            announce("Captured the same area again. Comparing with the \(before.created.formatted(date: .omitted, time: .shortened)) capture.")
+        }
+        focusPicture()
+    }
+
+    func savedDocument(_ id: UUID) -> ScreenshotDocument? {
+        if let document = canvas?.document, document.id == id { return document }
+        guard let entry = entries.first(where: { $0.id == id }) else { return nil }
+        return try? store.load(entry)
+    }
+
+    private func toggleCompare() {
+        if comparison != nil { endCompare(); return }
+        guard let canvas else { return }
+        guard let candidate = entries.first(where: { $0.id != canvas.document.id }),
+              let before = try? store.load(candidate) else {
+            announce("Take another capture to compare it with this one.")
+            return
+        }
+        beginCompare(before)
+    }
+
+    private func beginCompare(_ before: ScreenshotDocument) {
+        guard let canvas, before.id != canvas.document.id else { return }
+        canvas.finishCallout()
+        if let comparison { comparison.setBefore(before, entries: entries) }
+        else {
+            guard let view = ScreenshotCompareView(before: before, after: canvas.document, entries: entries) else {
+                announce("These captures could not be opened for comparison.")
+                return
+            }
+            comparison = view
+            view.leave = { [weak self] in self?.endCompare() }
+            view.choose = { [weak self] id in
+                if let self, let document = savedDocument(id) { beginCompare(document) }
+            }
+            view.zoomChanged = { [weak self] value in self?.zoomReadout.stringValue = "\(value)%" }
+            work.addSubview(view, positioned: .below, relativeTo: toast)
+        }
+        shelf.setComparison(before: before.id, after: canvas.document.id)
+        refresh()
+        focusPicture()
+    }
+
+    private func endCompare() {
+        comparison?.stop()
+        comparison?.removeFromSuperview()
+        comparison = nil
+        shelf.setComparison(before: nil, after: nil)
+        refresh()
         focusPicture()
     }
 
     private func open(_ entry: ScreenshotStore.Entry) {
+        if let comparison {
+            if entry.id != comparison.afterID, let before = try? store.load(entry) { beginCompare(before) }
+            return
+        }
         guard canvas?.document.id != entry.id else { focusPicture(); return }
         do {
             guard let document = try store.load(entry) else {
@@ -319,8 +408,20 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
             entries = try store.entries()
             let retained = Set(entries.map(\.id))
             sessions = sessions.filter { retained.contains($0.key) }
-            shelf.update(entries: entries, selected: canvas?.document.id, enabled: store.keepsHistory,
-                         retention: store.retention, newCapture: newCapture)
+            cachedText = cachedText.filter { retained.contains($0.key) }
+            searchField.isEnabled = store.keepsHistory
+            if !store.keepsHistory {
+                search?.cancel()
+                searchField.stringValue = ""
+                searchMatches.removeAll()
+                cachedText.removeAll()
+                canvas?.textMatches = []
+                searchStatus.stringValue = ""
+            }
+            if searchQuery.isEmpty {
+                shelf.update(entries: entries, selected: canvas?.document.id, enabled: store.keepsHistory,
+                             retention: store.retention, newCapture: newCapture)
+            } else { runSearch() }
         } catch {
             entries = []
             shelf.update(entries: [], selected: canvas?.document.id, enabled: store.keepsHistory,
@@ -330,6 +431,116 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
         shelfToggle.counter = count
         shelfToggle.setAccessibilityLabel("Recent Captures, \(count) \(count == 1 ? "capture" : "captures")")
         shelfToggle.setAccessibilityValue(shelfOpen ? "Expanded" : "Collapsed")
+    }
+
+    private var searchQuery: String { searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    func controlTextDidChange(_ notification: Notification) {
+        if notification.object as? NSSearchField === searchField { runSearch() }
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard control === searchField else { return false }
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            searchField.stringValue = ""
+            runSearch()
+            return true
+        }
+        if commandSelector == #selector(NSResponder.moveDown(_:)) || commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            shelf.focusFirstMatch()
+            return true
+        }
+        return false
+    }
+
+    private func runSearch() {
+        search?.cancel()
+        searchMatches.removeAll()
+        canvas?.textMatches = []
+        let query = searchQuery
+        guard !query.isEmpty, store.keepsHistory else {
+            searchStatus.stringValue = ""
+            shelf.update(entries: entries, selected: canvas?.document.id, enabled: store.keepsHistory, retention: store.retention)
+            layoutBottom(width: bottom.bounds.width)
+            return
+        }
+        searchStatus.stringValue = "Searching…"
+        shelf.update(entries: [], selected: canvas?.document.id, enabled: true, retention: store.retention,
+                     matches: [:], searching: true)
+        let entries = self.entries
+        let store = self.store
+        let cache = cachedText
+        let current = canvas?.document
+        let dirty = current?.edits != persisted
+        let started = ProcessInfo.processInfo.systemUptime
+        search = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+            let worker = Task.detached(priority: .utility) {
+                var indexed: [UUID: TextIndexEntry] = [:]
+                var hits: [UUID: [ScreenshotText.Line]] = [:]
+                for entry in entries {
+                    guard !Task.isCancelled else { break }
+                    let lines: [ScreenshotText.Line]
+                    if entry.id == current?.id, dirty {
+                        lines = current.flatMap(ScreenshotText.Input.init(document:)).flatMap { try? ScreenshotText.recognize($0) } ?? []
+                    } else if let previous = cache[entry.id], previous.entry == entry {
+                        lines = previous.lines
+                        indexed[entry.id] = previous
+                    } else if let document = try? store.load(entry), let input = ScreenshotText.Input(document: document),
+                              let recognized = try? ScreenshotText.recognize(input) {
+                        lines = recognized
+                        indexed[entry.id] = TextIndexEntry(entry: entry, lines: lines)
+                    } else { continue }
+                    let found = lines.filter { $0.matches(query) }
+                    if !found.isEmpty { hits[entry.id] = found }
+                }
+                return (indexed, hits)
+            }
+            let result = await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
+            guard !Task.isCancelled, let self, store.keepsHistory, searchQuery == query else { return }
+            cachedText = result.0
+            searchMatches = result.1
+            let matches = entries.filter { result.1[$0.id] != nil }
+            let captions = result.1.mapValues { $0.first?.text ?? "" }
+            searchStatus.stringValue = matches.isEmpty ? "No matches" : "\(matches.count) of \(entries.count) match"
+            shelf.update(entries: matches, selected: canvas?.document.id, enabled: true, retention: store.retention, matches: captions)
+            if let id = canvas?.document.id { canvas?.textMatches = result.1[id]?.map(\.bounds) ?? [] }
+            layoutBottom(width: bottom.bounds.width)
+            RichFilesDiagnostics.record(.glanceSearch, id: UUID(), outcome: .complete, started: started,
+                                        total: entries.count, confirmed: matches.count)
+        }
+    }
+
+    private func showMore() {
+        guard canvas != nil else { return }
+        let menu = NSMenu()
+        let copy = menu.addItem(withTitle: "Copy Text", action: #selector(copyCurrentText), keyEquivalent: "")
+        copy.target = self
+        menu.popUp(positioning: nil, at: CGPoint(x: 0, y: moreButton.bounds.maxY), in: moreButton)
+    }
+
+    @objc private func copyCurrentText() {
+        canvas?.finishCallout()
+        if let document = canvas?.document { copyText(document) }
+    }
+
+    private func copyText(_ document: ScreenshotDocument) {
+        guard let input = ScreenshotText.Input(document: document) else { announce("Could not read this capture."); return }
+        copyTextTask?.cancel()
+        let started = ProcessInfo.processInfo.systemUptime
+        copyTextTask = Task { [weak self] in
+            let lines = try? await ScreenshotText.read(input)
+            guard let self, !Task.isCancelled, window.isVisible else { return }
+            if let lines, ScreenshotText.copy(lines) {
+                announce("Copied \(lines.count) \(lines.count == 1 ? "line" : "lines") of text")
+                RichFilesDiagnostics.record(.glanceOCR, id: UUID(), outcome: .complete,
+                                            started: started, total: 1, confirmed: 1)
+            } else {
+                announce(lines == nil ? "Could not read text in this capture." : "No text found in this capture.")
+                RichFilesDiagnostics.record(.glanceOCR, id: UUID(), outcome: lines == nil ? .issues : .unavailable,
+                                            started: started, total: 1, confirmed: 0)
+            }
+        }
     }
 
     private func setShelf(_ open: Bool) {
@@ -432,6 +643,12 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
 
     private func canvasChanged() {
         guard !changingDocument else { return }
+        if indexedCurrentEdits != canvas?.document.edits {
+            indexedCurrentEdits = canvas?.document.edits
+            if let id = canvas?.document.id { cachedText.removeValue(forKey: id) }
+            copyTextTask?.cancel()
+            if !searchQuery.isEmpty { runSearch() }
+        }
         refresh()
         guard let canvas, !canvas.isInteracting, canvas.document.edits != persisted else { return }
         persistSoon?.cancel()
@@ -599,6 +816,12 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
     }
 
     private func setZoom(_ value: ScreenshotCanvas.Zoom) {
+        if let comparison {
+            if case .actual = value { comparison.setActualSize(true) }
+            else { comparison.setActualSize(false) }
+            focusPicture()
+            return
+        }
         autoZoom = false
         zoom = value
         layoutCanvas()
@@ -606,6 +829,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
     }
 
     private func changeZoom(direction: Int) {
+        if let comparison { comparison.changeZoom(direction); focusPicture(); return }
         guard let canvas else { return }
         let current = canvas.factor * window.backingScaleFactor
         let steps: [CGFloat] = [0.1, 0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.5, 2, 3, 4]
@@ -623,7 +847,17 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
             toggleShelf()
             return true
         }
+        if flags == .command, key == "f", searchField.isEnabled {
+            setShelf(true)
+            window.makeFirstResponder(searchField)
+            searchField.selectText(nil)
+            return true
+        }
+        if let field = searchField.currentEditor(), field === window.firstResponder { return false }
+        if flags == .option, key == "t" { copyCurrentText(); return true }
+        if flags == .option, key == "k" { toggleCompare(); return true }
         if shelfOpen, shelf.handle(event) { return true }
+        if let comparison, comparison.handle(event) { return true }
         guard let canvas else { return false }
         switch (key, flags) {
         case ("z", .command): canvas.undo(); focusPicture(); return true
@@ -692,17 +926,20 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
         window.isDocumentEdited = hasEdits
         edited.isHidden = !hasEdits
         for (item, button) in toolButtons {
-            button.isEnabled = document != nil
+            button.isEnabled = document != nil && comparison == nil
             button.isSelected = document != nil && item == tool
         }
         for control in [copyButton, saveButton, zoomInButton, zoomOutButton] + zoomModes.buttons {
             control.isEnabled = document != nil
         }
-        undoButton.isEnabled = canvas?.canUndo == true
-        redoButton.isEnabled = canvas?.canRedo == true
+        compareButton.isEnabled = document != nil
+        moreButton.isEnabled = document != nil
+        compareButton.isSelected = comparison != nil
+        undoButton.isEnabled = comparison == nil && canvas?.canUndo == true
+        redoButton.isEnabled = comparison == nil && canvas?.canRedo == true
         empty.isHidden = document != nil
-        inspector.isHidden = document == nil
-        scroll.isHidden = document == nil
+        inspector.isHidden = document == nil || comparison != nil
+        scroll.isHidden = document == nil || comparison != nil
         shelf.isHidden = !shelfOpen
         scrolled()
         shelfToggle.symbol = "clock"
@@ -795,6 +1032,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
         let y = inspector.isHidden ? 0 : inspector.frame.maxY + 4
         scroll.frame = CGRect(x: 0, y: y, width: work.bounds.width, height: max(0, workHeight - y))
         empty.frame = work.bounds
+        comparison?.frame = work.bounds
         layoutEmpty()
         reveal.frame = CGRect(x: max(4, work.bounds.width - reveal.naturalWidth() - 20),
                               y: y + 9, width: reveal.naturalWidth(), height: 34)
@@ -805,16 +1043,20 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
     private func layoutTitle(width: CGFloat) {
         let narrow = width <= 900
         newCapture.iconOnly = narrow
+        againButton.iconOnly = narrow
+        compareButton.iconOnly = narrow
+        moreButton.iconOnly = narrow
         saveButton.keyHint = narrow ? nil : "⌘S"
         copyButton.keyHint = narrow ? nil : "⌘C"
         newCapture.frame = CGRect(x: 87, y: 10, width: newCapture.naturalWidth(), height: 38)
+        againButton.frame = CGRect(x: newCapture.frame.maxX + 8, y: 10, width: againButton.naturalWidth(), height: 38)
         var right = width - 12
-        for button in [copyButton, saveButton, redoButton, undoButton] {
+        for button in [copyButton, saveButton, moreButton, compareButton, redoButton, undoButton] {
             right -= button.naturalWidth()
             button.frame = CGRect(x: right, y: 9, width: button.naturalWidth(), height: 40)
             right -= button === saveButton ? 17 : 8
         }
-        let left = newCapture.frame.maxX + 10
+        let left = againButton.frame.maxX + 10
         let total = max(0, right - left)
         let editedWidth: CGFloat = edited.isHidden ? 0 : labelWidth(edited)
         meta.isHidden = narrow
@@ -835,10 +1077,17 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
         zoomOutButton.frame = CGRect(x: width - 147, y: 7, width: 32, height: 32)
         zoomModes.frame = CGRect(x: width - 263, y: 5, width: 110, height: 36)
         openNewCapture.isHidden = pendingCaptures.isEmpty
-        let nextX = shelfToggle.frame.maxX + 8
+        let searchX = shelfToggle.frame.maxX + 8
+        let searchWidth = min(270, max(0, zoomModes.frame.minX - searchX - 10) * 0.72)
+        searchField.frame = CGRect(x: searchX, y: 7, width: searchWidth, height: 32)
+        searchStatus.textColor = ScreenshotEditorPalette(root).muted
+        searchStatus.frame = CGRect(x: searchField.frame.maxX + 8, y: 13,
+                                    width: min(145, max(0, zoomModes.frame.minX - searchField.frame.maxX - 14)), height: 22)
+        searchStatus.isHidden = searchQuery.isEmpty || !openNewCapture.isHidden
+        let nextX = searchStatus.isHidden ? searchField.frame.maxX + 8 : searchStatus.frame.maxX + 8
         let nextWidth = min(openNewCapture.naturalWidth(), max(0, zoomModes.frame.minX - nextX - 6))
         openNewCapture.frame = CGRect(x: nextX, y: 6, width: nextWidth, height: 34)
-        let privacyX = (openNewCapture.isHidden ? shelfToggle.frame.maxX : openNewCapture.frame.maxX) + 14
+        let privacyX = (openNewCapture.isHidden ? nextX : openNewCapture.frame.maxX) + 8
         privacy.isHidden = width <= 900
         privacy.frame = CGRect(x: privacyX, y: 13, width: max(0, width - 271 - privacyX), height: 22)
     }
@@ -912,6 +1161,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
     }
 
     private func layoutCanvas() {
+        guard comparison == nil else { return }
         guard let canvas, scroll.contentSize != .zero else {
             zoomReadout.stringValue = ""
             return
@@ -934,7 +1184,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
         scrolled()
     }
 
-    @objc private func scrolled() { reveal.isHidden = canvas?.selectionIsOffscreen != true }
+    @objc private func scrolled() { reveal.isHidden = comparison != nil || canvas?.selectionIsOffscreen != true }
 }
 
 

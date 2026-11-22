@@ -15,6 +15,8 @@ public enum GlanceHelper {
         public var shift: Bool
         public var command: Bool
 
+        public static let again = Self(code: "KeyA", control: true, option: false, shift: true, command: false)
+        public static let copyText = Self(code: "KeyT", control: true, option: false, shift: true, command: false)
         public static let standard = Self(code: "KeyC", control: true, option: false, shift: true, command: false)
         private static let codes: [String: UInt32] = [
             "KeyA": 0, "KeyB": 11, "KeyC": 8, "KeyD": 2, "KeyE": 14, "KeyF": 3,
@@ -61,12 +63,14 @@ public enum GlanceHelper {
     public struct Preferences: Codable, Equatable, Sendable {
         public var enabled: Bool
         public var shortcut: Shortcut
+        public var againShortcut: Shortcut = .again
+        public var textShortcut: Shortcut = .copyText
         public var background: Bool
         public var menuBar: Bool
 
         public static let initial = Self(enabled: false, shortcut: .standard, background: false, menuBar: true)
 
-        private enum CodingKeys: String, CodingKey { case enabled, shortcut, background, menuBar }
+        private enum CodingKeys: String, CodingKey { case enabled, shortcut, againShortcut, textShortcut, background, menuBar }
 
         private init(enabled: Bool, shortcut: Shortcut, background: Bool, menuBar: Bool) {
             self.enabled = enabled
@@ -79,8 +83,27 @@ public enum GlanceHelper {
             let values = try decoder.container(keyedBy: CodingKeys.self)
             enabled = try values.decode(Bool.self, forKey: .enabled)
             shortcut = try values.decode(Shortcut.self, forKey: .shortcut)
+            againShortcut = try values.decodeIfPresent(Shortcut.self, forKey: .againShortcut) ?? .again
+            textShortcut = try values.decodeIfPresent(Shortcut.self, forKey: .textShortcut) ?? .copyText
             background = try values.decodeIfPresent(Bool.self, forKey: .background) ?? false
             menuBar = try values.decodeIfPresent(Bool.self, forKey: .menuBar) ?? true
+        }
+
+        public subscript(action: CaptureRequest.Action) -> Shortcut {
+            get {
+                switch action {
+                case .captureAgain: againShortcut
+                case .copyText: textShortcut
+                default: shortcut
+                }
+            }
+            set {
+                switch action {
+                case .captureAgain: againShortcut = newValue
+                case .copyText: textShortcut = newValue
+                default: shortcut = newValue
+                }
+            }
         }
 
         public func settingBackground(_ enabled: Bool, firstUse: Bool) -> Self {

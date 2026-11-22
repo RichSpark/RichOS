@@ -104,6 +104,7 @@ struct ScreenshotDocument {
     let kind: ScreenshotKind
     let name: String?
     var edits: ScreenshotEdits
+    var repeatTarget: ScreenshotRepeatTarget?
 
     init(original: CGImage, scale: CGFloat, kind: ScreenshotKind = .region,
          id: UUID = UUID(), created: Date = Date(), name: String? = nil, edits: ScreenshotEdits? = nil) {
@@ -131,6 +132,12 @@ enum ScreenshotRenderer {
 
     static func flattened(_ document: ScreenshotDocument) -> CGImage? {
         render(document, crop: document.crop, scale: 1)
+    }
+
+    static func forComparison(_ document: ScreenshotDocument) -> CGImage? {
+        var covered = document
+        covered.edits.marks = document.edits.marks.filter { $0.tool == .redact }
+        return flattened(covered)
     }
 
     static func thumbnail(_ document: ScreenshotDocument) -> CGImage? {
