@@ -448,6 +448,10 @@ def run_host_loop():
                         print("Codex channel held: " + error, file=sys.stderr)
                 reported = set(errors)
                 health = dict(waiting=waiting, held=len(reported))
+                try:
+                    health["dispatch"] = codex_channels.load(codex_channels.root() / "quota/dispatch-health.json")
+                except (OSError, ValueError):
+                    pass
                 if health != previous_health:
                     path = Path(state) / "codex-watch/health.json"
                     try:

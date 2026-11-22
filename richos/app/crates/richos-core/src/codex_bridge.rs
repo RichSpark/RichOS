@@ -212,7 +212,7 @@ pub fn call(scope_path: &Path, scope: &StatusToolScope, arguments: Value) -> Res
     let action = arguments["action"]
         .as_str()
         .ok_or("A channel action is required")?;
-    if !matches!(action, "connect" | "send" | "read") {
+    if !matches!(action, "connect" | "send" | "read" | "quota") {
         return Err("Unknown channel action".into());
     }
     let engine = PathBuf::from(

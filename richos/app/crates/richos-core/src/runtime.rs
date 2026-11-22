@@ -580,7 +580,7 @@ pub fn verify_engine(engine: &Path) -> Result<EngineRuntime, RuntimeError> {
         "mega-lander/create-teammate-worktree.sh", "mega-lander/app.py", "mega-lander/DESKTOP.md", "ass-kicker/brief-provenance.py",
         "ass-kicker/brief-scope.py", "ass-kicker/ass-kicker.py",
         "scripts/lib/app-evidence.py", "scripts/spawn.sh", "scripts/lib/spawn.py",
-        "scripts/codex-channel.sh", "scripts/lib/codex_channels.py",
+        "scripts/codex-channel.sh", "scripts/lib/codex_channels.py", "scripts/lib/codex_quota.py",
         // The classification of whose work each spawn guard's reason protects, and its
         // reader. Without them the app cannot tell which guards may judge a dispatch it
         // makes on a user's own Mac, and `EngineProfile::prepare` refuses rather than

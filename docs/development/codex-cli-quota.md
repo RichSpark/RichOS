@@ -33,3 +33,29 @@ On macOS, the bundled CLI version `0.171.0-alpha.13` returned an account ID,
 ordinary-use permission, a weekly window, reset inventory and paid balance
 from a single read on November 22, 2026. The response had a null secondary
 window. The read started no Codex turn and redeemed no reset.
+
+## RichOS dispatch
+
+Run `codex-channel.sh quota` or ask Rich in the app to check Codex quota.
+Both use the active CLI sign-in and return a fresh reading. Missing fields are
+shown as unknown. The response omits account identifiers and reset IDs.
+
+Build dispatch and resume check the main included allowance before starting a
+turn. When a current main window is at its limit and Codex reports a banked
+reset, RichOS verifies the active ChatGPT account, rechecks inside a shared
+lock and redeems one. A persistent attempt keys retries across concurrent
+terminal and app dispatches. Provider overrides, a missing account identity
+and non-main limits can leave automatic redemption unavailable.
+
+When included usage is exhausted, RichOS still sends the ordinary CLI turn so
+Codex can draw from eligible credits. If a known usage-limit failure occurs
+during a turn, RichOS rechecks the account and can retry once after a
+confirmed banked reset in the same Codex chat. A failed dispatch preserves the
+request and reports the outcome and resume command on its original connection.
+Codex second reviews continue to use their existing Claude fallback.
+
+RichDoctor's Configuration collection includes the last completed dispatch
+summary in the Codex connection watcher item. Its fixed fields record the
+quota read and reset outcomes, preflight and elapsed milliseconds and the
+process exit. Usage amounts and account identifiers are omitted from that
+diagnostic summary.
