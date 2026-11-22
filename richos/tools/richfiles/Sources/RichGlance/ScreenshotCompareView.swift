@@ -141,9 +141,11 @@ final class ScreenshotCompareView: NSView {
         beforeLabel.isHidden = mode == .changed || (mode == .flip && !showingBefore)
         afterLabel.isHidden = showingBefore
         if !sameSize {
+            let sizes = "\(dimensions(before)) vs \(dimensions(after))"
+            let scaleNote = before.scale == after.scale ? "" : " · \(before.scale.formatted())× to \(after.scale.formatted())×"
             status.stringValue = mode == .changed
-                ? "Changed Pixels needs equal sizes. \(dimensions(before)) vs \(dimensions(after)). Choose Side by Side or another Before."
-                : "Different capture sizes. Visual comparison."
+                ? "Changed Pixels needs equal sizes. \(sizes)\(scaleNote). Choose Side by Side or another Before."
+                : "\(sizes)\(scaleNote). Visual comparison."
         } else if mode == .changed {
             if let diff {
                 if let areaIndex {
@@ -218,7 +220,9 @@ final class ScreenshotCompareView: NSView {
 
     private func destination(_ size: CGSize, before: Bool) -> CGRect {
         let cell = pane(before)
-        let extent = CGSize(width: size.width * scale, height: size.height * scale)
+        let fit = sameSize ? 1 : min(max(self.before.crop.width, after.crop.width) / size.width,
+                                      max(self.before.crop.height, after.crop.height) / size.height)
+        let extent = CGSize(width: size.width * scale * fit, height: size.height * scale * fit)
         return CGRect(x: cell.midX - extent.width / 2 + pan.x, y: cell.midY - extent.height / 2 + pan.y,
                       width: extent.width, height: extent.height)
     }
