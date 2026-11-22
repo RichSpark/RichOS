@@ -91,7 +91,7 @@ public struct ReviewedFile: Codable, Sendable {
     public let reference: FileReference
     public let size: Int64
     public let modified: Date
-    fileprivate let version: FileVersion
+    let version: FileVersion
 
     public init(_ reference: FileReference) throws {
         let parent = try OpenFolder(reference.parent)
@@ -1165,6 +1165,25 @@ public enum FileOperations {
 
     public static func trash(_ source: FileReference) throws -> TrashReceipt {
         try trash(source, expected: nil)
+    }
+
+    public static func verifyCleanupReview(_ reviewed: ReviewedFile) throws {
+        let source = reviewed.reference
+        let parent = try OpenFolder(source.parent)
+        try parent.verifyLocation()
+        let status = try parent.verifiedStatus(of: source)
+        guard FileVersion(status) == reviewed.version else { throw FileOperationError.sourceChanged(source.url) }
+        guard CleanupCandidate.eligible(status, at: source.url) else { throw CleanupReviewError.unavailable }
+    }
+
+    public static func trashCleanup(_ reviewed: ReviewedFile, keeping keeper: ReviewedFile? = nil) throws -> TrashReceipt {
+        if let keeper {
+            guard keeper.reference.identity != reviewed.reference.identity else { throw CleanupReviewError.keepOneCopy }
+            do { try verifyCleanupReview(keeper) }
+            catch { throw CleanupReviewError.keepOneCopy }
+        }
+        try verifyCleanupReview(reviewed)
+        return try trash(reviewed.reference, expected: reviewed.version)
     }
 
     static func trash(_ source: FileReference, expected: FileVersion?) throws -> TrashReceipt {

@@ -73,6 +73,62 @@ final class DirectoryReaderTests: XCTestCase {
         }
     }
 
+    func testCleanupReportsRankedFilesAndRefreshesOnlyTheChangedBranch() throws {
+        try fixture { root in
+            let downloads = root.appendingPathComponent("Downloads", isDirectory: true)
+            let projects = root.appendingPathComponent("Projects", isDirectory: true)
+            try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: projects, withIntermediateDirectories: true)
+            let installer = downloads.appendingPathComponent("installer.dmg")
+            let movie = projects.appendingPathComponent("movie.mov")
+            try Data(repeating: 42, count: 12_000_000).write(to: installer)
+            try Data(repeating: 13, count: 20_000_000).write(to: movie)
+            try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("linked.mov"),
+                                                       withDestinationURL: movie)
+            var progress: [Int] = []
+            let scan = try StorageAnalysis.cleanup(in: root) { progress.append($0.visited) }
+            XCTAssertEqual(progress.first, 1)
+            XCTAssertEqual(scan.largeFiles.map { $0.url.lastPathComponent }, ["movie.mov", "installer.dmg"])
+            XCTAssertEqual(scan.installers.map(\.kind), [.installer])
+            XCTAssertEqual(scan.rows.first?.url.lastPathComponent, "Projects")
+            XCTAssertEqual(scan.affectedChildren([installer]), ["Downloads"])
+
+            try FileManager.default.removeItem(at: installer)
+            // An unrelated change is discovered only on a full scan.
+            let unrelated = projects.appendingPathComponent("new.pkg")
+            try Data(repeating: 99, count: 15_000_000).write(to: unrelated)
+            let updated = try StorageAnalysis.cleanup(in: root, previous: scan, changed: [installer])
+            XCTAssertEqual(updated.largeFiles.map { $0.url.lastPathComponent }, ["movie.mov"])
+            XCTAssertTrue(updated.installers.isEmpty)
+            let rescanned = try StorageAnalysis.cleanup(in: root)
+            XCTAssertEqual(rescanned.installers.map { $0.url.lastPathComponent }, ["new.pkg"])
+        }
+    }
+
+    func testCleanupReviewRefusesEditedFilesAndChangedDuplicateKeeper() throws {
+        try fixture { root in
+            try write("keep.txt", in: root, text: "original")
+            try write("remove.txt", in: root, text: "original")
+            let scan = try StorageAnalysis.duplicates(in: root)
+            let group = try XCTUnwrap(scan.groups.first)
+            let keep = try XCTUnwrap(group.candidates.first { $0.url.lastPathComponent == "keep.txt" })
+            let remove = try XCTUnwrap(group.candidates.first { $0.url.lastPathComponent == "remove.txt" })
+            let keeper = try keep.review()
+            let target = try remove.review()
+            try Data("edited".utf8).write(to: keep.url)
+            XCTAssertThrowsError(try keep.review())
+            XCTAssertThrowsError(try FileOperations.trashCleanup(target, keeping: keeper)) {
+                guard case CleanupReviewError.keepOneCopy = $0 else { return XCTFail("\($0)") }
+            }
+            XCTAssertEqual(try String(contentsOf: remove.url, encoding: .utf8), "original")
+            try Data("edited later".utf8).write(to: remove.url)
+            XCTAssertThrowsError(try FileOperations.trashCleanup(target)) {
+                guard case FileOperationError.sourceChanged = $0 else { return XCTFail("\($0)") }
+            }
+            XCTAssertEqual(try String(contentsOf: remove.url, encoding: .utf8), "edited later")
+        }
+    }
+
     func testChecksumsAndDuplicatesCompareContentsAndIgnoreHardLinksAndSymlinks() throws {
         try fixture { root in
             try write("first.txt", in: root, text: "abc")
