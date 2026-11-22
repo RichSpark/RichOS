@@ -2,6 +2,28 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.3.7-nightly.20261122.115
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.7-nightly.20261122.115)
+
+- Added Capture Again and Copy Text to RichGlance, each with its own shortcut: Capture Again takes the same area as your last capture and opens the two side by side, as before and after or with the changed pixels marked; Copy Text copies the words in an area you select
+- Added Copy Text, Pin to Screen, Attach to RichOS Chat and Compare to every capture in the RichGlance editor and in Recent Captures: a pinned picture floats above your other windows with its own opacity and click-through; an attached one waits in that chat's message box until you send it
+- Added a search box to Recent Captures in RichGlance that finds captures by the words in them, leaving out anything you redacted; you can also drag a capture from Recent Captures into another app as one picture with its marks
+- Added Keep Only Redacted Copy… in RichGlance to replace a kept capture with its redacted version so the original is gone
+- Added Capture when RichOS is quit to RichGlance, off until you turn it on in Capture Settings… on the RichGlance page: your capture shortcuts then work from the moment you log in, even with RichOS closed, with a menu bar icon for Capture…, Capture Again, Copy Text and your pinned pictures that you can hide
+- Added window tiling and a window switcher to RichFiles Window Gestures, each off until you turn it on in RichFiles Settings: drag a window's title bar to an edge or corner of the screen or press Control-Option-Command with an arrow, 1 to 4 or Return to tile or restore it; press Control-Option-Command-W to pick any open window, minimized ones too
+- Added Group by Type to the sort menu in RichFiles, keeping your chosen order inside each kind of file
+- Added Choose App… to Open With in RichFiles to open a file in any app
+- Added Transfer May Be Stalled to the Transfers button in RichFiles when a copy or move has made no progress for 15 seconds
+- Changed Disk Usage… in RichFiles into a disk cleanup view in its window: see what takes up space in a 3D picture or in lists of the largest items, large files, old installers and duplicates; add files to a review list and move them to the Trash with Undo Move; then put them back or delete them for good and see how much space you got back
+- Changed New Folder in RichFiles to ask for the name first and create the folder only once you confirm it; if the suggested name is taken, the folder gets a number
+- Changed every RichFiles window to remember its own size, place and pane widths instead of only the first window; a window you left partly on another display stays there as long as you can still reach its title bar
+- Improved RichFiles to show a folder's first items sooner, open Open With at once while it looks for apps and let you widen each column in column view
+- Improved typing the start of a file's name in RichFiles to land on the right file even while the folder is still loading
+- Fixed RichFiles on some Macs that use RichGlance refusing to copy or move files and not keeping Undo after it restarted
+- Fixed the splash screen's sound sometimes not playing the first time you open RichOS after starting your Mac
+- [technical] Added to RichDoctor's reports timings for RichFiles disk cleanup, window placement, stalled transfers, Open With, folder listing, window tiling and the window switcher and for RichGlance comparisons, text reading, search, pins, redacted copies, dragging and the capture helper, without file names or window titles; launch timings also note when the splash sound was ready to play
+
 ## 1.3.7-nightly.20261121.112
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.7-nightly.20261121.112)
