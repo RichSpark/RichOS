@@ -408,6 +408,7 @@ public enum FileOperations {
         conflictPolicy: CopyConflictPolicy = .refuse,
         isCancelled: () -> Bool = { false },
         onNestedProgress: ((NestedCopyProgress) -> Void)? = nil,
+        onActivity: (() -> Void)? = nil,
         onProgress: (Int64, Int64) -> Void = { _, _ in },
         onVerify: () -> Void = {}
     ) throws -> CrossVolumeMoveResult {
@@ -424,23 +425,26 @@ public enum FileOperations {
         if conflictPolicy == .refuse { try destination.requireFree(source.name) }
 
         let version = FileVersion(original)
-        let originalTree = kind == S_IFDIR ? try TreeInventory(source, expected: version, isCancelled: isCancelled) : nil
+        let originalTree = kind == S_IFDIR
+            ? try TreeInventory(source, expected: version, isCancelled: isCancelled, onActivity: onActivity) : nil
         let ((installed, copiedDescendants), remaining) = try stageCopy(
             source, from: parent, initial: original, into: destination, isCancelled: isCancelled,
-            onNestedProgress: onNestedProgress, onProgress: onProgress
+            onNestedProgress: onNestedProgress, onActivity: onActivity, onProgress: onProgress
         ) { staged in
             onVerify()
             let copiedDescendants: String?
             if let originalTree {
-                let copy = try TreeInventory(staged, isCancelled: isCancelled)
-                guard try originalTree.contentDigest(isCancelled: isCancelled) == copy.contentDigest(isCancelled: isCancelled) else {
+                let copy = try TreeInventory(staged, isCancelled: isCancelled, onActivity: onActivity)
+                let originalDigest = try originalTree.contentDigest(isCancelled: isCancelled, onActivity: onActivity)
+                guard try originalDigest == copy.contentDigest(isCancelled: isCancelled, onActivity: onActivity) else {
                     throw FileOperationError.copyVerificationFailed(source.url)
                 }
-                try originalTree.verify(isCancelled: isCancelled)
-                try copy.verify(isCancelled: isCancelled)
+                try originalTree.verify(isCancelled: isCancelled, onActivity: onActivity)
+                try copy.verify(isCancelled: isCancelled, onActivity: onActivity)
                 copiedDescendants = copy.descendants
             } else {
-                _ = try verifyRegularFileCopy(staged, of: source, expected: version, isCancelled: isCancelled)
+                _ = try verifyRegularFileCopy(staged, of: source, expected: version,
+                                              isCancelled: isCancelled, onActivity: onActivity)
                 copiedDescendants = nil
             }
             try parent.verifyLocation()
@@ -458,8 +462,8 @@ public enum FileOperations {
             let reviewed: CrossVolumeMoveReceipt.Installed
             if let copiedDescendants {
                 reviewed = .directory(try ReviewedTree(installed, descendants: copiedDescendants))
-                try validateCrossVolumeItem(reviewed)
-                try originalTree?.verify()
+                try validateCrossVolumeItem(reviewed, onActivity: onActivity)
+                try originalTree?.verify(onActivity: onActivity)
             } else {
                 reviewed = .file(try ReviewedFile(installed))
             }
@@ -533,23 +537,27 @@ public enum FileOperations {
     }
 
     @discardableResult
-    private static func validateCrossVolumeItem(_ item: CrossVolumeMoveReceipt.Installed) throws -> FileVersion {
+    private static func validateCrossVolumeItem(_ item: CrossVolumeMoveReceipt.Installed,
+                                                onActivity: (() -> Void)? = nil) throws -> FileVersion {
         switch item {
         case .file(let file):
             try validateReviewed(file, in: OpenFolder(file.reference.parent))
             return file.version
         case .directory(let tree):
-            try tree.verify()
+            try tree.verify(onActivity: onActivity)
             return tree.rootVersion
         }
     }
 
     private static func verifyRegularFileCopy(
-        _ staged: FileReference, of source: FileReference, expected: FileVersion, isCancelled: () -> Bool
+        _ staged: FileReference, of source: FileReference, expected: FileVersion, isCancelled: () -> Bool,
+        onActivity: (() -> Void)? = nil
     ) throws -> ReviewedFile {
         let reviewed = try ReviewedFile(staged)
-        let sourceDigest = try StorageAnalysis.digest(source.url, expected: expected, isCancelled: isCancelled)
-        let copiedDigest = try StorageAnalysis.digest(staged.url, expected: reviewed.version, isCancelled: isCancelled)
+        let sourceDigest = try StorageAnalysis.digest(source.url, expected: expected,
+                                                      isCancelled: isCancelled, onActivity: onActivity)
+        let copiedDigest = try StorageAnalysis.digest(staged.url, expected: reviewed.version,
+                                                      isCancelled: isCancelled, onActivity: onActivity)
         guard reviewed.size == expected.size, sourceDigest == copiedDigest else {
             throw FileOperationError.copyVerificationFailed(source.url)
         }
@@ -573,12 +581,14 @@ public enum FileOperations {
         conflictPolicy: CopyConflictPolicy = .refuse,
         isCancelled: () -> Bool = { false },
         onNestedProgress: ((NestedCopyProgress) -> Void)? = nil,
+        onActivity: (() -> Void)? = nil,
         onProgress: (Int64, Int64) -> Void = { _, _ in }
     ) throws -> CopyReceipt {
         let destination = try OpenFolder(folder)
         if let expectedFolder { try destination.requireIdentity(expectedFolder) }
         return try copy(source, into: destination, named: name, conflictPolicy: conflictPolicy,
-                        isCancelled: isCancelled, onNestedProgress: onNestedProgress, onProgress: onProgress)
+                        isCancelled: isCancelled, onNestedProgress: onNestedProgress,
+                        onActivity: onActivity, onProgress: onProgress)
     }
 
     public static func copyTemplate(
@@ -595,6 +605,7 @@ public enum FileOperations {
         _ source: FileReference, into destination: OpenFolder, named name: String? = nil,
         conflictPolicy: CopyConflictPolicy = .refuse, expected: FileVersion? = nil,
         isCancelled: () -> Bool, onNestedProgress: ((NestedCopyProgress) -> Void)? = nil,
+        onActivity: (() -> Void)? = nil,
         onProgress: (Int64, Int64) -> Void = { _, _ in }
     ) throws -> CopyReceipt {
         if isCancelled() { throw CancellationError() }
@@ -612,10 +623,10 @@ public enum FileOperations {
 
         let (copied, remaining) = try stageCopy(
             source, from: sourceFolder, initial: initial, into: destination, isCancelled: isCancelled,
-            onNestedProgress: onNestedProgress, onProgress: onProgress
+            onNestedProgress: onNestedProgress, onActivity: onActivity, onProgress: onProgress
         ) { staged in
             try publishCopy(staged, into: destination, named: name, policy: conflictPolicy,
-                            allowRegularCopyFallback: true, isCancelled: isCancelled)
+                            allowRegularCopyFallback: true, isCancelled: isCancelled, onActivity: onActivity)
         }
         return CopyReceipt(copied: copied, remainingStagingFolder: remaining)
     }
@@ -937,6 +948,7 @@ public enum FileOperations {
     private static func stageCopy<Result>(
         _ source: FileReference, from sourceFolder: OpenFolder, initial: stat, into destination: OpenFolder,
         isCancelled: () -> Bool, onNestedProgress: ((NestedCopyProgress) -> Void)? = nil,
+        onActivity: (() -> Void)? = nil,
         onProgress: (Int64, Int64) -> Void, publish: (FileReference) throws -> Result
     ) throws -> (Result, URL?) {
 
@@ -970,13 +982,15 @@ public enum FileOperations {
                 let flags = copyfile_flags_t(COPYFILE_ALL | COPYFILE_RECURSIVE | COPYFILE_NOFOLLOW
                                              | COPYFILE_EXCL | COPYFILE_DATA_SPARSE)
                 try copyUsingNative(to: stagedURL, recursiveSource: (source.url, initial.st_dev),
-                                    isCancelled: isCancelled, onNestedProgress: onNestedProgress) { state in
+                                    isCancelled: isCancelled, onNestedProgress: onNestedProgress,
+                                    onActivity: onActivity) { state in
                     copyfile(source.url.path, stagedURL.path, state, flags)
                 }
             default:
                 try manager.copyItem(at: source.url, to: stagedURL)
             }
             let staged = try staging.reference(named: source.name)
+            onActivity?()
             if isCancelled() { throw CancellationError() }
             try sourceFolder.verifyLocation()
             let current = try sourceFolder.verifiedStatus(of: source)
@@ -1047,6 +1061,7 @@ public enum FileOperations {
         to location: URL, from source: URL? = nil, size: Int64? = nil,
         recursiveSource: (url: URL, device: Int32)? = nil,
         isCancelled: () -> Bool, onNestedProgress: ((NestedCopyProgress) -> Void)? = nil,
+        onActivity: (() -> Void)? = nil,
         onProgress: (Int64, Int64) -> Void = { _, _ in }, copy: (copyfile_state_t) -> Int32
     ) throws {
         guard let state = copyfile_state_alloc() else {
@@ -1057,7 +1072,7 @@ public enum FileOperations {
             try withoutActuallyEscaping(onProgress) { progress in
                 let context = CopyCallbacks(metadataLocation: source ?? recursiveSource?.url ?? location,
                                             size: size, recursiveSource: recursiveSource, cancel: cancel,
-                                            progress: progress, nestedProgress: onNestedProgress)
+                                            progress: progress, nestedProgress: onNestedProgress, onActivity: onActivity)
                 let pointer = Unmanaged.passUnretained(context).toOpaque()
                 let callback = unsafeBitCast(CopyCallbacks.status, to: UnsafeRawPointer.self)
                 guard copyfile_state_set(state, UInt32(COPYFILE_STATE_STATUS_CTX), pointer) == 0,
@@ -1081,14 +1096,15 @@ public enum FileOperations {
         named name: String,
         policy: CopyConflictPolicy,
         allowRegularCopyFallback: Bool = false,
-        isCancelled: () -> Bool
+        isCancelled: () -> Bool, onActivity: (() -> Void)? = nil
     ) throws -> FileReference {
         func publish(named name: String) throws -> FileReference {
             if isCancelled() { throw CancellationError() }
             do {
                 return try relocate(staged, into: destination, named: name).moved
             } catch FileOperationError.exclusiveRenameUnsupported where allowRegularCopyFallback {
-                return try publishRegularCopy(staged, into: destination, named: name, isCancelled: isCancelled)
+                return try publishRegularCopy(staged, into: destination, named: name,
+                                              isCancelled: isCancelled, onActivity: onActivity)
             }
         }
         do {
@@ -1120,7 +1136,7 @@ public enum FileOperations {
     /// Leave any uncertain output for review and keep the original in place.
     private static func publishRegularCopy(
         _ staged: FileReference, into destination: OpenFolder, named name: String,
-        isCancelled: () -> Bool
+        isCancelled: () -> Bool, onActivity: (() -> Void)?
     ) throws -> FileReference {
         let parent = try OpenFolder(staged.parent)
         let status = try parent.verifiedStatus(of: staged)
@@ -1143,8 +1159,13 @@ public enum FileOperations {
         guard output >= 0 else { throw destinationError("Could not create the copy", target, errno) }
         defer { _ = close(output) }
         do {
+            var written: Int64 = 0
             try copyFileDescriptors(input, output, to: target, size: status.st_size,
-                                    isCancelled: { false }, onProgress: { _, _ in })
+                                    isCancelled: { false }, onProgress: { count, _ in
+                guard count > written else { return }
+                written = count
+                onActivity?()
+            })
             guard fsync(output) == 0 else {
                 throw FileOperationError.system(operation: "Could not flush the copy", location: target, code: errno)
             }
@@ -1327,6 +1348,7 @@ private final class CopyCallbacks {
     let cancel: () -> Bool
     let progress: (Int64, Int64) -> Void
     let nestedProgress: ((NestedCopyProgress) -> Void)?
+    let onActivity: (() -> Void)?
     var cancelled = false
     var failure: FileOperationError?
     private var nestedFile: (started: TimeInterval, total: Int64?)?
@@ -1334,13 +1356,14 @@ private final class CopyCallbacks {
 
     init(metadataLocation: URL, size: Int64?, recursiveSource: (url: URL, device: Int32)?,
          cancel: @escaping () -> Bool, progress: @escaping (Int64, Int64) -> Void,
-         nestedProgress: ((NestedCopyProgress) -> Void)?) {
+         nestedProgress: ((NestedCopyProgress) -> Void)?, onActivity: (() -> Void)?) {
         self.metadataLocation = metadataLocation
         self.size = size
         self.recursiveSource = recursiveSource
         self.cancel = cancel
         self.progress = progress
         self.nestedProgress = nestedProgress
+        self.onActivity = onActivity
     }
 
     static let status: copyfile_callback_t = { what, stage, state, source, _, pointer in
@@ -1374,6 +1397,9 @@ private final class CopyCallbacks {
             context.failure = .system(operation: "Could not copy the folder entry", location: failedEntry ?? root.url,
                                       code: errorCode == 0 ? EIO : errorCode)
             return COPYFILE_QUIT
+        }
+        if stage == COPYFILE_FINISH, what == COPYFILE_RECURSE_FILE || what == COPYFILE_RECURSE_DIR_CLEANUP {
+            context.onActivity?()
         }
         if let root = context.recursiveSource, let source, stage == COPYFILE_START,
            what == COPYFILE_RECURSE_FILE || what == COPYFILE_RECURSE_DIR {

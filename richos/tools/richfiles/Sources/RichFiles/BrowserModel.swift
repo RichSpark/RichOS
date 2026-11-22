@@ -142,7 +142,7 @@ final class BrowserModel: ObservableObject {
     @Published var sort: FileSort {
         didSet {
             guard !restoringView else { return }
-            guard ViewPreferences.sameSort(oldValue, sort) == false else { return }
+            guard oldValue != sort else { return }
             changeView { $0.fileSort = sort }
             reloadPreservingSelection()
         }
@@ -979,6 +979,7 @@ struct ViewPreferences: Codable {
     private var column: Column
     private var ascending: Bool
     private var foldersFirst: Bool
+    private var groupByType: Bool?
     var iconSize: Double
     var detailsLayout: Data?
 
@@ -987,24 +988,24 @@ struct ViewPreferences: Codable {
         column = Column(sort.column)
         ascending = sort.ascending
         foldersFirst = sort.foldersFirst
+        groupByType = sort.groupByType
         self.iconSize = iconSize
         self.detailsLayout = detailsLayout
     }
 
     var fileSort: FileSort {
-        get { FileSort(column: column.fileColumn, ascending: ascending, foldersFirst: foldersFirst) }
+        get {
+            FileSort(column: column.fileColumn, ascending: ascending, foldersFirst: foldersFirst,
+                     groupByType: groupByType ?? false)
+        }
         set {
             column = Column(newValue.column)
             ascending = newValue.ascending
             foldersFirst = newValue.foldersFirst
+            groupByType = newValue.groupByType
         }
     }
 
-    static func sameSort(_ left: FileSort, _ right: FileSort) -> Bool {
-        Column(left.column) == Column(right.column)
-            && left.ascending == right.ascending
-            && left.foldersFirst == right.foldersFirst
-    }
 }
 
 struct BrowserPreferences: Codable {

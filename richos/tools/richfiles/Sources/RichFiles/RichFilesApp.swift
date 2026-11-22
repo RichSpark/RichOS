@@ -58,7 +58,7 @@ public struct RichFilesScenes: Scene {
             WindowBrowserView(start: Self.requestedFolder ?? FileManager.default.homeDirectoryForCurrentUser,
                         actions: actions, openRequests: delegate,
                         supportsSessionRestore: Self.requestedFolder == nil,
-                        remembersWindowFrame: true,
+                        placementFamily: .browser,
                         launchHandoffID: Self.requestedHandoff)
                 .frame(minWidth: 720, minHeight: 420)
                 .defaultAppStorage(RichFilesInstallation.preferences)
@@ -71,7 +71,7 @@ public struct RichFilesScenes: Scene {
 
         WindowGroup("RichFiles", id: "richfiles-folder", for: FolderWindowRequest.self) { $request in
             WindowBrowserView(start: request?.folder ?? FileManager.default.homeDirectoryForCurrentUser,
-                              actions: actions, openRequests: delegate)
+                              actions: actions, openRequests: delegate, placementFamily: .folder)
                 .frame(minWidth: 720, minHeight: 420)
                 .defaultAppStorage(RichFilesInstallation.preferences)
                 .handlesExternalEvents(preferring: Self.browserEvents, allowing: Self.browserEvents)
@@ -80,7 +80,7 @@ public struct RichFilesScenes: Scene {
 
         WindowGroup("RichFiles", id: "richfiles-handoff", for: String.self) { $ticket in
             WindowBrowserView(start: FileManager.default.homeDirectoryForCurrentUser, actions: actions,
-                              openRequests: delegate, supportsSessionRestore: true,
+                              openRequests: delegate, supportsSessionRestore: true, placementFamily: .handoff,
                               handoffID: ticket)
                 .frame(minWidth: 720, minHeight: 420)
                 .defaultAppStorage(RichFilesInstallation.preferences)
@@ -116,21 +116,8 @@ public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, Observab
     private var handoffs: [UUID] = []
     private var openedHandoffs: Set<UUID> = []
     private var openedInitialBrowser = false
-    private weak var primaryPlacementWindow: NSWindow?
+    let windowPlacement = BrowserWindowPlacement(defaults: RichFilesInstallation.preferences)
     private var windowRecording: WindowRecording?
-
-    func claimPrimaryPlacement(for window: NSWindow) -> Bool {
-        if primaryPlacementWindow == nil { primaryPlacementWindow = window }
-        return primaryPlacementWindow === window
-    }
-
-    func savesPrimaryPlacement(for window: NSWindow) -> Bool {
-        primaryPlacementWindow === window
-    }
-
-    func releasePrimaryPlacement(for window: NSWindow) {
-        if primaryPlacementWindow === window { primaryPlacementWindow = nil }
-    }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.servicesProvider = self
@@ -579,7 +566,9 @@ struct RichFilesSettings: View {
         case .size: name = "Size"
         case .modified: name = "Date modified"
         }
-        return name + (sort.ascending ? ", ascending" : ", descending") + (sort.foldersFirst ? ", folders first" : "")
+        let group = sort.groupByType && sort.column != .type ? "Type groups, then " : ""
+        return group + name + (sort.ascending ? ", ascending" : ", descending")
+            + (sort.foldersFirst ? ", folders first" : "")
     }
 
     private func readShortcut() {

@@ -5,6 +5,27 @@ import XCTest
 @testable import RichFilesCore
 
 final class BrowserActionsTests: XCTestCase {
+    func testStallDeadlineFollowsProgressEvenWhenCopyIsSlow() {
+        let item = URL(fileURLWithPath: "/fixture/slow.txt")
+        var transfer = BrowserTransfer(destination: item.deletingLastPathComponent(), move: false, total: 2)
+        transfer.lastAdvance = 10
+        XCTAssertEqual(transfer.secondsUntilStall(at: 24), 1)
+        XCTAssertEqual(transfer.secondsUntilStall(at: 25), 0)
+
+        transfer.updateCopyProgress(.init(source: item, written: 1, total: 100, elapsed: 14), at: 24)
+        XCTAssertEqual(transfer.secondsUntilStall(at: 38), 1)
+        transfer.updateCopyProgress(.init(source: item, written: 1, total: 100, elapsed: 28), at: 38)
+        XCTAssertEqual(transfer.secondsUntilStall(at: 39), 0, "A repeated byte count cannot keep a stalled copy active")
+        transfer.updateCopyProgress(.init(source: item, written: 2, total: 100, elapsed: 30), at: 40)
+        XCTAssertEqual(transfer.secondsUntilStall(at: 40), 15, "New bytes clear the stall immediately")
+
+        let nested = item.deletingLastPathComponent().appendingPathComponent("next.txt")
+        transfer.updateCopyProgress(.init(source: nested, written: 1, total: nil, elapsed: 1), at: 45)
+        XCTAssertEqual(transfer.secondsUntilStall(at: 45), 15, "A new nested file starts its own byte count")
+        transfer.running = false
+        XCTAssertNil(transfer.secondsUntilStall(at: 100))
+    }
+
     @MainActor
     func testRichFilesDiagnosticLogKeepsTheLatestStructuredRecordWithinItsCap() async throws {
         try await withFixture { _, logs, _ in
