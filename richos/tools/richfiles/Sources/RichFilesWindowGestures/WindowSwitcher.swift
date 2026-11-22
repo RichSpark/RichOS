@@ -183,6 +183,15 @@ final class WindowSwitcher: NSObject, NSTableViewDataSource, NSTableViewDelegate
         return false
     }
 
+    func windowDidResignKey(_ notification: Notification) {
+        let request = activation
+        // Let AppKit finish the focus change and ignore an older dismissal after reopening.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.activation == request, !self.panel.isKeyWindow else { return }
+            self.dismiss()
+        }
+    }
+
     @objc func dismiss() {
         guard panel.isVisible else { return }
         hide()
