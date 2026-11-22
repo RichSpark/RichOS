@@ -15,7 +15,7 @@ if CommandLine.arguments.dropFirst().first == "--check-gesture-permission" {
 }
 
 let application = NSApplication.shared
-application.setActivationPolicy(.prohibited)
+application.setActivationPolicy(.accessory)
 let controller = GestureController()
 controller.refresh()
 let timer = Timer(timeInterval: 1, repeats: true) { _ in controller.refresh() }

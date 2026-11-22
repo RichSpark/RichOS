@@ -554,6 +554,13 @@ final class BrowserActions: ObservableObject {
         }
     }
 
+    func create(from request: NameRequest, named name: String, onCreated: @escaping (FileReference) -> Void) {
+        // Number the suggested folder name only after confirmation, leaving explicit names exact.
+        let useAvailableName = request.directory && name == request.name
+        create(in: request.folder, named: name, directory: request.directory,
+               expectedFolder: request.expectedFolder, useAvailableName: useAvailableName, onCreated: onCreated)
+    }
+
     func create(from template: NameRequest.Template, named name: String) {
         runMutation(title: "New File from Template") {
             let copy = try FileOperations.copyTemplate(

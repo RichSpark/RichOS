@@ -34,6 +34,14 @@ public enum ThumbnailError: LocalizedError {
 }
 
 public enum WorkspaceServices {
+    public static func application(at url: URL) throws -> WorkspaceApplication {
+        try requireLocalFileURL(url)
+        guard let bundle = Bundle(url: url),
+              bundle.object(forInfoDictionaryKey: "CFBundlePackageType") as? String == "APPL",
+              bundle.executableURL != nil else { throw CocoaError(.fileReadCorruptFile) }
+        return WorkspaceApplication(url: url.resolvingSymlinksInPath())
+    }
+
     /// Query the system for a selected item. Call on a background worker.
     public static func applications(for file: URL) throws -> WorkspaceApplications {
         try requireLocalFileURL(file)

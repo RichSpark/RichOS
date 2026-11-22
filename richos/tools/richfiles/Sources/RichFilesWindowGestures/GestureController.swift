@@ -11,8 +11,14 @@ final class GestureController {
     private static let layoutTolerance: CGFloat = 16
     private struct RestorableFrame {
         let original: CGRect
-        let maximized: CGRect
+        let applied: CGRect
         let display: CGDirectDisplayID
+    }
+    private struct TileDrag {
+        let window: AXUIElement
+        let origin: CGPoint
+        let original: CGRect
+        var moved = false
     }
     private enum DockClick {
         case minimize(AXUIElement)
@@ -37,6 +43,9 @@ final class GestureController {
     private var pointerRevision: UInt64 = 0
     private var firstTitleClick: AXUIElement?
     private var maximized: [AXUIElement: RestorableFrame] = [:]
+    private var tiled: [AXUIElement: RestorableFrame] = [:]
+    private var tileDrag: TileDrag?
+    private var switcher: WindowSwitcher?
     private var dockMinimized: [pid_t: AXUIElement] = [:]
     private var observers: [pid_t: AXObserver] = [:]
     private var appTermination: NSObjectProtocol?
@@ -74,6 +83,8 @@ final class GestureController {
         selection = Preferences.selection
         if !selection.contains(.titleBar) && previous.contains(.titleBar) { maximized.removeAll() }
         if !selection.contains(.dock) && previous.contains(.dock) { dockMinimized.removeAll() }
+        if !selection.contains(.tiling) && previous.contains(.tiling) { tiled.removeAll() }
+        if !selection.contains(.switcher) && previous.contains(.switcher) { switcher?.dismiss() }
         if selection != previous {
             stopTap(keepingWindows: true)
             pruneObservers()
@@ -152,16 +163,20 @@ final class GestureController {
     private func startTap() -> Bool {
         if let tap { return CGEvent.tapIsEnabled(tap: tap) }
         var types: [CGEventType] = []
-        if !selection.intersection([.titleBar, .dock]).isEmpty {
+        if !selection.intersection([.titleBar, .dock, .tiling]).isEmpty {
             types = [.leftMouseDown, .leftMouseUp, .leftMouseDragged, .rightMouseDown, .otherMouseDown]
         }
-        if selection.contains(.desktopDelete) { types.append(.keyDown) }
+        if !selection.intersection([.desktopDelete, .tiling, .switcher]).isEmpty { types.append(.keyDown) }
         let mask = types.reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
         // Observe mouse-down before Dock can change focus and pass through
         // mouse events unchanged. The desktop shortcut may modify a key-down.
         guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
                                          options: .defaultTap, eventsOfInterest: mask, callback: { _, type, event, context in
-            if let context { Unmanaged<GestureController>.fromOpaque(context).takeUnretainedValue().receive(type, event) }
+            if let context {
+                let controller = Unmanaged<GestureController>.fromOpaque(context).takeUnretainedValue()
+                if type == .keyDown, controller.handleWindowShortcut(event) { return nil }
+                controller.receive(type, event)
+            }
             return Unmanaged.passUnretained(event)
         }, userInfo: Unmanaged.passUnretained(self).toOpaque()),
               let source = CFMachPortCreateRunLoopSource(nil, tap, 0) else { return false }
@@ -179,8 +194,11 @@ final class GestureController {
         tap = nil
         press = nil
         firstTitleClick = nil
+        tileDrag = nil
         if keepingWindows { return }
+        switcher?.dismiss()
         maximized.removeAll()
+        tiled.removeAll()
         dockMinimized.removeAll()
         pruneObservers()
     }
@@ -190,6 +208,7 @@ final class GestureController {
             pointerRevision &+= 1
             press = nil
             firstTitleClick = nil
+            tileDrag = nil
             if let tap, AXIsProcessTrusted() { CGEvent.tapEnable(tap: tap, enable: true) }
             return
         }
@@ -202,6 +221,7 @@ final class GestureController {
             pointerRevision &+= 1
             press = nil
             firstTitleClick = nil
+            tileDrag = nil
             return
         }
         switch type {
@@ -211,20 +231,160 @@ final class GestureController {
             // native Dock mouse-up can activate, reopen or focus another window.
             let frontmost = NSWorkspace.shared.frontmostApplication
             let clicks = Int(event.getIntegerValueField(.mouseEventClickState))
-            press = hit(at: event.location).flatMap { element in
+            let element = hit(at: event.location)
+            press = element.flatMap { element in
                 target(element, at: event.location, clicks: clicks, frontmost: frontmost)
                     .map { Press(point: event.location, timestamp: event.timestamp, target: $0) }
+            }
+            tileDrag = nil
+            if selection.contains(.tiling), clicks == 1, let element,
+               let window = titleBar(element, at: event.location), window.ordinaryWindow,
+               let original = window.frame {
+                tileDrag = TileDrag(window: window, origin: event.location, original: original)
             }
             if press == nil { firstTitleClick = nil }
         case .leftMouseUp:
             finishPress(event)
-        case .leftMouseDragged, .rightMouseDown, .otherMouseDown:
+            finishTileDrag(at: event.location)
+        case .leftMouseDragged:
             pointerRevision &+= 1
             press = nil
             firstTitleClick = nil
+            if let drag = tileDrag, hypot(event.location.x - drag.origin.x, event.location.y - drag.origin.y) >= 8 {
+                tileDrag?.moved = true
+            }
+        case .rightMouseDown, .otherMouseDown:
+            pointerRevision &+= 1
+            press = nil
+            firstTitleClick = nil
+            tileDrag = nil
         default:
             break
         }
+    }
+
+    private func handleWindowShortcut(_ event: CGEvent) -> Bool {
+        let modifiers: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift, .maskSecondaryFn]
+        // Some keyboards report the Fn flag along with an arrow.
+        let pressed = event.flags.intersection(modifiers).subtracting(.maskSecondaryFn)
+        guard pressed == [.maskCommand, .maskAlternate, .maskControl] else { return false }
+        let key = Int(event.getIntegerValueField(.keyboardEventKeycode))
+        let repeated = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+        if key == kVK_ANSI_W, selection.contains(.switcher) {
+            if !repeated {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, !self.recheckingPermissions, Preferences.selection.contains(.switcher),
+                          AXIsProcessTrusted(), CGPreflightListenEventAccess() else { return }
+                    if self.switcher == nil { self.switcher = WindowSwitcher() }
+                    self.switcher?.toggle()
+                }
+            }
+            return true
+        }
+        guard selection.contains(.tiling) else { return false }
+        let tile: WindowTile?
+        switch key {
+        case kVK_LeftArrow: tile = .left
+        case kVK_RightArrow: tile = .right
+        case kVK_UpArrow: tile = .top
+        case kVK_DownArrow: tile = .bottom
+        case kVK_ANSI_1: tile = .topLeft
+        case kVK_ANSI_2: tile = .topRight
+        case kVK_ANSI_3: tile = .bottomLeft
+        case kVK_ANSI_4: tile = .bottomRight
+        case kVK_Return: tile = nil
+        default: return false
+        }
+        if !repeated {
+            let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let pid, NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+                      let window = self.focusedWindow(pid), let current = window.frame,
+                      let display = self.display(for: current) else { return }
+                if let tile { self.applyTile(tile, to: window, on: display) }
+                else { self.restoreTile(window, current: current, on: display) }
+            }
+        }
+        return true
+    }
+
+    private func finishTileDrag(at point: CGPoint) {
+        defer { tileDrag = nil }
+        guard let drag = tileDrag, drag.moved,
+              let display = GestureDisplay.current().first(where: { $0.frame.contains(point) }),
+              let tile = WindowTile.atEdge(point, of: display.frame) else { return }
+        let revision = pointerRevision
+        // On macOS 15 and later WindowServer may handle the same mouse-up.
+        // Let it settle before deciding whether RichFiles needs to move the window.
+        let delay: DispatchTimeInterval
+        if #available(macOS 15, *) { delay = .milliseconds(350) }
+        else { delay = .milliseconds(0) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.pointerRevision == revision else { return }
+            self.applyTile(tile, to: drag.window, on: display, from: drag.original)
+        }
+    }
+
+    private func display(for frame: CGRect) -> GestureDisplay? {
+        let displays = GestureDisplay.current()
+        func overlap(_ display: GestureDisplay) -> CGFloat {
+            let area = frame.intersection(display.frame)
+            return area.isNull ? 0 : area.width * area.height
+        }
+        return displays.max { overlap($0) < overlap($1) }
+    }
+
+    private func canTile(_ window: AXUIElement) -> Bool {
+        !recheckingPermissions && Preferences.selection.contains(.tiling) && AXIsProcessTrusted()
+            && CGPreflightListenEventAccess() && window.ordinaryWindow && window.minimized == false
+            && window.settable(kAXPositionAttribute) && window.settable(kAXSizeAttribute)
+    }
+
+    private func applyTile(_ tile: WindowTile, to window: AXUIElement, on display: GestureDisplay, from beforeDrag: CGRect? = nil) {
+        let started = ProcessInfo.processInfo.systemUptime
+        guard canTile(window), let current = window.frame else {
+            record(.windowGestureTile, .unavailable, started: started)
+            return
+        }
+        let before = beforeDrag ?? current
+        let previous = tiled[window]
+        let original = previous.flatMap { before.nearlyEquals($0.applied) ? $0.original : nil } ?? before
+        let frame = tile.frame(in: display.usable)
+        let accepted: Bool
+        let actual: CGRect?
+        if #available(macOS 15, *), beforeDrag != nil,
+           current.edgesAreNear(tile == .top ? display.usable : frame, within: Self.layoutTolerance) {
+            // Native top-edge tiling fills the screen. Side and corner tiles can include margins.
+            accepted = true
+            actual = current
+        } else {
+            let moved = window.setFrame(frame)
+            actual = window.frame
+            accepted = moved && actual?.edgesAreNear(frame, within: Self.layoutTolerance) == true
+        }
+        if let actual, accepted || !actual.nearlyEquals(original) {
+            tiled[window] = RestorableFrame(original: original, applied: actual, display: display.id)
+            observe(window)
+        }
+        record(.windowGestureTile, accepted ? .complete : .issues, started: started)
+    }
+
+    private func restoreTile(_ window: AXUIElement, current: CGRect, on display: GestureDisplay) {
+        let started = ProcessInfo.processInfo.systemUptime
+        guard canTile(window), let saved = tiled[window], current.nearlyEquals(saved.applied) else {
+            record(.windowGestureTileRestore, .unavailable, started: started)
+            return
+        }
+        let displays = GestureDisplay.current()
+        let originalDisplay = displays.first { $0.canReachTitleBar(of: saved.original) }
+        let target = originalDisplay != nil ? saved.original : display.reachable(saved.original)
+        let accepted = window.setFrame(target)
+        let restored = accepted && window.frame?.edgesAreNear(target, within: Self.layoutTolerance) == true
+        if restored {
+            tiled[window] = nil
+            pruneObservers()
+        }
+        record(.windowGestureTileRestore, restored ? .complete : .issues, started: started)
     }
 
     private func applyDesktopDelete(to event: CGEvent) {
@@ -380,7 +540,7 @@ final class GestureController {
         guard let display = displays.first(where: { $0.frame.contains(point) }) else { return }
         let started = ProcessInfo.processInfo.systemUptime
         if let saved = maximized[window],
-           current.nearlyEquals(saved.maximized) || !displays.contains(where: { $0.id == saved.display }) {
+           current.nearlyEquals(saved.applied) || !displays.contains(where: { $0.id == saved.display }) {
             let original = displays.contains(where: { $0.id == saved.display }) ? saved.original : display.reachable(saved.original)
             restoreFrame(window, to: original, started: started)
             return
@@ -396,7 +556,7 @@ final class GestureController {
         let adjusted = window.setFrame(usable)
         let actual = window.frame
         if let actual, !actual.nearlyEquals(current) {
-            maximized[window] = RestorableFrame(original: current, maximized: actual, display: display.id)
+            maximized[window] = RestorableFrame(original: current, applied: actual, display: display.id)
             observe(window)
             let fillsDisplay = adjusted && actual.edgesAreNear(usable, within: Self.layoutTolerance)
             record(.windowGestureMaximize, fillsDisplay ? .complete : .issues, started: started)
@@ -487,6 +647,7 @@ final class GestureController {
                 guard let context, window.minimized == nil else { return }
                 let controller = Unmanaged<GestureController>.fromOpaque(context).takeUnretainedValue()
                 controller.maximized[window] = nil
+                controller.tiled[window] = nil
                 if let pid = window.processID, controller.dockMinimized[pid] == window {
                     controller.dockMinimized[pid] = nil
                 }
@@ -504,11 +665,13 @@ final class GestureController {
     private func forget(process pid: pid_t) {
         dockMinimized[pid] = nil
         maximized = maximized.filter { $0.key.processID != pid }
+        tiled = tiled.filter { $0.key.processID != pid }
         pruneObservers()
     }
 
     private func pruneObservers() {
-        let live = Set(maximized.keys.compactMap(\.processID)).union(dockMinimized.keys)
+        let live = Set(maximized.keys.compactMap(\.processID))
+            .union(tiled.keys.compactMap(\.processID)).union(dockMinimized.keys)
         for pid in Set(observers.keys).subtracting(live) {
             guard let observer = observers.removeValue(forKey: pid) else { continue }
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
