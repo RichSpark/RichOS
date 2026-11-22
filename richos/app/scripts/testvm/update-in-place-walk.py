@@ -508,15 +508,6 @@ return resultRows as text
 
     def suite_after(self):
         report = {}
-        if self.a.suite != 'legacy':
-            old_gestures = self.owned['gestures']
-            def updated_gestures():
-                pid = self.gesture_service_pid()
-                return pid if pid and self.running_build('gestures', pid, self.a.update_version) else None
-            new_gestures = self.wait(updated_gestures, 'the registered Window Gestures service to report the new build', 90)
-            self.owned['gestures-after'] = new_gestures
-            report['gestures'] = {'old_pid': old_gestures,
-                                  'running': self.running_build('gestures', new_gestures, self.a.update_version)}
         for name, before in self.facts['suite_windows'].items():
             old = self.owned[name + '-before']
             if self.a.suite == 'legacy':
@@ -556,6 +547,15 @@ return resultRows as text
                               name + ' to restore the same windows and positions', 45)
             report[name] = {'old_pid': old, 'pid': pid, 'windows': after,
                             'running': self.running_build(name, pid, self.a.update_version)}
+        if self.a.suite != 'legacy':
+            old_gestures = self.owned['gestures']
+            def updated_gestures():
+                pid = self.gesture_service_pid()
+                return pid if pid and self.running_build('gestures', pid, self.a.update_version) else None
+            new_gestures = self.wait(updated_gestures, 'the registered Window Gestures service to report the new build', 90)
+            self.owned['gestures-after'] = new_gestures
+            report['gestures'] = {'old_pid': old_gestures,
+                                  'running': self.running_build('gestures', new_gestures, self.a.update_version)}
         if self.a.suite == 'editor':
             foreground = self.osascript('tell application "System Events" to return bundle identifier '
                                        'of first application process whose frontmost is true')
@@ -591,6 +591,18 @@ return resultRows as text
         self.set_app(new)
         relaunched = round(time.monotonic() - pressed, 1)
         self.wait(lambda: self.version() == self.a.update_version, 'the new version in /Applications', 120)
+        launch_log = self.home + '/Library/Logs/RichOS/launch.log'
+
+        def launch_record():
+            log = self.g('cat ' + q(launch_log) + ' 2>/dev/null || true')
+            prefix = 'RichOS %s pid %d [richos] launch timing:' % (self.a.update_version, new)
+            return next((line for line in reversed(log.splitlines()) if prefix in line), '')
+
+        if self.a.suite:
+            launch_line = self.wait(lambda: launch_record() if new in self.app_pids() else '',
+                                    'the new RichOS process to finish application startup', 60)
+        else:
+            launch_line = launch_record()
         self.shot('2-after-restart.png')
         user_copy = self.g('ls -ld ' + q(self.user_app) + ' 2>/dev/null || true')
         if self.a.scenario == 'reinstall':
@@ -608,12 +620,11 @@ return resultRows as text
         timing = self.g('cat ' + q(self.home + '/Library/Application Support/com.richos.app/update-timing.log')
                         + ' 2>/dev/null || true')
         (self.out / 'update-timing.log').write_text(timing + '\n')
-        launch = self.g('cat ' + q(self.home + '/Library/Logs/RichOS/launch.log') + ' 2>/dev/null || true')
         return {'new_pid': new, 'restart_s': relaunched, 'version': self.version(),
                 'helpers_seen': sorted(seen), 'user_copy': user_copy,
                 'system_install': self.receipt('system-install.json'),
                 'publication': [l for l in timing.splitlines() if 'phase=publication' in l][-3:],
-                'relaunched_launch_line': next((l for l in reversed(launch.splitlines()) if 'pid %d ' % new in l), '')}
+                'relaunched_launch_line': launch_line}
 
     def dock_step(self):
         self.quit_app(self.owned['app'])
