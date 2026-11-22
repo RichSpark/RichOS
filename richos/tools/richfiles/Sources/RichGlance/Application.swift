@@ -16,6 +16,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var infoMenuItem: NSMenuItem?
     private var keyMonitor: Any?
     private var openingPanel: NSOpenPanel?
+    private var captureSettings: BackgroundCaptureSettings?
     private var capture: CaptureController?
     private var permissionProbe: Process?
     private var captureNotice: NSPanel?
@@ -27,6 +28,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     static func main() {
         let arguments = Array(CommandLine.arguments.dropFirst())
+        if GlanceHelperControl.runCommand(arguments) { return }
         if arguments == ["--check-screen-recording-access"] {
             exit(CGPreflightScreenCaptureAccess() ? EXIT_SUCCESS : EXIT_FAILURE)
         }
@@ -66,7 +68,15 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls {
             if let request = CaptureRequest.consume(url) {
-                beginCapture(originPID: request.originPID)
+                switch request.action {
+                case .capture: beginCapture(originPID: request.originPID)
+                case .editor:
+                    captureLaunch = false
+                    openWithoutFile()
+                case .settings:
+                    captureLaunch = false
+                    openCaptureSettings()
+                }
                 return
             }
         }
@@ -79,7 +89,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationOpenUntitledFile(_ sender: NSApplication) -> Bool {
-        if viewer == nil, editor == nil, capture == nil, !captureLaunch { openWithoutFile() }
+        if viewer == nil, editor == nil, capture == nil, captureSettings?.window?.isVisible != true, !captureLaunch { openWithoutFile() }
         return true
     }
 
@@ -200,6 +210,13 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc private func startCapture() { beginCapture(originPID: nil) }
+
+    @objc private func openCaptureSettings() {
+        if captureSettings == nil { captureSettings = BackgroundCaptureSettings() }
+        captureSettings?.showWindow(nil)
+        if #available(macOS 14, *) { NSApp.activate() }
+        else { NSApp.activate(ignoringOtherApps: true) }
+    }
 
     private func beginCapture(originPID: pid_t?, fromEditor: Bool = false) {
         if let capture {
@@ -459,6 +476,8 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let app = NSMenuItem()
         app.submenu = NSMenu()
         app.submenu?.addItem(withTitle: "About RichGlance", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        app.submenu?.addItem(.separator())
+        app.submenu?.addItem(withTitle: "Capture Settings…", action: #selector(openCaptureSettings), keyEquivalent: "").target = self
         app.submenu?.addItem(.separator())
         app.submenu?.addItem(withTitle: "Hide RichGlance", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         app.submenu?.addItem(withTitle: "Quit RichGlance", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")

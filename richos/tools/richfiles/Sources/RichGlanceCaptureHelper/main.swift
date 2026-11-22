@@ -1,0 +1,262 @@
+import AppKit
+import Carbon
+import OSLog
+import RichFilesCore
+
+@MainActor
+final class CaptureHelper: NSObject, NSApplicationDelegate {
+    private static let keyboardClass: OSType = 0x6B657962  // keyb
+    private static let hotkeyType: OSType = 0x686B6964     // hkid
+    private static let signature: OSType = 0x52474370      // RGCp
+    private let logger = Logger(subsystem: GlanceHelper.bundleID, category: "capture")
+    private let store = GlanceHelper.Store()
+    private let session: NSRunningApplication?
+    private let glance: URL
+    private var preferences: GlanceHelper.Preferences
+    private var lease: FileHandle?
+    private var port: CFMessagePort?
+    private var hotkey: EventHotKeyRef?
+    private var handler: EventHandlerRef?
+    private var hotkeyID: UInt32 = 0
+    private var nextID: UInt32 = 0
+    private var lastPress: TimeInterval = -.infinity
+    private var item: NSStatusItem?
+    private var previousApplication: NSRunningApplication?
+
+    init?(session: NSRunningApplication?, login: Bool) {
+        guard Bundle.main.bundleIdentifier == GlanceHelper.bundleID,
+              let record = try? store.read(),
+              login ? record.preferences.background : session?.isTerminated == false else { return nil }
+        self.session = session
+        preferences = record.preferences
+        glance = (0..<4).reduce(Bundle.main.bundleURL) { url, _ in url.deletingLastPathComponent() }
+        guard Bundle(url: glance)?.bundleIdentifier == "app.richos.richglance" else { return nil }
+        super.init()
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let started = ProcessInfo.processInfo.systemUptime
+        var outcome = RichFilesDiagnostics.Outcome.issues
+        defer {
+            RichFilesDiagnostics.record(.glanceCaptureHelperStart, id: UUID(), outcome: outcome, started: started,
+                                        total: preferences.enabled ? 1 : 0, confirmed: hotkey != nil ? 1 : 0)
+            RichFilesDiagnostics.flush()
+        }
+        do {
+            lease = try store.lock("owner", nonblocking: true)
+            guard lease != nil else {
+                logger.info("start outcome=another-owner")
+                NSApp.terminate(nil)
+                return
+            }
+            guard session?.isTerminated != true else { NSApp.terminate(nil); return }
+            observeWorkspace()
+            try listen()
+            do { try replaceShortcut(with: preferences, saving: false) }
+            catch { logger.notice("start shortcut=unavailable") }
+            updateMenu()
+            outcome = preferences.enabled && hotkey == nil ? .unavailable : .complete
+            logger.info("start outcome=ready session=\(self.session != nil) shortcut=\(self.hotkey != nil) menu=\(self.item != nil)")
+        } catch {
+            logger.error("start outcome=unavailable")
+            NSApp.terminate(nil)
+        }
+    }
+
+    private func observeWorkspace() {
+        let workspace = NSWorkspace.shared
+        previousApplication = workspace.frontmostApplication
+        workspace.notificationCenter.addObserver(self, selector: #selector(activated(_:)),
+                                                  name: NSWorkspace.didActivateApplicationNotification, object: nil)
+        workspace.notificationCenter.addObserver(self, selector: #selector(terminated(_:)),
+                                                  name: NSWorkspace.didTerminateApplicationNotification, object: nil)
+    }
+
+    @objc private func activated(_ notification: Notification) {
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+              app.activationPolicy == .regular else { return }
+        previousApplication = app
+    }
+
+    @objc private func terminated(_ notification: Notification) {
+        guard let session,
+              let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+              app.processIdentifier == session.processIdentifier else { return }
+        NSApp.terminate(nil)
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        if let hotkey { UnregisterEventHotKey(hotkey) }
+        if let handler { RemoveEventHandler(handler) }
+        if let port { CFMessagePortInvalidate(port) }
+        if lease != nil { try? FileManager.default.removeItem(at: store.endpoint) }
+        try? lease?.close()
+    }
+
+    private func listen() throws {
+        let name = UUID().uuidString
+        var context = CFMessagePortContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
+                                           retain: nil, release: nil, copyDescription: nil)
+        guard let port = CFMessagePortCreateLocal(nil, name as CFString, { _, _, data, context in
+            guard let data, let context else { return nil }
+            let helper = Unmanaged<CaptureHelper>.fromOpaque(context).takeUnretainedValue()
+            return MainActor.assumeIsolated {
+                helper.reply(to: data as Data).map { Unmanaged.passRetained($0 as CFData) }
+            }
+        }, &context, nil),
+        let source = CFMessagePortCreateRunLoopSource(nil, port, 0) else {
+            throw GlanceHelper.Problem("RichGlance Capture could not start listening.")
+        }
+        self.port = port
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, CFRunLoopMode.commonModes)
+        try name.write(to: store.endpoint, atomically: true, encoding: .utf8)
+    }
+
+    private func reply(to data: Data) -> Data? {
+        guard data.count < 2048, let request = try? JSONDecoder().decode(GlanceHelper.Request.self, from: data) else { return nil }
+        var response = GlanceHelper.Response(registered: hotkey != nil)
+        do {
+            switch request.action {
+            case .status:
+                break
+            case .configure:
+                guard let next = request.preferences, next.background == preferences.background else {
+                    throw GlanceHelper.Problem("RichGlance Capture is restarting. Try again.")
+                }
+                try replaceShortcut(with: next, saving: true)
+                updateMenu()
+                response.registered = hotkey != nil
+            case .stopSession:
+                guard session != nil else { throw GlanceHelper.Problem("RichGlance Capture is running in the background.") }
+                DispatchQueue.main.async { NSApp.terminate(nil) }
+            }
+        } catch {
+            response.error = error.localizedDescription
+        }
+        return try? JSONEncoder().encode(response)
+    }
+
+    private func replaceShortcut(with next: GlanceHelper.Preferences, saving: Bool) throws {
+        let replacement: EventHotKeyRef?
+        let keep = hotkey != nil && next.enabled && next.shortcut == preferences.shortcut
+        if next.enabled && !keep { replacement = try register(next.shortcut) }
+        else { replacement = nil }
+        do {
+            if saving { try store.write(next) }
+        } catch {
+            if let replacement { UnregisterEventHotKey(replacement) }
+            throw error
+        }
+        if !keep {
+            if let hotkey { UnregisterEventHotKey(hotkey) }
+            hotkey = replacement
+            hotkeyID = nextID
+            lastPress = -.infinity
+        }
+        preferences = next
+    }
+
+    private func register(_ shortcut: GlanceHelper.Shortcut) throws -> EventHotKeyRef {
+        let chord = try shortcut.carbon()
+        let target = GetApplicationEventTarget()
+        if handler == nil {
+            var kind = EventTypeSpec(eventClass: Self.keyboardClass, eventKind: UInt32(kEventHotKeyPressed))
+            let result = InstallEventHandler(target, { _, event, context in
+                guard let event, let context else { return OSStatus(eventNotHandledErr) }
+                let helper = Unmanaged<CaptureHelper>.fromOpaque(context).takeUnretainedValue()
+                return MainActor.assumeIsolated { helper.pressed(event) }
+            }, 1, &kind, Unmanaged.passUnretained(self).toOpaque(), &handler)
+            guard result == noErr else { throw GlanceHelper.Problem("macOS could not start listening for the shortcut.") }
+        }
+        nextID &+= 1
+        let id = EventHotKeyID(signature: Self.signature, id: nextID)
+        var replacement: EventHotKeyRef?
+        guard RegisterEventHotKey(chord.key, chord.modifiers, id, target, UInt32(kEventHotKeyExclusive), &replacement) == noErr,
+              let replacement else {
+            logger.notice("shortcut outcome=unavailable")
+            throw GlanceHelper.Problem("That shortcut is unavailable. Choose another combination.")
+        }
+        return replacement
+    }
+
+    private func pressed(_ event: EventRef) -> OSStatus {
+        var id = EventHotKeyID()
+        guard GetEventParameter(event, UInt32(kEventParamDirectObject), Self.hotkeyType, nil,
+                                MemoryLayout<EventHotKeyID>.size, nil, &id) == noErr,
+              id.signature == Self.signature, id.id == hotkeyID, hotkey != nil else { return OSStatus(eventNotHandledErr) }
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastPress >= 0.25 {
+            lastPress = now
+            launch(.capture, source: "shortcut")
+        }
+        return noErr
+    }
+
+    private func updateMenu() {
+        guard session == nil, preferences.menuBar else {
+            if let item { NSStatusBar.system.removeStatusItem(item) }
+            item = nil
+            return
+        }
+        if item == nil { item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength) }
+        item?.button?.image = NSImage(systemSymbolName: "viewfinder", accessibilityDescription: "RichGlance Capture")
+        item?.button?.setAccessibilityLabel("RichGlance Capture")
+        item?.button?.toolTip = "RichGlance Capture"
+        let menu = NSMenu()
+        let capture = menu.addItem(withTitle: "Capture…", action: #selector(captureFromMenu), keyEquivalent: "")
+        capture.target = self
+        if hotkey != nil { capture.title = "Capture…    \(preferences.shortcut.label)" }
+        menu.addItem(withTitle: "Open Editor", action: #selector(openEditor), keyEquivalent: "").target = self
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Capture Settings…", action: #selector(openSettings), keyEquivalent: "").target = self
+        item?.menu = menu
+    }
+
+    @objc private func captureFromMenu() { launch(.capture, source: "menu") }
+    @objc private func openEditor() { launch(.editor, source: "menu") }
+    @objc private func openSettings() { launch(.settings, source: "menu") }
+
+    private func launch(_ action: CaptureRequest.Action, source: String) {
+        let start = ProcessInfo.processInfo.systemUptime
+        let id = UUID()
+        let operation: RichFilesDiagnostics.Operation = source == "shortcut" ? .glanceCaptureShortcutLaunch : .glanceCaptureMenuLaunch
+        do {
+            let front = NSWorkspace.shared.frontmostApplication
+            let origin = front?.activationPolicy == .regular ? front : previousApplication
+            let request = try CaptureRequest.issue(action, originPID: origin?.processIdentifier)
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = false
+            configuration.arguments = ["--capture-request"]
+            let logger = self.logger
+            NSWorkspace.shared.open([request.url], withApplicationAt: glance, configuration: configuration) { app, error in
+                let accepted = error == nil && app != nil
+                if !accepted { try? FileManager.default.removeItem(at: request.ticket) }
+                if action == .capture {
+                    RichFilesDiagnostics.record(operation, id: id, outcome: accepted ? .complete : .unavailable,
+                                                started: start, total: 1, confirmed: accepted ? 1 : 0)
+                }
+                let duration = Int((ProcessInfo.processInfo.systemUptime - start) * 1_000)
+                logger.info("launch source=\(source, privacy: .public) action=\(action.rawValue, privacy: .public) accepted=\(error == nil && app != nil) milliseconds=\(duration)")
+            }
+        } catch {
+            if action == .capture {
+                RichFilesDiagnostics.record(operation, id: id, outcome: .issues, started: start, total: 1, confirmed: 0)
+            }
+            logger.error("launch source=\(source, privacy: .public) outcome=request-failed")
+        }
+    }
+}
+
+MainActor.assumeIsolated {
+    let arguments = CommandLine.arguments
+    let login = arguments.count == 1
+    let session = arguments.count == 3 && arguments[1] == "--richos-session"
+        ? pid_t(arguments[2]).flatMap(NSRunningApplication.init(processIdentifier:)) : nil
+    if !login && session?.bundleIdentifier != GlanceHelper.richOSID { exit(EXIT_SUCCESS) }
+    if let helper = CaptureHelper(session: session, login: login) {
+        let app = NSApplication.shared
+        app.delegate = helper
+        app.setActivationPolicy(.accessory)
+        withExtendedLifetime(helper) { app.run() }
+    }
+}

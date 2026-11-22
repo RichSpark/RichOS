@@ -10,6 +10,7 @@ let package = Package(
         .library(name: "RichFilesIntegration", type: .dynamic, targets: ["RichFilesIntegration"]),
         .executable(name: "RichFiles", targets: ["RichFilesApp"]),
         .executable(name: "RichGlance", targets: ["RichGlance"]),
+        .executable(name: "RichGlanceCaptureHelper", targets: ["RichGlanceCaptureHelper"]),
         .executable(name: "RichFilesWindowGestures", targets: ["RichFilesWindowGestures"])
     ],
     targets: [
@@ -17,6 +18,7 @@ let package = Package(
         .target(name: "RichFiles", dependencies: ["RichFilesCore"]),
         .executableTarget(name: "RichFilesApp", dependencies: ["RichFiles"]),
         .executableTarget(name: "RichGlance", dependencies: ["RichFilesCore"]),
+        .executableTarget(name: "RichGlanceCaptureHelper", dependencies: ["RichFilesCore"]),
         .executableTarget(name: "RichFilesWindowGestures", dependencies: ["RichFilesCore"]),
         .target(name: "RichFilesIntegration", dependencies: ["RichFiles", "RichFilesCore"]),
         .testTarget(name: "RichFilesCoreTests", dependencies: ["RichFilesCore"], resources: [.copy("Fixtures/Glance")]),

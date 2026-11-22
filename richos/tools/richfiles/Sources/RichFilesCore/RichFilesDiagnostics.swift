@@ -8,6 +8,7 @@ public enum RichFilesDiagnostics {
         case windowGestureAvailability, windowGestureMaximize, windowGestureRestore
         case windowGestureDockMinimize, windowGestureDockRestore, desktopDeleteShortcut
         case glanceCaptureFrame, glanceCaptureOutput, glanceCaptureSession, glanceScrollCapture
+        case glanceCaptureHelperStart, glanceCaptureHelperLogin, glanceCaptureShortcutLaunch, glanceCaptureMenuLaunch
         case glanceDisplay, glanceDecode, glanceFolder, glancePreview, glanceDefaults, glanceMetadata
 
         fileprivate var logFilename: String {
@@ -53,7 +54,7 @@ public enum RichFilesDiagnostics {
         total: Int, confirmed: Int, firstRowsMS: Int? = nil, scrollCaptureFailure: ScrollCaptureFailure? = nil
     ) {
         let bundle = Bundle.main
-        guard ["app.richos.richfiles", "com.richos.app", "app.richos.richglance", WindowGesturePreferences.helperID]
+        guard ["app.richos.richfiles", "com.richos.app", "app.richos.richglance", WindowGesturePreferences.helperID, GlanceHelper.bundleID]
             .contains(bundle.bundleIdentifier ?? ""),
               let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first else { return }
         let version = bundle.object(forInfoDictionaryKey: "RichOSSourceRevision") as? String

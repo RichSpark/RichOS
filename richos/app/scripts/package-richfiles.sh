@@ -49,6 +49,7 @@ drop_build_machine_rpaths() {
 }
 python3 "$machine_lib/native-work.py" -- swift build "${swift_args[@]}" -c "$configuration" --product RichFiles
 python3 "$machine_lib/native-work.py" -- swift build "${swift_args[@]}" -c "$configuration" --product RichGlance
+python3 "$machine_lib/native-work.py" -- swift build "${swift_args[@]}" -c "$configuration" --product RichGlanceCaptureHelper
 python3 "$machine_lib/native-work.py" -- swift build "${swift_args[@]}" -c "$configuration" --product RichFilesWindowGestures
 if [ "$embedded" -eq 1 ]; then
   python3 "$machine_lib/native-work.py" -- swift build "${swift_args[@]}" -c "$configuration" --product RichFilesIntegration
@@ -90,6 +91,16 @@ done
 if [ "$embedded" -eq 1 ]; then
   drop_build_machine_rpaths "$glance/Contents/MacOS/RichGlance"
 fi
+capture_helper="$glance/Contents/Library/LoginItems/RichGlance Capture.app"
+mkdir -p "$capture_helper/Contents/MacOS"
+install -m 755 "$build/$configuration/RichGlanceCaptureHelper" "$capture_helper/Contents/MacOS/RichGlanceCaptureHelper"
+install -m 644 "$package/RichGlanceCaptureHelper-Info.plist" "$capture_helper/Contents/Info.plist"
+if [ "$embedded" -eq 1 ]; then
+  drop_build_machine_rpaths "$capture_helper/Contents/MacOS/RichGlanceCaptureHelper"
+fi
+/usr/libexec/PlistBuddy -c "Add :RichOSSourceRevision string $(git -C "$root" rev-parse HEAD)" "$capture_helper/Contents/Info.plist"
+plutil -lint "$capture_helper/Contents/Info.plist"
+codesign --force --sign - "$capture_helper"
 plutil -lint "$glance/Contents/Info.plist"
 codesign --force --sign - "$glance"
 gestures="$app/Contents/Library/LoginItems/RichFiles Window Gestures.app"

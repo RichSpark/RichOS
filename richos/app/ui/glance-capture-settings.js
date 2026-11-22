@@ -11,6 +11,7 @@
   let view, workflow, sheet, sheetControls;
   let shortcutBusy = false, workflowBusy = false;
   let workflowRead = 0;
+  let shortcutRead = 0;
 
   function shortcutLabel(shortcut) {
     return (shortcut.control ? "⌃" : "") + (shortcut.option ? "⌥" : "") +
@@ -24,6 +25,30 @@
       row.textContent = !view.enabled ? "Off" : view.registered ? shortcutLabel(view.shortcut) : "Shortcut unavailable";
     }
     for (const surface of surfaces) surface.paint();
+  }
+
+  async function refreshShortcut() {
+    if (shortcutBusy) return;
+    const ticket = ++shortcutRead;
+    try {
+      const status = await call("glance_capture_status");
+      if (ticket !== shortcutRead || shortcutBusy || !status?.available) return;
+      view = status;
+      paint();
+    } catch {}
+  }
+
+  function bindBackgroundSettings(button, report) {
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        await call("glance_capture_open", { settings: true });
+      } catch (error) {
+        report(String(error));
+      } finally {
+        button.disabled = false;
+      }
+    });
   }
 
   async function loadWorkflow(surface) {
@@ -113,6 +138,7 @@
       const replacing = listening;
       listening = false;
       shortcutBusy = true;
+      ++shortcutRead;
       setText(feedback, "");
       setText(saved, "Saving…");
       paint();
@@ -244,7 +270,8 @@
             </div>
             <button class="dict-switch" role="switch" type="button" id="richglance-capture-on" aria-label="Capture from any app"></button>
           </div>
-          <p class="dict-copy-note"><span><b>Works while RichOS is running,</b> also when its window is minimized or closed. Turn this off or quit RichOS to free the shortcut.</span></p>
+          <p class="dict-copy-note"><span>Use Capture Settings to enable the menu bar and shortcut when RichOS is quit.</span></p>
+          <button type="button" class="dict-btn" id="richglance-background-settings">Capture Settings…</button>
           <section class="dict-sec" id="richglance-capture-fields">
             <div class="dict-sec-h"><h4 class="dict-sec-t">Your shortcut</h4><span class="dict-saved" role="status" hidden>Saved.</span></div>
             <div class="dict-key-row">
@@ -293,6 +320,7 @@
       history: "richglance-history", historySummary: "richglance-history-summary", confirmation: "richglance-history-confirm",
       cancel: "richglance-keep-history", remove: "richglance-remove-history", message: "richglance-workflow-feedback",
     });
+    bindBackgroundSettings(sheet.querySelector("#richglance-background-settings"), sheetControls.message);
   }
 
   function close() {
@@ -309,6 +337,7 @@
     paint();
     sheet.querySelector(".dict-close").focus();
     loadWorkflow(sheetControls);
+    refreshShortcut();
   }
 
   function registerPage() {
@@ -347,7 +376,10 @@
       }
     }
     viewer.addEventListener("click", () => readViewer(!viewerState.pictures));
-    window.addEventListener("focus", () => { if (!page.hidden) readViewer(); });
+    window.addEventListener("focus", () => {
+      if (!page.hidden) readViewer();
+      if (!page.hidden || sheet?.hidden === false) refreshShortcut();
+    });
 
     function external(button, command, args, progress) {
       button.addEventListener("click", async () => {
@@ -364,6 +396,7 @@
         }
       });
     }
+    bindBackgroundSettings($("gp-background-settings"), surface.message);
     external($("gp-capture"), "glance_capture_open", {}, "Opening capture…");
     external($("gp-richfiles"), "richfiles_open", { imageViewerSettings: true }, "Opening RichFiles Settings…");
 
@@ -371,6 +404,7 @@
       onShow() {
         paint();
         loadWorkflow(surface);
+        refreshShortcut();
         readViewer();
       },
       onHide: surface.reset,
