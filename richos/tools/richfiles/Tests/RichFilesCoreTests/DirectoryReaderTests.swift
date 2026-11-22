@@ -16,6 +16,31 @@ final class DirectoryReaderTests: XCTestCase {
         try Data(text.utf8).write(to: root.appendingPathComponent(path))
     }
 
+    func testTypeGroupingKeepsNaturalNameOrderAndFoldersFirst() throws {
+        try fixture { root in
+            let names = ["Item 10.txt", "Item 2.txt", "Item 1.png", "Item 3.png"]
+            for name in names { try write(name, in: root) }
+            let folder = root.appendingPathComponent("Last Folder", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+            let entries = try (names.map { root.appendingPathComponent($0) } + [folder]).map(FileEntry.init)
+
+            let byName = FileSort(groupByType: true)
+            let ascending = entries.sorted(by: byName.precedes).map(\.name)
+            XCTAssertEqual(ascending.first, folder.lastPathComponent)
+            XCTAssertTrue(ascending.joined(separator: "|").contains("Item 2.txt|Item 10.txt"))
+            XCTAssertTrue(ascending.joined(separator: "|").contains("Item 1.png|Item 3.png"))
+
+            let descending = entries.sorted(by: FileSort(ascending: false, groupByType: true).precedes).map(\.name)
+            XCTAssertEqual(descending.first, folder.lastPathComponent)
+            XCTAssertEqual(Array(descending[1...2]), Array(ascending[1...2].reversed()))
+            XCTAssertEqual(Array(descending[3...4]), Array(ascending[3...4].reversed()))
+
+            let typeDescending = entries.sorted(by: FileSort(column: .type, ascending: false).precedes).map(\.name)
+            XCTAssertEqual(Array(typeDescending[1...2]), Array(ascending[3...4]))
+            XCTAssertEqual(Array(typeDescending[3...4]), Array(ascending[1...2]))
+        }
+    }
+
     func testListedFileRefusesADifferentInodeWithMatchingMetadata() throws {
         try fixture { root in
             let original = root.appendingPathComponent("selected.txt")

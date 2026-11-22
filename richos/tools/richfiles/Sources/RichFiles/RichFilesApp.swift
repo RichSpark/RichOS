@@ -566,7 +566,9 @@ struct RichFilesSettings: View {
         case .size: name = "Size"
         case .modified: name = "Date modified"
         }
-        return name + (sort.ascending ? ", ascending" : ", descending") + (sort.foldersFirst ? ", folders first" : "")
+        let group = sort.groupByType && sort.column != .type ? "Type groups, then " : ""
+        return group + name + (sort.ascending ? ", ascending" : ", descending")
+            + (sort.foldersFirst ? ", folders first" : "")
     }
 
     private func readShortcut() {

@@ -401,6 +401,16 @@ final class BrowserModelTests: XCTestCase {
     }
 
     @MainActor
+    func testTypeGroupingPersistsAndOlderViewPreferencesStillDecode() throws {
+        let legacy = Data(#"{"mode":"List","column":"name","ascending":false,"foldersFirst":true,"iconSize":112}"#.utf8)
+        var preferences = try JSONDecoder().decode(ViewPreferences.self, from: legacy)
+        XCTAssertEqual(preferences.fileSort, FileSort(ascending: false))
+        preferences.fileSort.groupByType = true
+        let reopened = try JSONDecoder().decode(ViewPreferences.self, from: JSONEncoder().encode(preferences))
+        XCTAssertEqual(reopened.fileSort, FileSort(ascending: false, groupByType: true))
+    }
+
+    @MainActor
     func testChangesFromTwoBrowsersPreserveEachOthersPreferences() throws {
         let temporary = try XCTUnwrap(ProcessInfo.processInfo.environment["TMPDIR"])
         let root = URL(fileURLWithPath: temporary, isDirectory: true)
