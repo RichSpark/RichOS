@@ -434,8 +434,12 @@ return resultRows as text
         self.g('mkdir -p ' + q(self.source) + ' ' + q(self.destination))
         self.push(VIEWER_IMAGE, self.source + '/Suite-Walk.bmp')
         if self.a.suite == 'busy':
-            # Cross-volume copy exercises the real transfer. A clone on APFS can
-            # otherwise finish before the update reaches the other application.
+            # Cross-volume copy exercises the real transfer. Both the source
+            # file and the destination image consume space on the guest disk.
+            free_kib = int(self.g("df -Pk " + q(self.work) + " | awk 'NR == 2 {print $4}'"))
+            if free_kib < 18 * 1024 * 1024:
+                raise StepFailed('the busy copy needs 18 GiB of free guest storage for both files and update overhead')
+            self.facts['copy_free_bytes'] = free_kib * 1024
             disk = self.work + '/Copy.sparseimage'
             self.mount = self.work + '/copy-volume'
             self.g('mkdir -p ' + q(self.mount) + ' && hdiutil create -quiet -type SPARSE -fs APFS '
@@ -528,7 +532,8 @@ return resultRows as text
                 size = self.g('stat -f %z ' + q(source))
                 self.wait(lambda: self.g('stat -f %z ' + q(copied) + ' 2>/dev/null || true') == size,
                           'the copy to finish', 180)
-                report['copy'] = {'bytes': int(size), 'deferred': deferred}
+                report['copy'] = {'bytes': int(size), 'deferred': deferred,
+                                  'free_bytes_before_copy': self.facts['copy_free_bytes']}
             pid = self.wait(lambda: next((pid for pid in self.suite_pids(name)
                                           if pid != old and self.running_build(name, pid, self.a.update_version)), None),
                             name + ' to report the new running version', 150)
