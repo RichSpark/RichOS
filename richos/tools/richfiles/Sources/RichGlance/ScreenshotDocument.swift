@@ -105,6 +105,7 @@ struct ScreenshotDocument {
     let name: String?
     var edits: ScreenshotEdits
     var repeatTarget: ScreenshotRepeatTarget?
+    var screenRect: CGRect?
 
     init(original: CGImage, scale: CGFloat, kind: ScreenshotKind = .region,
          id: UUID = UUID(), created: Date = Date(), name: String? = nil, edits: ScreenshotEdits? = nil) {

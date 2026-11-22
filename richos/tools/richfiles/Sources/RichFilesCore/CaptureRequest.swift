@@ -3,18 +3,19 @@ import Foundation
 
 public struct CaptureRequest {
     public enum Action: String, CaseIterable, Sendable {
-        case capture, captureAgain, copyText, editor, settings
+        case capture, captureAgain, copyText, editor, settings, closePin
 
         public var startsCapture: Bool { self == .capture || self == .captureAgain || self == .copyText }
     }
     public let originPID: pid_t?
     public let action: Action
+    public var pinID: UUID?
 
     private static var directory: URL {
         GlanceHelper.applicationSupport.appendingPathComponent("app.richos.richglance/Capture Requests", isDirectory: true)
     }
 
-    public static func issue(_ action: Action, originPID: pid_t?) throws -> (url: URL, ticket: URL) {
+    public static func issue(_ action: Action, originPID: pid_t?, pinID: UUID? = nil) throws -> (url: URL, ticket: URL) {
         let directory = Self.directory
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
@@ -27,7 +28,10 @@ public struct CaptureRequest {
         guard descriptor >= 0 else { throw GlanceHelper.Problem("RichGlance could not write a capture request.") }
         let file = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         do {
-            let value = action.startsCapture ? "\(action.rawValue):\(originPID ?? 0)" : action.rawValue
+            let value: String
+            if action == .closePin, let pinID { value = "\(action.rawValue):\(pinID.uuidString)" }
+            else if action.startsCapture { value = "\(action.rawValue):\(originPID ?? 0)" }
+            else { value = action.rawValue }
             try file.write(contentsOf: Data(value.utf8))
             try file.close()
         } catch {
@@ -71,10 +75,10 @@ public struct CaptureRequest {
         defer { try? file.close() }
         guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
               info.st_uid == getuid(), info.st_mode & 0o077 == 0, info.st_nlink == 1,
-              (1...32).contains(info.st_size), unlink(ticket.path) == 0 else { return nil }
+              (1...63).contains(info.st_size), unlink(ticket.path) == 0 else { return nil }
         let age = Date().timeIntervalSince1970 - Double(info.st_mtimespec.tv_sec)
         guard age >= 0, age < 30 else { return nil }
-        let data = (try? file.read(upToCount: 33)) ?? Data()
+        let data = (try? file.read(upToCount: 64)) ?? Data()
         guard let value = String(data: data, encoding: .utf8) else { return nil }
         if let pid = pid_t(value) {
             return Self(originPID: pid > 0 ? pid : nil, action: .capture)
@@ -84,7 +88,11 @@ public struct CaptureRequest {
            let pid = pid_t(fields[1]) {
             return Self(originPID: pid > 0 ? pid : nil, action: action)
         }
-        guard let action = Action(rawValue: value), !action.startsCapture else { return nil }
+        if fields.count == 2, fields[0] == Action.closePin.rawValue,
+           let id = UUID(uuidString: String(fields[1])) {
+            return Self(originPID: nil, action: .closePin, pinID: id)
+        }
+        guard let action = Action(rawValue: value), !action.startsCapture, action != .closePin else { return nil }
         return Self(originPID: nil, action: action)
     }
 }

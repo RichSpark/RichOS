@@ -85,11 +85,15 @@ final class CaptureHelper: NSObject, NSApplicationDelegate {
     private func observeWorkspace() {
         let workspace = NSWorkspace.shared
         previousApplication = workspace.frontmostApplication
+        DistributedNotificationCenter.default().addObserver(self, selector: #selector(pinsChanged),
+                                                            name: GlancePins.changed, object: nil)
         workspace.notificationCenter.addObserver(self, selector: #selector(activated(_:)),
                                                   name: NSWorkspace.didActivateApplicationNotification, object: nil)
         workspace.notificationCenter.addObserver(self, selector: #selector(terminated(_:)),
                                                   name: NSWorkspace.didTerminateApplicationNotification, object: nil)
     }
+
+    @objc private func pinsChanged() { updateMenu() }
 
     @objc private func activated(_ notification: Notification) {
         guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
@@ -232,7 +236,10 @@ final class CaptureHelper: NSObject, NSApplicationDelegate {
         if item == nil { item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength) }
         item?.button?.image = NSImage(systemSymbolName: "viewfinder", accessibilityDescription: "RichGlance Capture")
         item?.button?.setAccessibilityLabel("RichGlance Capture")
-        item?.button?.toolTip = "RichGlance Capture"
+        let pins = GlancePins.active()
+        item?.length = pins.isEmpty ? NSStatusItem.squareLength : NSStatusItem.variableLength
+        item?.button?.title = pins.isEmpty ? "" : " \(pins.count)"
+        item?.button?.toolTip = pins.isEmpty ? "RichGlance Capture" : "RichGlance Capture, \(pins.count) pinned"
         let menu = NSMenu()
         let capture = menu.addItem(withTitle: "Capture…", action: #selector(captureFromMenu), keyEquivalent: "")
         capture.target = self
@@ -244,6 +251,14 @@ final class CaptureHelper: NSObject, NSApplicationDelegate {
         text.target = self
         if shortcuts[.copyText] != nil { text.title += "    \(preferences.textShortcut.label)" }
         menu.addItem(withTitle: "Open Editor", action: #selector(openEditor), keyEquivalent: "").target = self
+        if !pins.isEmpty {
+            menu.addItem(.separator())
+            for (index, id) in pins.enumerated() {
+                let close = menu.addItem(withTitle: "Close Pin \(index + 1)", action: #selector(closePin(_:)), keyEquivalent: "")
+                close.representedObject = id
+                close.target = self
+            }
+        }
         menu.addItem(.separator())
         menu.addItem(withTitle: "Shortcuts…", action: #selector(openSettings), keyEquivalent: "").target = self
         item?.menu = menu
@@ -255,17 +270,22 @@ final class CaptureHelper: NSObject, NSApplicationDelegate {
     @objc private func openEditor() { launch(.editor, source: "menu") }
     @objc private func openSettings() { launch(.settings, source: "menu") }
 
-    private func launch(_ action: CaptureRequest.Action, source: String) {
+    @objc private func closePin(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID else { return }
+        launch(.closePin, source: "menu", pinID: id)
+    }
+
+    private func launch(_ action: CaptureRequest.Action, source: String, pinID: UUID? = nil) {
         let start = ProcessInfo.processInfo.systemUptime
         let id = UUID()
         let operation: RichFilesDiagnostics.Operation = source == "shortcut" ? .glanceCaptureShortcutLaunch : .glanceCaptureMenuLaunch
         do {
             let front = NSWorkspace.shared.frontmostApplication
             let origin = front?.activationPolicy == .regular ? front : previousApplication
-            let request = try CaptureRequest.issue(action, originPID: origin?.processIdentifier)
+            let request = try CaptureRequest.issue(action, originPID: origin?.processIdentifier, pinID: pinID)
             let configuration = NSWorkspace.OpenConfiguration()
             // Capture keeps the source app active until the overlay is ready.
-            configuration.activates = !action.startsCapture
+            configuration.activates = !action.startsCapture && action != .closePin
             configuration.arguments = ["--capture-request"]
             let logger = self.logger
             NSWorkspace.shared.open([request.url], withApplicationAt: glance, configuration: configuration) { app, error in

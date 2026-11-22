@@ -38,6 +38,7 @@ final class CaptureCanvas: NSView {
     var copy: (() -> Void)?
     var edit: (() -> Void)?
     var save: (() -> Void)?
+    var pin: (() -> Void)?
     var scroll: ((Int) -> Void)? { didSet { scrollMenu.isHidden = scroll == nil } }
     var escape: (() -> Void)?
     var cancel: (() -> Void)?
@@ -63,6 +64,7 @@ final class CaptureCanvas: NSView {
     private let hint = NSTextField(labelWithString: "")
     private let copyButton = NSButton(title: "Copy Image", target: nil, action: nil)
     private let editButton = NSButton(title: "Open in Editor", target: nil, action: nil)
+    private let pinButton = NSButton(title: "Pin to Screen", target: nil, action: nil)
     private let saveButton = NSButton(title: "Save PNG…", target: nil, action: nil)
     private let retryButton = NSButton(title: "Back", target: nil, action: nil)
     private let scrollMenu = NSPopUpButton(frame: .zero, pullsDown: true)
@@ -98,7 +100,7 @@ final class CaptureCanvas: NSView {
         actionButtons.spacing = 6
         actions.addArrangedSubview(actionButtons)
         for (button, action) in [(copyButton, #selector(copyPressed)), (editButton, #selector(editPressed)),
-                                 (saveButton, #selector(savePressed)), (retryButton, #selector(startOver))] {
+                                 (saveButton, #selector(savePressed)), (pinButton, #selector(pinPressed)), (retryButton, #selector(startOver))] {
             button.target = self
             button.action = action
             button.bezelStyle = .rounded
@@ -122,7 +124,7 @@ final class CaptureCanvas: NSView {
             menu.font = .systemFont(ofSize: 16)
             menu.controlSize = .large
         }
-        for view in [copyButton, editButton, actionMenu, saveButton, scrollMenu, retryButton] {
+        for view in [copyButton, editButton, actionMenu, saveButton, pinButton, scrollMenu, retryButton] {
             actionButtons.addArrangedSubview(view)
         }
         controls.modeChanged = { [weak self] in self?.changeMode?($0) }
@@ -151,6 +153,7 @@ final class CaptureCanvas: NSView {
         controls.isHidden = !active || copiesText
         editButton.isHidden = copiesText
         saveButton.isHidden = copiesText
+        pinButton.isHidden = copiesText
         actionMenu.isHidden = copiesText
         scrollMenu.isHidden = copiesText || scroll == nil
         copyButton.title = copiesText ? "Copy Text ↩" : action == .copy ? "Copy Image ↩" : "Copy Image"
@@ -310,7 +313,7 @@ final class CaptureCanvas: NSView {
                 case "t":
                     let values = [0, 3, 5, 10]
                     changeDelay?(values[((values.firstIndex(of: delay) ?? 0) + 1) % values.count])
-                case "p": changePointer?(!doesIncludePointer)
+                case "p": if ready { pin?() } else { changePointer?(!doesIncludePointer) }
                 case "c": copy?()
                 case "e": edit?()
                 default: if scroll != nil, ready { scrollMenu.performClick(nil) }
@@ -383,6 +386,7 @@ final class CaptureCanvas: NSView {
     @objc private func copyPressed() { copy?() }
     @objc private func editPressed() { edit?() }
     @objc private func savePressed() { save?() }
+    @objc private func pinPressed() { pin?() }
     @objc private func startOver() { if ready { escape?() } }
     @objc private func pickAction() {
         if actionMenu.indexOfSelectedItem > 0 { changeAction?(actionMenu.indexOfSelectedItem == 1 ? .copy : .editor) }

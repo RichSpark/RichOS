@@ -24,6 +24,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
     var closed: (() -> Void)?
     var capture: (() -> Void)?
     var captureAgain: (() -> Void)?
+    var pinImage: ((CGImage, UUID) -> Void)?
     private var comparison: ScreenshotCompareView?
     private var incomingBaselines: [UUID: ScreenshotDocument] = [:]
     private let moreButton = ScreenshotButton("More", symbol: "ellipsis")
@@ -258,6 +259,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
         cancelCrop.onPress = { [weak self] in self?.canvas?.cancelCrop(); self?.focusPicture() }
         reveal.onPress = { [weak self] in self?.canvas?.revealSelection(); self?.focusPicture() }
         shelf.open = { [weak self] in self?.open($0) }
+        shelf.action = { [weak self] action, entry in self?.perform(action, for: entry) }
         shelf.remove = { [weak self] in self?.deleteCapture($0) }
         shelf.hide = { [weak self] in self?.setShelf(false); self?.window.makeFirstResponder(self?.shelfToggle) }
         shelf.clearAll = { [weak self] in self?.clearAll() }
@@ -514,9 +516,29 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
     private func showMore() {
         guard canvas != nil else { return }
         let menu = NSMenu()
-        let copy = menu.addItem(withTitle: "Copy Text", action: #selector(copyCurrentText), keyEquivalent: "")
-        copy.target = self
+        menu.addItem(withTitle: "Copy Text", action: #selector(copyCurrentText), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Pin to Screen", action: #selector(pinCurrentImage), keyEquivalent: "").target = self
         menu.popUp(positioning: nil, at: CGPoint(x: 0, y: moreButton.bounds.maxY), in: moreButton)
+    }
+
+    @objc private func pinCurrentImage() {
+        canvas?.finishCallout()
+        if let document = canvas?.document { pinDocument(document) }
+    }
+
+    private func pinDocument(_ document: ScreenshotDocument) {
+        if let image = ScreenshotRenderer.flattened(document) { pinImage?(image, document.id) }
+        else { announce("This image could not be pinned.") }
+    }
+
+    private func perform(_ action: ScreenshotShelfAction, for entry: ScreenshotStore.Entry) {
+        if canvas?.document.id == entry.id { canvas?.finishCallout() }
+        guard let document = savedDocument(entry.id) else { announce("This capture is no longer available."); return }
+        switch action {
+        case .text: copyText(document)
+        case .pin: pinDocument(document)
+        case .compare: beginCompare(document)
+        }
     }
 
     @objc private func copyCurrentText() {
@@ -855,6 +877,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
         }
         if let field = searchField.currentEditor(), field === window.firstResponder { return false }
         if flags == .option, key == "t" { copyCurrentText(); return true }
+        if flags == .option, key == "p" { pinCurrentImage(); return true }
         if flags == .option, key == "k" { toggleCompare(); return true }
         if shelfOpen, shelf.handle(event) { return true }
         if let comparison, comparison.handle(event) { return true }

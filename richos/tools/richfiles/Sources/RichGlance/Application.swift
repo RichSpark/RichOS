@@ -24,6 +24,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let screenshotStore = ScreenshotStore()
     private var lastRegionDocument: ScreenshotDocument?
     private var editor: ScreenshotEditor?
+    private var pins: [ScreenshotPin] = []
     private var captureLaunch = CommandLine.arguments.contains("--capture-request")
     private var launchOrigin = Application.launchOrigin()
 
@@ -76,6 +77,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 case .editor:
                     captureLaunch = false
                     openWithoutFile()
+                case .closePin: pins.first(where: { $0.id == request.pinID })?.close()
                 case .settings:
                     captureLaunch = false
                     openCaptureSettings()
@@ -136,10 +138,11 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        capture == nil && editor == nil
+        capture == nil && editor == nil && pins.isEmpty
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if sender is ScreenshotPin { return true }
         // Hand back foreground ownership before the last window disappears.
         if NSApp.isActive, let origin = returnTo, !origin.isTerminated {
             if #available(macOS 14, *) {
@@ -152,6 +155,11 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        if let pin = notification.object as? ScreenshotPin {
+            pins.removeAll { $0 === pin }
+            GlancePins.publish(pins.map(\.id))
+            return
+        }
         viewer?.stop()
         viewer = nil
         returnTo = nil
@@ -178,6 +186,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         launchOrigin = nil
         let viewer = self.viewer ?? Viewer(preferences: infoPreferences)
         self.viewer = viewer
+        viewer.pinImage = { [weak self] image in self?.pin(image, frame: nil, captureID: nil) }
         viewer.info.preferencesChanged = { [weak self] in self?.updateInfoShortcut() }
         openingPanel?.cancel(nil)
         viewer.window.delegate = self
@@ -244,7 +253,9 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let baseline = repeatsRegion ? lastRegionBaseline() : nil
         let session = CaptureController(previousWindow: keyWindow,
                                         previousApp: origin ?? previousApplication, store: screenshotStore,
-                                        preferredAction: fromEditor ? .editor : nil, repeatsRegion: repeatsRegion, copiesText: copiesText, openEditor: { [weak self] document in
+                                        preferredAction: fromEditor ? .editor : nil, repeatsRegion: repeatsRegion, copiesText: copiesText, pinImage: { [weak self] document in
+            self?.pin(document.original, frame: document.screenRect, captureID: document.id)
+        }, openEditor: { [weak self] document in
             if document.repeatTarget != nil { self?.lastRegionDocument = document }
             self?.showEditor(document, origin: origin ?? self?.previousApplication, previousWindow: keyWindow,
                              newCapture: true, baseline: baseline)
@@ -387,7 +398,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func endCaptureLaunch() {
-        if captureLaunch, viewer == nil, editor == nil {
+        if captureLaunch, viewer == nil, editor == nil, pins.isEmpty {
             RichFilesDiagnostics.flush()
             NSApp.terminate(nil)
         }
@@ -441,6 +452,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         self.editor = editor
         editor.capture = { [weak self] in self?.beginCapture(originPID: nil, fromEditor: true) }
         editor.captureAgain = { [weak self] in self?.captureAgain() }
+        editor.pinImage = { [weak self] image, id in self?.pin(image, frame: nil, captureID: id) }
         editor.closed = { [weak self, weak previousWindow] in
             guard let self else { return }
             self.editor = nil
@@ -469,6 +481,20 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func saveScreenshot() { keyEditor?.saveImage() }
 
     @objc private func openInPreview() { viewer?.openInPreview() }
+
+    @objc private func pinViewer() { viewer?.pinToScreen() }
+
+    private func pin(_ image: CGImage, frame: CGRect?, captureID: UUID?) {
+        let started = ProcessInfo.processInfo.systemUptime
+        let pin = ScreenshotPin(image: image, anchoredAt: frame, captureID: captureID)
+        pin.delegate = self
+        pins.append(pin)
+        pin.orderFrontRegardless()
+        GlancePins.publish(pins.map(\.id))
+        RichFilesDiagnostics.record(.glancePin, id: UUID(), outcome: .complete, started: started, total: 1, confirmed: 1)
+    }
+
+    func applicationWillTerminate(_ notification: Notification) { GlancePins.publish([]) }
     @objc private func showInfo() { viewer?.info.toggleInfo() }
     @objc private func showInfoByDefault() { viewer?.info.toggleDefault() }
     @objc private func changeInfoShortcut() { viewer?.info.beginRecording() }
@@ -509,6 +535,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         file.submenu = fileMenu
         fileMenu.addItem(withTitle: "Open…", action: #selector(chooseImage), keyEquivalent: "o").target = self
         fileMenu.addItem(withTitle: "Open in Preview", action: #selector(openInPreview), keyEquivalent: "").target = self
+        fileMenu.addItem(withTitle: "Pin to Screen", action: #selector(pinViewer), keyEquivalent: "").target = self
         fileMenu.addItem(withTitle: "Capture…", action: #selector(startCapture), keyEquivalent: "").target = self
         fileMenu.addItem(withTitle: "Capture Again", action: #selector(captureAgain), keyEquivalent: "").target = self
         fileMenu.addItem(withTitle: "Copy Text from Screen…", action: #selector(copyRegionText), keyEquivalent: "").target = self

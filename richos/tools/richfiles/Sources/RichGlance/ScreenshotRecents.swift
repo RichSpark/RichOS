@@ -1,8 +1,15 @@
 import AppKit
 
+enum ScreenshotShelfAction: String, CaseIterable {
+    case text = "Copy Text"
+    case pin = "Pin to Screen"
+    case compare = "Compare"
+}
+
 @MainActor
 final class ScreenshotRecents: NSView {
     var open: ((ScreenshotStore.Entry) -> Void)?
+    var action: ((ScreenshotShelfAction, ScreenshotStore.Entry) -> Void)?
     var remove: ((ScreenshotStore.Entry) -> Void)?
     var hide: (() -> Void)?
     var clearAll: (() -> Void)?
@@ -102,6 +109,8 @@ final class ScreenshotRecents: NSView {
             let card = ScreenshotShelfCard(entry)
             card.button.onPress = { [weak self] in self?.open?(entry) }
             card.delete.onPress = { [weak self] in self?.remove?(entry) }
+            card.more.onPress = { [weak card] in card?.showMenu() }
+            card.action = { [weak self] in self?.action?($0, entry) }
             row.addSubview(card)
             return card
         }
@@ -219,7 +228,7 @@ final class ScreenshotRecents: NSView {
 
     func handle(_ event: NSEvent) -> Bool {
         guard let window, let index = cards.firstIndex(where: {
-            $0.button === window.firstResponder || $0.delete === window.firstResponder
+            $0.button === window.firstResponder || $0.delete === window.firstResponder || $0.more === window.firstResponder
         }), event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty else { return false }
         switch event.keyCode {
         case 123: focusCard(max(0, index - 1))
@@ -229,6 +238,9 @@ final class ScreenshotRecents: NSView {
             remove?(selected)
             if !cards.isEmpty { focusCard(min(index, cards.count - 1)) }
         case 53: focusCanvas?()
+        case 46: cards[index].showMenu()
+        case 35: action?(.pin, cards[index].entry)
+        case 40: action?(.compare, cards[index].entry)
         default: return false
         }
         return true
@@ -274,6 +286,8 @@ private final class ScreenshotShelfCard: NSView {
     let entry: ScreenshotStore.Entry
     let button = ScreenshotShelfEntryButton()
     let delete = ScreenshotButton("Delete capture", symbol: "xmark", style: .deleteCapture)
+    let more = ScreenshotButton("Capture actions", symbol: "ellipsis", style: .deleteCapture)
+    var action: ((ScreenshotShelfAction) -> Void)?
     var badge: String? { didSet { needsDisplay = true } }
     var match: String? {
         didSet {
@@ -300,6 +314,9 @@ private final class ScreenshotShelfCard: NSView {
         wantsLayer = true
         addSubview(button)
         addSubview(delete)
+        addSubview(more)
+        more.iconOnly = true
+        more.isHidden = true
         button.isBordered = false
         button.focusRingType = .none
         button.target = button
@@ -325,6 +342,7 @@ private final class ScreenshotShelfCard: NSView {
         super.layout()
         button.frame = bounds
         delete.frame = CGRect(x: bounds.maxX - 29, y: 1, width: 28, height: 28)
+        more.frame = CGRect(x: bounds.maxX - 59, y: 1, width: 28, height: 28)
     }
 
     override func updateTrackingAreas() {
@@ -340,8 +358,26 @@ private final class ScreenshotShelfCard: NSView {
     override func mouseExited(with event: NSEvent) { hovering = false; updateDelete() }
 
     private func updateDelete() {
-        delete.isHidden = !(hovering || window?.firstResponder === button || window?.firstResponder === delete)
+        delete.isHidden = !(hovering || window?.firstResponder === button || window?.firstResponder === delete
+                            || window?.firstResponder === more)
+        more.isHidden = delete.isHidden
         needsDisplay = true
+    }
+
+    func showMenu() {
+        let menu = NSMenu()
+        for action in ScreenshotShelfAction.allCases {
+            let row = menu.addItem(withTitle: action.rawValue, action: #selector(runAction(_:)), keyEquivalent: "")
+            row.target = self
+            row.representedObject = action.rawValue
+        }
+        menu.popUp(positioning: nil, at: CGPoint(x: more.frame.minX, y: more.frame.maxY), in: self)
+    }
+
+    @objc private func runAction(_ sender: NSMenuItem) {
+        if let title = sender.representedObject as? String, let entryAction = ScreenshotShelfAction(rawValue: title) {
+            action?(entryAction)
+        }
     }
 
     override func draw(_ dirtyRect: NSRect) {

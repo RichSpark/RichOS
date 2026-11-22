@@ -34,7 +34,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
         case display(Display, CGImage)
         case window(CaptureFrame.WindowTarget, Display)
     }
-    private enum Route { case copy, editor, save }
+    private enum Route { case copy, editor, save, pin }
 
     private let id = UUID()
     private let began = ProcessInfo.processInfo.systemUptime
@@ -42,6 +42,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
     private let finish: (_ copied: String?, _ display: CGRect?, _ retained: UUID?) -> Void
     private let store: ScreenshotStore
     private let preferredAction: ScreenshotStore.Action?
+    private let pinImage: (ScreenshotDocument) -> Void
     private let openEditor: (ScreenshotDocument) -> Void
     private let repeatsRegion: Bool
     private let copiesText: Bool
@@ -79,7 +80,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
     private var keyLoss: Task<Void, Never>?
 
     init(previousWindow: NSWindow?, previousApp: NSRunningApplication?, store: ScreenshotStore,
-         preferredAction: ScreenshotStore.Action? = nil, repeatsRegion: Bool = false, copiesText: Bool = false, openEditor: @escaping (ScreenshotDocument) -> Void,
+         preferredAction: ScreenshotStore.Action? = nil, repeatsRegion: Bool = false, copiesText: Bool = false, pinImage: @escaping (ScreenshotDocument) -> Void, openEditor: @escaping (ScreenshotDocument) -> Void,
          refreshPermission: @escaping (_ session: CaptureController, _ originPID: pid_t?) -> Void,
          finish: @escaping (_ copied: String?, _ display: CGRect?, _ retained: UUID?) -> Void) {
         self.previousWindow = previousWindow
@@ -87,6 +88,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
         self.store = store
         self.preferredAction = preferredAction
         self.openEditor = openEditor
+        self.pinImage = pinImage
         self.repeatsRegion = repeatsRegion
         self.copiesText = copiesText
         self.refreshPermission = refreshPermission
@@ -304,6 +306,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
             canvas.copy = { [weak self] in self?.deliver(.copy) }
             canvas.edit = { [weak self] in self?.deliver(.editor) }
             canvas.save = { [weak self] in self?.deliver(.save) }
+            canvas.pin = { [weak self] in self?.deliver(.pin) }
             canvas.scroll = { [weak self] index in
                 guard ScrollingCapture.Mode.allCases.indices.contains(index) else { return }
                 self?.startScrolling(ScrollingCapture.Mode.allCases[index])
@@ -703,9 +706,14 @@ final class CaptureController: NSObject, NSWindowDelegate {
             if let regionDisplay {
                 document.repeatTarget = ScreenshotRepeatTarget(id: document.id, display: regionDisplay, pixels: crop, scale: scale)
             }
+            document.screenRect = CGRect(x: pointerOrigin.x + crop.minX / scale, y: pointerOrigin.y - crop.maxY / scale,
+                                         width: crop.width / scale, height: crop.height / scale)
             return document
         }
-        return ScreenshotDocument(original: image, scale: scale, kind: kind, name: name)
+        var document = ScreenshotDocument(original: image, scale: scale, kind: kind, name: name)
+        document.screenRect = CGRect(x: pointerOrigin.x, y: pointerOrigin.y - CGFloat(image.height) / scale,
+                                     width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale)
+        return document
     }
 
     private func drawPointer(on image: CGImage, at point: CGPoint, scale: CGFloat) -> CGImage {
@@ -741,6 +749,11 @@ final class CaptureController: NSObject, NSWindowDelegate {
             let retained = retain(document)
             record(.glanceCaptureOutput, .complete, since: started)
             stop(.complete, copied: "Copied \(document.original.width) × \(document.original.height) px", retained: retained)
+        case .pin:
+            retain(document)
+            pinImage(document)
+            record(.glanceCaptureOutput, .complete, since: started)
+            stop(.complete)
         case .save:
             if scrolling == nil, overlay?.isVisible != true { prepareOverlay(); focusCapture() }
             save(document)

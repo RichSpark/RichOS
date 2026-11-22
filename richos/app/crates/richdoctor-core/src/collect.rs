@@ -824,7 +824,7 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64, gestures: bo
                 | "windowPlacement" | "transferStall" | "cleanupScan" | "cleanupDuplicates" | "cleanupTrash" | "cleanupDelete"
                 | "openWithDiscovery"
                 | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata"
-                | "glanceCaptureFrame" | "glanceCaptureOutput" | "glanceCaptureSession" | "glanceScrollCapture" | "glanceCompare" | "glanceOCR" | "glanceSearch"
+                | "glanceCaptureFrame" | "glanceCaptureOutput" | "glanceCaptureSession" | "glanceScrollCapture" | "glanceCompare" | "glanceOCR" | "glanceSearch" | "glancePin"
                 | "glanceCaptureHelperStart" | "glanceCaptureHelperLogin" | "glanceCaptureShortcutLaunch" | "glanceCaptureMenuLaunch")
         };
         if id.len() != 36 || !id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
