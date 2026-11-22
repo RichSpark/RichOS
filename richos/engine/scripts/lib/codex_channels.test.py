@@ -137,7 +137,29 @@ class Channels(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertNotIn(" resume ", rows[0])
         self.assertIn(" resume first-session ", rows[1])
+        for row in rows:
+            self.assertIn("--sandbox workspace-write --add-dir ", row)
         self.assertEqual(prompt.read_text().count("Apply only this correction"), 1)
+
+    def test_terminal_dispatch_uses_full_access_on_start_and_resume(self):
+        pair = c.connect("Terminal task", "Fixture", terminal_session="rich-terminal")["locator"]
+        binary = self.root / "codex"
+        calls = self.root / "terminal-calls"
+        binary.write_text(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + shlex.quote(str(calls)) +
+            "\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"terminal-chat\"}'"
+            "\ncat >/dev/null\n"
+        )
+        binary.chmod(0o700)
+        with mock.patch.object(c, "codex_binary", return_value=str(binary)):
+            self.assertEqual(c.dispatch(pair), 0)
+            c.send(pair, "next", "Continue", scope=dict(entity_id=c.TERMINAL, thread_id="rich-terminal"))
+            self.assertEqual(c.dispatch(pair, resume=True), 0)
+        start, resume = (shlex.split(line) for line in calls.read_text().splitlines())
+        for args in (start, resume):
+            self.assertEqual(args[args.index("--sandbox") + 1], "danger-full-access")
+            self.assertNotIn("--add-dir", args)
+        self.assertIn("terminal-chat", resume)
 
     def test_terminal_restart_hears_and_reviews_its_project_pairs(self):
         import review_watch
