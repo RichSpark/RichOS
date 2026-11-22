@@ -1515,12 +1515,7 @@ struct BrowserView: View {
     }
 
     private func chooseApplication(_ entry: FileEntry) {
-        Task {
-            do {
-                let apps = try await Task.detached { try WorkspaceServices.applications(for: entry.url) }.value
-                sheet = .openWith(entry, apps)
-            } catch { feedback = error.localizedDescription }
-        }
+        sheet = .openWith(entry)
     }
 
     private func requestRename(_ entry: FileEntry) {
@@ -1787,7 +1782,7 @@ struct BrowserView: View {
             }
         case .properties(let entry): PropertiesSheet(entry: entry)
         case .preview(let entry): PreviewSheet(entry: entry)
-        case .openWith(let entry, let apps): OpenWithSheet(entry: entry, apps: apps)
+        case .openWith(let entry): OpenWithSheet(entry: entry)
         case .archive(let catalog): ArchiveBrowserSheet(catalog: catalog, changed: model.refresh)
         case .createZip(let sources, let destination):
             ZipCreateSheet(sources: sources, destination: destination, changed: model.refresh)

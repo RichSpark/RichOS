@@ -22,7 +22,7 @@ enum BrowserSheet: Identifiable {
     case name(NameRequest)
     case properties(FileEntry)
     case preview(FileEntry)
-    case openWith(FileEntry, WorkspaceApplications)
+    case openWith(FileEntry)
     case archive(ArchiveCatalog)
     case createZip([FileReference], BrowserTransferDestination)
     case checksum(FileReference)
@@ -861,20 +861,15 @@ struct PropertiesSheet: View {
 
 struct OpenWithSheet: View {
     let entry: FileEntry
-    private let applications: [WorkspaceApplication]
     @Environment(\.dismiss) private var dismiss
+    @State private var applications: [WorkspaceApplication] = []
     @State private var problem = ""
     @State private var selected: WorkspaceApplication?
     @State private var preferred: WorkspaceApplication?
     @State private var confirmDefault = false
     @State private var changingDefault = false
-
-    init(entry: FileEntry, apps: WorkspaceApplications) {
-        self.entry = entry
-        applications = [apps.defaultApplication].compactMap { $0 } + apps.alternatives
-        _preferred = State(initialValue: apps.defaultApplication)
-        _selected = State(initialValue: applications.first)
-    }
+    @State private var discovering = true
+    @State private var choosingApplication = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -883,12 +878,15 @@ struct OpenWithSheet: View {
             List {
                 if let preferred { applicationRow(preferred, preferred: true) }
                 ForEach(applications.filter { $0.id != preferred?.id }) { applicationRow($0, preferred: false) }
-                if applications.isEmpty {
+                if discovering {
+                    ProgressView("Looking for apps…").controlSize(.small)
+                } else if applications.isEmpty {
                     Text("macOS found no associated apps.").foregroundStyle(.secondary)
                 }
             }.frame(minHeight: 125).disabled(changingDefault)
             if !problem.isEmpty { Text(problem).foregroundStyle(.secondary) }
             HStack {
+                Button("Choose App…") { choosingApplication = true }.disabled(changingDefault)
                 Button("Set Default App…") { confirmDefault = true }
                     .disabled(changingDefault || selected == nil)
                 Spacer()
@@ -896,10 +894,46 @@ struct OpenWithSheet: View {
                 Button("Open") { open() }.keyboardShortcut(.defaultAction).disabled(changingDefault || selected == nil)
             }
         }.padding(15).frame(width: 450, height: 330)
+            .task { await discover() }
+            .fileImporter(isPresented: $choosingApplication, allowedContentTypes: [.applicationBundle]) { result in
+                do {
+                    let app = try WorkspaceServices.application(at: result.get())
+                    if !applications.contains(where: { $0.id == app.id }) { applications.append(app) }
+                    selected = app
+                    problem = ""
+                } catch { problem = error.localizedDescription }
+            }
             .alert("Change the Default App for This File Type?", isPresented: $confirmDefault) {
                 Button("Cancel", role: .cancel) {}
                 Button("Change Default") { setDefault() }
             } message: { Text("macOS may ask for consent. The choice applies to other files of this type.") }
+    }
+
+    private func discover() async {
+        let started = ProcessInfo.processInfo.systemUptime
+        let id = UUID()
+        let file = entry.url
+        let worker = Task.detached { try WorkspaceServices.applications(for: file) }
+        do {
+            let apps = try await worker.value
+            try Task.checkCancellation()
+            let discovered = [apps.defaultApplication].compactMap { $0 } + apps.alternatives
+            let chosen = applications.filter { app in !discovered.contains(where: { $0.id == app.id }) }
+            applications = discovered + chosen
+            preferred = apps.defaultApplication
+            if selected == nil { selected = applications.first }
+            discovering = false
+            RichFilesDiagnostics.record(.openWithDiscovery, id: id, outcome: .complete,
+                                        started: started, total: discovered.count, confirmed: discovered.count)
+        } catch {
+            let cancelled = Task.isCancelled
+            if !cancelled {
+                discovering = false
+                problem = error.localizedDescription
+            }
+            RichFilesDiagnostics.record(.openWithDiscovery, id: id, outcome: cancelled ? .cancelled : .unavailable,
+                                        started: started, total: 0, confirmed: 0)
+        }
     }
 
     private func applicationRow(_ app: WorkspaceApplication, preferred: Bool) -> some View {
