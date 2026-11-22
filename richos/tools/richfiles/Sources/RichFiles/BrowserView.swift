@@ -1270,7 +1270,8 @@ struct BrowserView: View {
             }
             if let transfer = actions.transfer {
                 let queued = actions.queuedTransfers.count
-                let title = transfer.running ? "Transfers \(transfer.completed)/\(transfer.total)" : "Transfers"
+                let title = actions.transferAppearsStalled ? "Transfer May Be Stalled"
+                    : transfer.running ? "Transfers \(transfer.completed)/\(transfer.total)" : "Transfers"
                 Button(queued > 0 ? title + " · \(queued) queued" : title) {
                     transfersVisible.toggle()
                 }.buttonStyle(.borderless)

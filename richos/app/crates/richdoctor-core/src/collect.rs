@@ -820,7 +820,7 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64, gestures: bo
                 | "windowGestureDockMinimize" | "windowGestureDockRestore" | "desktopDeleteShortcut")
         } else {
             matches!(operation, "listing" | "copy" | "move" | "recovery" | "gitHistory" | "gitComparison" | "railVideoFrame" | "windowPlacement"
-                | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata"
+                | "transferStall" | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata"
                 | "glanceCaptureFrame" | "glanceCaptureOutput" | "glanceCaptureSession" | "glanceScrollCapture")
         };
         if id.len() != 36 || !id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
@@ -1180,6 +1180,7 @@ mod tests {
             "glanceScrollCapture",
             "railVideoFrame",
             "windowPlacement",
+            "transferStall",
         ]
         .map(|stage| {
             let mut capture = record.clone();
@@ -1219,6 +1220,7 @@ mod tests {
         assert!(!timing.text.contains("Private text pretending"));
         assert!(timing.text.contains("operation=railVideoFrame"));
         assert!(timing.text.contains("operation=windowPlacement"));
+        assert!(timing.text.contains("operation=transferStall"));
         let window_gestures = items.iter().find(|item| item.source == "RichFiles Window Gestures log").unwrap();
         assert_eq!(window_gestures.status, Status::Collected);
         assert!(window_gestures.text.contains("operation=windowGestureDockRestore"));

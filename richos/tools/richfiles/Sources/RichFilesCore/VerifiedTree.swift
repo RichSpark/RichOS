@@ -9,7 +9,7 @@ struct TreeInventory {
     private let entries: [FileInventory.Entry]
 
     init(_ root: FileReference, expected: FileVersion? = nil,
-         isCancelled: () -> Bool = { false }) throws {
+         isCancelled: () -> Bool = { false }, onActivity: (() -> Void)? = nil) throws {
         self.root = root
         let parent = try OpenFolder(root.url.deletingLastPathComponent())
         let status = try parent.verifiedStatus(of: root)
@@ -17,7 +17,7 @@ struct TreeInventory {
         guard status.st_mode & S_IFMT == S_IFDIR, expected == nil || rootVersion == expected else {
             throw FileOperationError.sourceChanged(root.url)
         }
-        let snapshot = try FolderInventorySnapshot(root.url, isCancelled: isCancelled)
+        let snapshot = try FolderInventorySnapshot(root.url, isCancelled: isCancelled, onActivity: onActivity)
         guard snapshot.identity == root.identity, snapshot.coverage.unavailable == 0, snapshot.coverage.otherVolumes == 0 else {
             throw FileOperationError.copyVerificationFailed(root.url)
         }
@@ -34,6 +34,7 @@ struct TreeInventory {
             }
             Self.add(Data(entry.relativePath.utf8), to: &hash)
             Self.add(try encoder.encode(FileVersion(entry.status)), to: &hash)
+            onActivity?()
         }
         descendants = Self.finish(hash)
         guard try FileVersion(parent.verifiedStatus(of: root)) == rootVersion else {
@@ -41,12 +42,12 @@ struct TreeInventory {
         }
     }
 
-    func verify(isCancelled: () -> Bool = { false }) throws {
-        let current = try Self(root, expected: rootVersion, isCancelled: isCancelled)
+    func verify(isCancelled: () -> Bool = { false }, onActivity: (() -> Void)? = nil) throws {
+        let current = try Self(root, expected: rootVersion, isCancelled: isCancelled, onActivity: onActivity)
         guard current.descendants == descendants else { throw FileOperationError.sourceChanged(root.url) }
     }
 
-    func contentDigest(isCancelled: () -> Bool) throws -> String {
+    func contentDigest(isCancelled: () -> Bool, onActivity: (() -> Void)? = nil) throws -> String {
         var hash = SHA256()
         // Use equivalent Unicode names across filesystem normalization rules.
         let ordered = entries.sorted {
@@ -68,9 +69,11 @@ struct TreeInventory {
                 }
                 value = "link:" + target
             default:
-                value = "file:" + (try StorageAnalysis.digest(entry.url, expected: version, isCancelled: isCancelled))
+                value = "file:" + (try StorageAnalysis.digest(entry.url, expected: version,
+                                                               isCancelled: isCancelled, onActivity: onActivity))
             }
             Self.add(Data(value.utf8), to: &hash)
+            onActivity?()
         }
         return Self.finish(hash)
     }
@@ -98,8 +101,9 @@ struct ReviewedTree: Codable, Sendable {
         self.descendants = descendants
     }
 
-    func verify(isCancelled: () -> Bool = { false }) throws {
-        let actual = try TreeInventory(reference, expected: rootVersion, isCancelled: isCancelled)
+    func verify(isCancelled: () -> Bool = { false }, onActivity: (() -> Void)? = nil) throws {
+        let actual = try TreeInventory(reference, expected: rootVersion, isCancelled: isCancelled,
+                                       onActivity: onActivity)
         guard actual.descendants == descendants else { throw FileOperationError.sourceChanged(reference.url) }
     }
 }

@@ -4,6 +4,20 @@ import XCTest
 @testable import RichFilesCore
 
 final class FileOperationsTests: XCTestCase {
+    func testCopyReportsActivityForCompletedEntriesWithoutDataBytes() throws {
+        try withFixture { root in
+            let source = try FileOperations.createFolder(in: root, named: "Empty files")
+            let destination = try FileOperations.createFolder(in: root, named: "Destination")
+            for index in 0..<4 { _ = try write("", named: "\(index).txt", in: source.url) }
+
+            var updates = 0
+            let result = try FileOperations.copy(source, into: destination.url, onActivity: { updates += 1 })
+
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: result.copied.url.path).count, 4)
+            XCTAssertGreaterThanOrEqual(updates, 4, "Empty file copies are still forward progress")
+        }
+    }
+
     func testExclusiveCreationPreservesExistingItems() throws {
         try withFixture { root in
             let folder = try FileOperations.createFolder(in: root, named: "Notes")

@@ -1255,6 +1255,12 @@ struct TransferPanel: View {
                 Button("Done", action: close)
             }
             if let transfer = actions.transfer {
+                if actions.transferAppearsStalled {
+                    Label("Transfer may be stalled", systemImage: "exclamationmark.triangle")
+                        .font(.callout.weight(.semibold))
+                    Text("No progress reported for \(Int(BrowserTransfer.noProgressInterval)) seconds. The drive or server may still be responding.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 5) {
                         Text(transfer.destination.path).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
@@ -1277,8 +1283,10 @@ struct TransferPanel: View {
                                 } else {
                                     Text("\(formattedBytes(progress.written)) written")
                                 }
-                                if let rate = progress.bytesPerSecond { Text("\(formattedBytes(rate))/s") }
-                                if let seconds = progress.secondsRemaining {
+                                if !actions.transferAppearsStalled, let rate = progress.bytesPerSecond {
+                                    Text("\(formattedBytes(rate))/s")
+                                }
+                                if !actions.transferAppearsStalled, let seconds = progress.secondsRemaining {
                                     Text("About \(formattedTransferTime(seconds)) left for this file")
                                 }
                             }.font(.caption).foregroundStyle(.secondary)

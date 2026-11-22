@@ -27,6 +27,7 @@ final class BrowserActions: ObservableObject {
     @Published private(set) var issues: [String] = []
     @Published private(set) var busy = false
     @Published private(set) var transfer: BrowserTransfer?
+    @Published private(set) var transferAppearsStalled = false
     @Published private(set) var replacingFile = false
     @Published private(set) var interruptedTransfer: InterruptedTransferNotice?
     @Published private(set) var canRetryTransfer = false
@@ -49,6 +50,7 @@ final class BrowserActions: ObservableObject {
     private var clipboard: ClipboardSelection?
     private var localDrag: BrowserDragSelection?
     private var transferTask: Task<Void, Never>?
+    private var transferWatch: Task<Void, Never>?
     private var preparingQueue: [UUID: Task<Void, Never>] = [:]
     private var issuesAreFromTransfer = false
     private var retryRequest: BrowserTransferRequest?
@@ -438,6 +440,7 @@ final class BrowserActions: ObservableObject {
             destination: request.folder, move: request.move, total: request.sources.count
         )
         transfer = progress
+        watchForStall(in: progress.id)
         status = progress.title + "…"
         let recoveryURL = recoveryURL
         transferTask = Task.detached(priority: .userInitiated) {
@@ -452,9 +455,35 @@ final class BrowserActions: ObservableObject {
         guard let previous = transfer, previous.running, previous.id == progress.id,
               previous.revision < progress.revision else { return }
         transfer = progress
+        if progress.lastAdvance > previous.lastAdvance {
+            if transferAppearsStalled { transferAppearsStalled = false }
+            watchForStall(in: progress.id)
+        }
+    }
+
+    private func watchForStall(in id: UUID) {
+        guard transferWatch == nil else { return }
+        transferWatch = Task { [weak self] in
+            while let snapshot = self?.transfer, snapshot.id == id,
+                  let remaining = snapshot.secondsUntilStall(at: ProcessInfo.processInfo.systemUptime) {
+                if remaining == 0 {
+                    self?.transferWatch = nil
+                    self?.transferAppearsStalled = true
+                    RichFilesDiagnostics.record(.transferStall, id: id, outcome: .issues, started: snapshot.lastAdvance,
+                                                total: snapshot.total, confirmed: snapshot.succeeded)
+                    return
+                }
+                do { try await Task.sleep(for: .seconds(remaining)) }
+                catch { return }
+            }
+            self?.transferWatch = nil
+        }
     }
 
     private func finishTransfer(_ result: BrowserTransferResult, request: BrowserTransferRequest) {
+        transferWatch?.cancel()
+        transferWatch = nil
+        if transferAppearsStalled { transferAppearsStalled = false }
         transferTask = nil
         transfer = result.progress
         busy = false
