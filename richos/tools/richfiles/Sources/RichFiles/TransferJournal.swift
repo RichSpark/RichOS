@@ -1,6 +1,33 @@
 import Darwin
 import Foundation
 
+enum RichFilesSupportDirectory {
+    static let name = "app.richos.richfiles"
+
+    static func open(_ url: URL, create: Bool) throws -> FileHandle? {
+        if create {
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true,
+                                                    attributes: [.posixPermissions: 0o700])
+        }
+        let descriptor = Darwin.open(url.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        let permissionError = CocoaError(create ? .fileWriteNoPermission : .fileReadNoPermission)
+        guard descriptor >= 0 else {
+            if !create && errno == ENOENT { return nil }
+            throw permissionError
+        }
+        let directory = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        var status = stat()
+        guard fstat(descriptor, &status) == 0, status.st_uid == getuid() else { throw permissionError }
+        if status.st_mode & 0o077 != 0 {
+            // Older RichFiles versions let the viewer settings create this shared folder
+            // with inherited permissions. Only repair our own folder if others could not write it.
+            guard create, url.lastPathComponent == name, status.st_mode & 0o022 == 0,
+                  fchmod(descriptor, status.st_mode & 0o700) == 0 else { throw permissionError }
+        }
+        return directory
+    }
+}
+
 struct InterruptedTransferNotice: Codable, Sendable {
     let id: UUID
     let destination: URL
@@ -158,21 +185,8 @@ fileprivate struct LockedTransferJournal: Sendable {
         guard recoveryURL.isFileURL, parent.path.hasPrefix("/"), !recoveryURL.lastPathComponent.isEmpty else {
             throw CocoaError(.fileReadInvalidFileName)
         }
-        if create {
-            try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true,
-                                                    attributes: [.posixPermissions: 0o700])
-        }
-        let directoryDescriptor = Darwin.open(parent.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-        guard directoryDescriptor >= 0 else {
-            if !create && errno == ENOENT { return nil }
-            throw CocoaError(create ? .fileWriteNoPermission : .fileReadNoPermission)
-        }
-        let directory = FileHandle(fileDescriptor: directoryDescriptor, closeOnDealloc: true)
-        var parentStatus = stat()
-        guard fstat(directoryDescriptor, &parentStatus) == 0, parentStatus.st_uid == getuid(),
-              parentStatus.st_mode & 0o077 == 0 else {
-            throw CocoaError(create ? .fileWriteNoPermission : .fileReadNoPermission)
-        }
+        guard let directory = try RichFilesSupportDirectory.open(parent, create: create) else { return nil }
+        let directoryDescriptor = directory.fileDescriptor
 
         let name = TransferJournal.filename(for: recoveryURL)
         let access = create ? O_WRONLY | O_CREAT | O_EXCL | O_APPEND : O_RDONLY | O_NONBLOCK
