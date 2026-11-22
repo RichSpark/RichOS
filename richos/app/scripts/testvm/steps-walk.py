@@ -233,9 +233,11 @@ def problems(steps):
         if op == 'pointer' and step.get('from') is True and (
                 not found_point or not isinstance(step.get('points'), list) or not step['points']
                 or step.get('scroll') or step.get('double') or step.get('hover') is True
-                or not all(isinstance(pt, str) and re.fullmatch(r'-?\d+,-?\d+', pt) for pt in step['points'])):
+                or not all(isinstance(pt, str) and re.fullmatch(r'-?\d+,-?\d+', pt) for pt in step['points'])
+                or all(re.fullmatch(r'-?0+,-?0+', pt) for pt in step['points'])):
             found.append(f'step {i} (pointer): "from" starts a drag on the "find" control and needs at least one '
-                         f'"dx,dy" offset of whole numbers in "points", with no "scroll", "double" or "hover"')
+                         f'"dx,dy" offset of whole numbers in "points", one of them not "0,0" (that is a click), '
+                         f'with no "scroll", "double" or "hover"')
             continue
         if op == 'pointer' and isinstance(step.get('scroll'), int) and not isinstance(step.get('scroll'), bool) and (
                 not -50 <= step['scroll'] <= 50 or step['scroll'] == 0

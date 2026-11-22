@@ -194,7 +194,8 @@ with tempfile.TemporaryDirectory(prefix='steps-walk-test-') as tmp:
     for bad in ({'points': ['120,0'], 'from': True},
                 {'points': [], 'from': True, 'find': ['--title', 'X']},
                 {'points': ['12.5,0'], 'from': True, 'find': ['--title', 'X']},
-                {'points': ['10,0'], 'from': True, 'hover': True, 'find': ['--title', 'X']}):
+                {'points': ['10,0'], 'from': True, 'hover': True, 'find': ['--title', 'X']},
+                {'points': ['0,0'], 'from': True, 'find': ['--title', 'X']}):
         got = mod.problems([{'op': 'pointer', **bad}])
         check('a from step %r is refused with a sentence' % (bad,), bool(got) and '"from"' in got[0], got)
     check('a from step with find and whole-number offsets is valid',
