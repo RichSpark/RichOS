@@ -259,7 +259,9 @@ else:
         self.assertNotIn(" resume ", rows[0])
         self.assertIn(" resume first-session ", rows[1])
         for row in rows:
-            self.assertIn("--sandbox workspace-write --add-dir ", row)
+            args = shlex.split(row)
+            self.assertEqual(args[args.index("--sandbox") + 1], "danger-full-access")
+            self.assertNotIn("--add-dir", args)
         self.assertEqual(prompt.read_text().count("Apply only this correction"), 1)
 
     def test_terminal_dispatch_uses_full_access_on_start_and_resume(self):
