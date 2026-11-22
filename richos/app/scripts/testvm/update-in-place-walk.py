@@ -456,6 +456,8 @@ return resultRows as text
         self.shot('suite-before.png')
         if self.a.suite == 'editor':
             self.suite_ax('RichOS', 'set frontmost to true')
+        if self.a.suite == 'busy':
+            self.prepare_suite_copy()
         return {'pids': {name: self.owned[name + '-before'] for name in self.facts['suite_windows']},
                 'windows': self.facts['suite_windows']}
 
@@ -471,15 +473,23 @@ return resultRows as text
                      and row.get('application') == bundle_ids[name]
                      and row.get('build') == version), None)
 
+    def prepare_suite_copy(self):
+        self.suite_ax('RichFiles', 'set frontmost to true\n'
+                      'perform action "AXRaise" of (first window whose name begins with "Source")')
+        file = self.ax('find', '--app', 'RichFiles', '--title', 'Suite Copy.bin', '--first')[0]
+        point = '%d,%d' % (file['x'] + min(14, file['w'] / 2), file['y'] + file['h'] / 2)
+        self.ax('click', '--app', 'RichFiles', '--at', point)
+        self.suite_ax('RichFiles', 'click menu item "Copy Files" of menu 1 of menu bar item "Files" of menu bar 1')
+        clipboard = self.osascript('return POSIX path of (the clipboard as «class furl»)')
+        if clipboard != self.source + '/Suite Copy.bin':
+            raise StepFailed('RichFiles did not put the copy fixture on the clipboard')
+        self.suite_ax('RichFiles', 'perform action "AXRaise" of (first window whose name begins with "Destination")')
+        if not self.suite_ax('RichFiles', 'return name of first window').startswith('Destination'):
+            raise StepFailed('the copy destination window is not in front')
+
     def suite_copy(self):
-        self.suite_ax('RichFiles', '''
-set frontmost to true
-perform action "AXRaise" of (first window whose name begins with "Source")
-keystroke "a" using command down
-keystroke "c" using command down
-perform action "AXRaise" of (first window whose name begins with "Destination")
-keystroke "v" using command down
-''')
+        self.suite_ax('RichFiles', 'set frontmost to true\n'
+                      'click menu item "Paste Files" of menu 1 of menu bar item "Files" of menu bar 1')
         self.facts['copy_requested'] = True
 
     def suite_after(self):
