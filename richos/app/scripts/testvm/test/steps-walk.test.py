@@ -183,6 +183,25 @@ with tempfile.TemporaryDirectory(prefix='steps-walk-test-') as tmp:
           code == 0 and len(seen) == 2 and seen[0][1:] == ['no-such-vm', 'find', '--title', 'Add files and folders', '--role', 'AXButton', '--json', '--first']
           and seen[1][0].endswith('/pointer-drag.sh') and seen[1][1:] == ['no-such-vm', '488,998', '--hover'], seen)
     mod.run = lambda args, timeout=120: (0, '{"meta": true, "matches": 0}')
+    # A drag that starts ON the found control (a column's resize handle): its center first, then
+    # each point as an offset from it.
+    seen.clear()
+    mod.run = fake_find
+    code, _ = mod.step_run('no-such-vm', {'op': 'pointer', 'points': ['120,0', '-10,5'], 'from': True,
+                                          'find': ['--title', 'Width of A column']}, Path(tmp))
+    check('pointer with from starts the drag on the found center and offsets every point from it',
+          code == 0 and len(seen) == 2 and seen[1][1:] == ['no-such-vm', '488,998', '608,998', '478,1003'], seen)
+    for bad in ({'points': ['120,0'], 'from': True},
+                {'points': [], 'from': True, 'find': ['--title', 'X']},
+                {'points': ['12.5,0'], 'from': True, 'find': ['--title', 'X']},
+                {'points': ['10,0'], 'from': True, 'hover': True, 'find': ['--title', 'X']},
+                {'points': ['0,0'], 'from': True, 'find': ['--title', 'X']}):
+        got = mod.problems([{'op': 'pointer', **bad}])
+        check('a from step %r is refused with a sentence' % (bad,), bool(got) and '"from"' in got[0], got)
+    check('a from step with find and whole-number offsets is valid',
+          mod.problems([{'op': 'pointer', 'points': ['120,0'], 'from': True, 'find': ['--title', 'X']}]) == [],
+          mod.problems([{'op': 'pointer', 'points': ['120,0'], 'from': True, 'find': ['--title', 'X']}]))
+    mod.run = lambda args, timeout=120: (0, '{"meta": true, "matches": 0}')
     code, text = mod.step_run('no-such-vm', {'op': 'pointer', 'points': [], 'hover': True, 'find': ['--title', 'Gone']}, Path(tmp))
     check('pointer with find fails its step when nothing matched, and no pointer moves', code == 1 and 'nothing with a position' in text, (code, text))
     check('a hover with find and no points is valid', mod.problems([{'op': 'pointer', 'points': [], 'hover': True, 'find': ['--title', 'X']}]) == [],
