@@ -67,7 +67,7 @@ pub fn glance_stage_attachment(
             &ticket.png,
         )
     } else {
-        Err("Choose a chat to attach this screenshot.".into())
+        Err("The selected chat could not receive this screenshot.".into())
     };
     let _result = ticket.answer.send(answer.is_ok());
     answer.map(|attached| StagedCapture {
