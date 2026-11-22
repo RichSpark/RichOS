@@ -265,7 +265,7 @@ enum Control {
     FlightDone(u64),
     Secure(Option<Option<String>>),
     /// This tool can finish its active dictation when the app closes for an update.
-    ParentExited,
+    ParentExitedForUpdate,
     /// The retry is scoped to the same update target throughout the wait.
     RetryUpdate,
     /// SIGTERM arrived: stop and join the writing worker.
@@ -274,6 +274,14 @@ enum Control {
     HandoverTimeout(u64),
     /// A `voice-yielded` from connection `client` for handover `seq` (fourth review, finding 1).
     Yielded { seq: u64, client: u64, bundle: String },
+}
+
+fn parent_exit_control(update_marker: Option<&std::path::Path>) -> Control {
+    if update_marker.is_some_and(|marker| std::fs::remove_file(marker).is_ok()) {
+        Control::ParentExitedForUpdate
+    } else {
+        Control::Quit("the app that started this tool has ended")
+    }
 }
 
 /// What the state message reports, shared with the socket thread.
@@ -407,14 +415,24 @@ pub fn main(context: tauri::Context<tauri::Wry>, args: &[String]) -> i32 {
     };
     let (tx, rx) = channel::<Control>();
     if let Some(parent) = args.parent {
+        let pid = parent as u32;
+        let update_marker = crate::launch_timing::process_started_ms_for(pid)
+            .map(|started| ipc::update_exit_marker(&ipc::runtime_dir(), pid, started));
         let tx = tx.clone();
         std::thread::Builder::new()
             .name("dictation-parent".into())
             .spawn(move || loop {
                 // SAFETY: getppid has no failure mode.
                 if unsafe { libc::getppid() } != parent {
-                    let _parent_exited = tx.send(Control::ParentExited);
-                    break;
+                    let control = parent_exit_control(update_marker.as_deref());
+                    let for_update = matches!(control, Control::ParentExitedForUpdate);
+                    let _parent_exited = tx.send(control);
+                    if for_update {
+                        break;
+                    }
+                    std::thread::sleep(QUIT_BACKSTOP);
+                    insert::settle();
+                    std::process::exit(0);
                 }
                 std::thread::sleep(PARENT_POLL);
             })
@@ -1077,7 +1095,7 @@ impl Tool {
                         self.fly(words);
                     }
                 }
-                Control::ParentExited => {
+                Control::ParentExitedForUpdate => {
                     self.parent_exited = true;
                     if self.update_target.is_none() && self.check_update_restart() {
                         return self.end();
@@ -1998,6 +2016,18 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn parent_exit_waits_only_for_a_marked_update() {
+        let temp = tempfile::tempdir().unwrap();
+        let old_marker = ipc::update_exit_marker(temp.path(), 123, 10);
+        let marker = ipc::update_exit_marker(temp.path(), 123, 11);
+        std::fs::write(old_marker, []).unwrap();
+        assert!(matches!(parent_exit_control(Some(&marker)), Control::Quit(_)));
+        std::fs::write(&marker, []).unwrap();
+        assert!(matches!(parent_exit_control(Some(&marker)), Control::ParentExitedForUpdate));
+        assert!(matches!(parent_exit_control(Some(&marker)), Control::Quit(_)));
     }
 
     #[test]

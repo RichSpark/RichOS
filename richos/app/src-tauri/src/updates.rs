@@ -316,6 +316,7 @@ pub struct Updates {
     operation: AtomicBool,
     /// A relaunch notice is on screen; a second one must not start beside it.
     relaunching: AtomicBool,
+    pub(crate) quitting_for_update: AtomicBool,
 }
 
 impl Updates {
@@ -565,6 +566,7 @@ pub fn init(app: &AppHandle) {
         pending: Mutex::new(None),
         operation: AtomicBool::new(false),
         relaunching: AtomicBool::new(false),
+        quitting_for_update: AtomicBool::new(false),
     });
 }
 
@@ -1330,11 +1332,13 @@ fn relaunch_if_clear(app: &AppHandle) {
         );
         // The app's own quit path: every lease settles and the clean-exit marker is written.
         timing(&app, &notice, "restart_notice", "quit_requested", notice.phase_started.elapsed().as_millis() as u64);
+        app.state::<Updates>().quitting_for_update.store(true, Ordering::Release);
         app.exit(0);
         // Still here: the quit was declined (registered work appeared in the last instant and
         // he chose to keep it). The helper starts nothing after its own bound, and this does
         // not try again, so there is never a second helper waiting on the same quit.
         tokio::time::sleep(RELAUNCH_DECLINED).await;
+        app.state::<Updates>().quitting_for_update.store(false, Ordering::Release);
         back_to_ready(&app, false);
     });
 }

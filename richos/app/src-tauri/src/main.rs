@@ -4940,6 +4940,15 @@ fn main() {
                 });
             }
             if let tauri::RunEvent::Exit = event {
+                #[cfg(target_os = "macos")]
+                if handle.try_state::<updates::Updates>().is_some_and(|state|
+                    state.quitting_for_update.load(std::sync::atomic::Ordering::Acquire))
+                    && handle.try_state::<Arc<dictation_app::Link>>().is_some_and(|link| link.connected())
+                {
+                    if let Err(error) = dictation::ipc::mark_update_exit() {
+                        eprintln!("[richos] could not mark the RichScribe update exit: {error}");
+                    }
+                }
                 if let Some(voice) = handle.try_state::<VoiceHandle>() {
                     if let Ok(slot) = voice.controller.lock() {
                         if let Some(controller) = slot.as_ref() {

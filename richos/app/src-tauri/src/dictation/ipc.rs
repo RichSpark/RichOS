@@ -162,6 +162,24 @@ pub fn prepare_dir(dir: &Path, uid: u32) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The parent marks a committed update exit in the same private runtime directory
+/// as the key owner. Include its kernel birth time so a later PID cannot inherit it.
+pub(crate) fn update_exit_marker(dir: &Path, pid: u32, started_ms: u64) -> PathBuf {
+    dir.join(format!("dictation-update-exit-{pid}-{started_ms}"))
+}
+
+pub(crate) fn mark_update_exit() -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let pid = std::process::id();
+    let started = crate::launch_timing::process_started_ms()
+        .ok_or_else(|| std::io::Error::other("could not identify the exiting RichOS process"))?;
+    let dir = runtime_dir();
+    prepare_dir(&dir, unsafe { libc::geteuid() })?;
+    std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+        .open(update_exit_marker(&dir, pid, started)).map(drop)
+}
+
 /// The key, held: the lock and the socket. Dropping it releases both.
 pub struct KeyOwner {
     _lock: std::fs::File,
