@@ -86,6 +86,8 @@ final class CleanupRingView: NSView {
     private var hover: URL?
     private var zoomTarget: URL?
     private var keyboardTarget: URL?
+    private var wheelNavigated = false
+    private var lastWheelTime: TimeInterval?
     private var tracking: NSTrackingArea?
     private var dragStart: CGPoint = .zero
     private var dragRotation = 0.0
@@ -402,11 +404,22 @@ final class CleanupRingView: NSView {
     }
 
     override func scrollWheel(with event: NSEvent) {
+        guard event.momentumPhase.isEmpty else { return }
+        let phase = event.phase
+        let wheelIdle = lastWheelTime.map { event.timestamp - $0 > 0.24 } ?? true
+        // Keep the latch through the zoom reset that follows folder navigation.
+        if phase.contains(.began) || (phase.isEmpty && wheelIdle) {
+            wheelNavigated = false
+        }
+        lastWheelTime = event.timestamp
+        guard !wheelNavigated, !phase.contains(.cancelled), !phase.contains(.ended) else { return }
+
         let point = convert(event.locationInWindow, from: nil)
         let delta = event.scrollingDeltaY
         guard liftTarget > 0, delta != 0 else { super.scrollWheel(with: event); return }
         let id = target(at: point) ?? zoomTarget
         if zoom <= 1.01 && delta < -6 && (id != nil || event.modifierFlags.contains(.control)) {
+            wheelNavigated = true
             input?.onUp()
             return
         }
@@ -414,8 +427,9 @@ final class CleanupRingView: NSView {
             super.scrollWheel(with: event)
             return
         }
-        if zoom > 2.62, delta > 3, event.momentumPhase.isEmpty, let id,
+        if zoom > 2.62, delta > 3, let id,
            input?.slices.first(where: { $0.id == id })?.folder == true {
+            wheelNavigated = true
             input?.onOpen(id)
             return
         }
