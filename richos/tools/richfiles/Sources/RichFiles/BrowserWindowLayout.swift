@@ -79,3 +79,40 @@ struct BrowserPaneDivider: View {
             .accessibilityLabel(name)
     }
 }
+
+struct BrowserColumnDivider: View {
+    let folderName: String
+    let width: CGFloat
+    let resize: (CGFloat) -> Void
+    @State private var startingWidth: CGFloat?
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let palette = BrowserPalette(scheme)
+        Rectangle().fill(palette.pane)
+            .overlay { Rectangle().fill(palette.line).frame(width: 1) }
+            .frame(width: 7)
+            .contentShape(Rectangle())
+            .highPriorityGesture(DragGesture(minimumDistance: 2, coordinateSpace: .global)
+                .onChanged { event in
+                    let original = startingWidth ?? width
+                    startingWidth = original
+                    setWidth(original + event.translation.width)
+                }
+                .onEnded { _ in startingWidth = nil })
+            .help("Drag to resize the \(folderName) column")
+            .accessibilityLabel("Width of \(folderName) column")
+            .accessibilityValue("\(Int(width)) points")
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment: setWidth(width + 30)
+                case .decrement: setWidth(width - 30)
+                @unknown default: break
+                }
+            }
+    }
+
+    private func setWidth(_ value: CGFloat) {
+        resize(min(960, max(160, value)))
+    }
+}

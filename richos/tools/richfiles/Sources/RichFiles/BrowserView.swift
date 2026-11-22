@@ -50,6 +50,7 @@ struct BrowserView: View {
     @State private var preparingAction = false
     @State private var rowFrames: [URL: CGRect] = [:]
     @State private var fileColumnFrame: CGRect = .null
+    @State private var columnWidths: [URL: CGFloat] = [:]
     @State private var selectionRectangle: CGRect?
     @State private var folderReveal: FolderTreeReveal?
     @State private var commandOwner = UUID()
@@ -750,17 +751,19 @@ struct BrowserView: View {
     private var columnBrowser: some View {
         GeometryReader { geometry in
             let path = model.breadcrumbs
-            let currentWidth = max(240, min(350, geometry.size.width - (path.count > 1 ? 186 : 0)))
+            let currentWidth = columnWidths[model.folder]
+                ?? max(260, min(440, geometry.size.width - (path.count > 1 ? 226 : 0)))
             ScrollViewReader { columns in
                 ScrollView(.horizontal) {
                     LazyHStack(spacing: 0) {
                         ForEach(Array(zip(path.dropLast(), path.dropFirst())), id: \.0) { folder, child in
+                            let width = columnWidths[folder] ?? 225
                             AncestorColumn(folder: folder, child: child, showHidden: model.showHidden,
                                            revision: actions.mutationRevision, model: model)
                                 .equatable()
                                 .focusedValue(\.browserControl, true)
-                                .frame(width: 185).id(folder)
-                            Divider()
+                                .frame(width: width).id(folder)
+                            columnDivider(for: folder, width: width)
                         }
                         VStack(alignment: .leading, spacing: 0) {
                             Text(model.folder.lastPathComponent).font(textSize.font(size: 13).weight(.semibold)).lineLimit(1).padding(8)
@@ -803,6 +806,7 @@ struct BrowserView: View {
                                                    value: geometry.frame(in: .named("richfiles-items")))
                         })
                         .id(model.folder)
+                        columnDivider(for: model.folder, width: currentWidth)
                         Spacer(minLength: 0)
                     }.frame(minWidth: geometry.size.width, maxHeight: .infinity)
                 }
@@ -810,6 +814,17 @@ struct BrowserView: View {
                 .onChange(of: model.folder) { columns.scrollTo($0, anchor: .trailing) }
             }
         }.accessibilityLabel("Column view").accessibilityIdentifier("file-columns")
+    }
+
+    private func columnDivider(for folder: URL, width: CGFloat) -> some View {
+        BrowserColumnDivider(folderName: folder.path == "/" ? "Computer" : folder.lastPathComponent,
+                             width: width) { next in
+            if columnWidths[folder] == nil, columnWidths.count >= 128,
+               let old = columnWidths.keys.first(where: { !model.breadcrumbs.contains($0) }) {
+                columnWidths.removeValue(forKey: old)
+            }
+            columnWidths[folder] = next
+        }
     }
 
     private var gallery: some View {
@@ -1934,6 +1949,7 @@ private struct AncestorColumn: View, Equatable {
                                 }.padding(5).contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .help(entry.name)
                             .background(current ? Color.accentColor.opacity(0.25) : .clear,
                                         in: RoundedRectangle(cornerRadius: 4))
                             .accessibilityAddTraits(current ? .isSelected : [])
