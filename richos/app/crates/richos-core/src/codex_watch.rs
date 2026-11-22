@@ -84,10 +84,10 @@ pub fn deliver(state: &Path, binding: &crate::entity::ThreadBinding, text: &str)
 /// engine scan cadence; source journals remain the authoritative outbox.
 pub type Sink = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 
-/// Saved observations emitted by the pre-association legacy reader. Retained
-/// after migration so deterministic imports can replay against inbox receipts.
+/// Only appends observed from the new raw-file cursor go in the live spool.
+/// Existing pending.jsonl files remain available as history.
 pub fn pending_path(state: &Path) -> PathBuf {
-    state_dir(state).join("pending.jsonl")
+    state_dir(state).join("live.jsonl")
 }
 
 /// Serialize pre-association legacy spool appends.
@@ -175,19 +175,22 @@ impl CodexWatch {
             for line in BufReader::new(output).lines() {
                 let result=line.map_err(|e|e.to_string()).and_then(|line| {
                     let value:serde_json::Value=serde_json::from_str(&line).map_err(|e|e.to_string())?;
-                    if value["type"] == "setup" {
-                        return Ok(()); // Older verified engine during an upgrade.
-                    }
-                    if matches!(value["type"].as_str(),Some("channel"|"automatic")) {
-                        let key=value["locator"].as_str().unwrap_or("automatic").to_string();
-                        match sink(&line) {
-                            Ok(())=>{said.remove(&key);},
-                            Err(error)=>{if said.get(&key)!=Some(&error) {eprintln!("[richos] channel {key} waits: {error}");said.insert(key,error);}}
+                    match value["type"].as_str() {
+                        Some("channel" | "automatic") => {
+                            let key=value["locator"].as_str().unwrap_or("automatic").to_string();
+                            match sink(&line) {
+                                Ok(())=>{said.remove(&key);},
+                                Err(error)=>{if said.get(&key)!=Some(&error) {eprintln!("[richos] channel {key} waits: {error}");said.insert(key,error);}}
+                            }
+                            Ok(())
                         }
-                        Ok(())
-                    } else {
-                        let text=value["text"].as_str().ok_or("Watcher line has no text")?;
-                        keep(&pending,text).map_err(|e|format!("legacy spool write failed; source remains available: {e}"))
+                        Some("legacy_append") => {
+                            let text=value["text"].as_str().ok_or("Watcher line has no text")?;
+                            keep(&pending,text).map_err(|e|format!("legacy spool write failed; source remains available: {e}"))
+                        }
+                        // The previous verified engine may run until its replacement is installed.
+                        Some("setup") | None => Ok(()),
+                        Some(kind) => Err(format!("Unknown Codex watcher event {kind}")),
                     }
                 });
                 if let Err(error)=result {eprintln!("[richos] Codex watch: {error}");}
@@ -321,7 +324,7 @@ mod tests {
                 assert_eq!(event["type"],"automatic","unframed task reached a visible chat");Ok(())
             })};
         ensure(&launch).unwrap();
-        let offsets=state_dir(&state).join("watch/app-host/offsets.json");
+        let offsets=state_dir(&state).join("watch/app-host/live-offsets.json");
         assert!(until(60,||offsets.exists()),"watcher did not initialize");
         use std::io::Write;
         std::fs::OpenOptions::new().append(true).open(channel.join(TO_RICH)).unwrap()

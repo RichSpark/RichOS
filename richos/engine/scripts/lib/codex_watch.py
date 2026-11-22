@@ -162,7 +162,7 @@ def _entries(lines):
     return [(grp[0] if grp[0].startswith("## ") else None, grp) for grp in out]
 
 
-def look_one(path, st, told, now):
+def look_one(path, st, told, now, *, report_shortening=True):
     """(blocks to print, new per-file state, offset told up to or None)."""
     size, inode = _stat(path)
     if size is None:
@@ -179,7 +179,7 @@ def look_one(path, st, told, now):
         # and watching goes on from its new end.
         block = ["CODEX-WATCH %s: %s was shortened (%d bytes, was %d); watching from its new end. Read it: %s" % (
             stall_watch.hhmm(now), channel_name(path), size, off, path)]
-        return [block], {"offset": size, "inode": inode, "seen": size}, size
+        return [block] if report_shortening else [], {"offset": size, "inode": inode, "seen": size}, size
     if size == off or size != seen:
         # Nothing new, or it is still growing: wait one look for it to settle.
         return [], {"offset": off, "inode": inode, "seen": size}, None
@@ -282,8 +282,10 @@ def _one_whole_look():
 def _legacy_tick(sd, now=None, out=None, json_lines=False, config=""):
     out = out or sys.stdout
     now = time.time() if now is None else now
-    path = os.path.join(sd, "offsets.json")
-    told_path = os.path.join(state_root(), "last-told.json")
+    # The app starts a fresh cursor on upgrade. The old cursor can point
+    # anywhere in the archive, including bytes already copied to the old spool.
+    path = os.path.join(sd, "live-offsets.json" if json_lines else "offsets.json")
+    told_path = os.path.join(state_root(), "live-last-told.json" if json_lines else "last-told.json")
     state = stall_watch._read_json(path)
     told = stall_watch._read_json(told_path)
     printed = 0
@@ -291,9 +293,10 @@ def _legacy_tick(sd, now=None, out=None, json_lines=False, config=""):
         folder = os.path.dirname(ch)
         if codex_channels.legacy_associated(folder) and not codex_channels.legacy_live(folder):
             continue
-        blocks, new, told_to = look_one(ch, state.get(ch), told, now)
+        blocks, new, told_to = look_one(ch, state.get(ch), told, now, report_shortening=not json_lines)
         for b in blocks:
-            out.write((host_child.line("\n".join(b)) if json_lines else "\n".join(b)) + "\n")
+            text = "\n".join(b)
+            out.write((json.dumps({"type": "legacy_append", "text": text.rstrip("\n")}) if json_lines else text) + "\n")
             out.flush()
             printed += 1
         state[ch] = new
@@ -371,7 +374,7 @@ def legacy_folders(state):
                if any((folder / name).is_file() for name in ("to-rich.md", "to-codex.md"))
                and not codex_channels.legacy_associated(folder)]
     if not pending and not any((codex_channels.root() / "connections").glob("*/*/legacy-*/connection.json")):
-        spool = Path(state) / "codex-watch" / "pending.jsonl"
+        spool = Path(state) / codex_channels.LIVE_LEGACY_SPOOL
         folder = (folders or [codex_channels.root() / "rich-codex"])[0]
         if spool.is_file() and spool.stat().st_size and not codex_channels.legacy_associated(folder):
             pending.append(folder)
@@ -385,7 +388,7 @@ def prepare_app_connections(state):
         return False
     target = codex_channels.automatic_target()
     if not target:
-        return True
+        return waiting or (Path(state) / codex_channels.LIVE_LEGACY_SPOOL).is_file()
     if waiting:
         codex_channels.bind_automatic(target)
     if pending:
@@ -395,8 +398,8 @@ def prepare_app_connections(state):
 
 def run_host_loop():
     """--monitor --host-json: the app's own child (richos-core codex_watch.rs). Its state is the
-    app's own folder (CODEX_WATCH_STATE_DIR), so the app's first start replays no backlog, and a
-    later start tells what was written while the app was closed."""
+    app's own folder (CODEX_WATCH_STATE_DIR). Its first start with live cursors starts at EOF.
+    Later starts use those cursors to deliver appends made while the app was closed."""
     alive = host_child.start()
     if not alive():
         return 0                           # its host is gone already

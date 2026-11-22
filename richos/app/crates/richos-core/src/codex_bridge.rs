@@ -88,20 +88,25 @@ pub fn accept(
     if locator.canonicalize().map_err(|e| e.to_string())? != locator {
         return Err("Channel is outside its registered location".into());
     }
+    let record = &event["record"];
+    let kind = record["kind"].as_str();
+    // An upgrade can start the previous verified engine first.
+    if matches!(kind, Some("legacy_import" | "legacy_notice")) {
+        return Ok(());
+    }
     let through = event["through"]
         .as_u64()
         .ok_or("Missing accepted position")?;
     let identity = event["source_identity"]
         .as_str()
         .ok_or("Missing source identity")?;
-    let record = &event["record"];
     let scope = StatusToolScope {
         version: 1,
         state_root: state.into(),
         entity_id: entity.into(),
         thread_id: thread.into(),
     };
-    if record["kind"] != "task_context" {
+    if kind != Some("task_context") {
         let text = record["text"]
             .as_str()
             .ok_or("Channel record has no text")?;
@@ -109,40 +114,31 @@ pub fn accept(
             .as_str()
             .ok_or("Channel record has no ID")?;
         component(message_id)?;
-        let legacy = record["kind"] == "legacy_import";
-        if !legacy || !session_tools::legacy_channel_saved(state, text)? {
-            let text = if legacy {
-                format!("Pre-cutover legacy observation; verify the complete original request before acting.\n{text}")
-            } else {
-                text.into()
-            };
-            session_tools::observe_channel_from(
-                &scope,
-                &text,
-                session_tools::BridgeReference {
-                    connection_id: id.into(),
-                    message_id: message_id.into(),
-                    payload_digest: digest(record),
-                    locator: locator.to_string_lossy().into_owned(),
-                    reply_to: record["reply_to"].as_str().map(str::to_string),
-                },
-                if record["kind"] == "review_result" {
-                    "review-watch"
-                } else {
-                    "codex-watch"
-                },
-            )?;
-        }
+        let legacy_text;
+        let text = if kind == Some("legacy_live") {
+            legacy_text = format!("Legacy Markdown observation; verify the complete original request before acting.\n{text}");
+            &legacy_text
+        } else {
+            text
+        };
+        session_tools::observe_channel_from(
+            &scope,
+            text,
+            session_tools::BridgeReference {
+                connection_id: id.into(),
+                message_id: message_id.into(),
+                payload_digest: digest(record),
+                locator: locator.to_string_lossy().into_owned(),
+                reply_to: record["reply_to"].as_str().map(str::to_string),
+            },
+            if kind == Some("review_result") { "review-watch" } else { "codex-watch" },
+        )?;
     }
     // Only reached after the exact inbox row was synced (or non-actionable context).
-    // This fixed notice is deduplicated by its inbox reference, independently of
-    // the preserved spool's position. Raw growth never moves the spool cursor.
-    if record["kind"] == "legacy_notice" {
-        return Ok(());
-    }
+    let suffix = if kind == Some("legacy_live") { ".live.json" } else { ".json" };
     let path = state
         .join("codex-watch/accepted")
-        .join(format!("{id}.json"));
+        .join(format!("{id}{suffix}"));
     let parent = path.parent().unwrap();
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     #[cfg(test)]
@@ -397,26 +393,51 @@ mod tests {
     }
 
     #[test]
-    fn codex_legacy_notices_deduplicate_without_advancing_spool() {
+    fn old_engine_events_never_stage_history_or_move_a_live_cursor() {
         let f = Fixture::new();
-        let mut notice = f.event.clone();
-        notice["record"]["kind"] = json!("legacy_notice");
-        accept(&f.state, &f.binding, &notice, &f.coord).unwrap();
-        accept(&f.state, &f.binding, &notice, &f.coord).unwrap();
+        let mut event = f.event.clone();
+        event["record"]["kind"] = json!("legacy_live");
+        accept(&f.state, &f.binding, &event, &f.coord).unwrap();
+        let position = f.state.join("codex-watch/accepted/pair.live.json");
+        let saved = std::fs::read(&position).unwrap();
+        for kind in ["legacy_import", "legacy_notice"] {
+            event["record"]["kind"] = json!(kind);
+            event["record"]["message_id"] = json!(kind);
+            event["through"] = json!(400);
+            accept(&f.state, &f.binding, &event, &f.coord).unwrap();
+        }
         assert_eq!(f.rows().len(), 1);
+        assert_eq!(std::fs::read(position).unwrap(), saved);
         assert!(!f.state.join("codex-watch/accepted/pair.json").exists());
-        let mut imported = f.event.clone();
-        imported["record"]["kind"] = json!("legacy_import");
-        imported["record"]["message_id"] = json!("import-1");
-        // A pre-cutover save in a different conversation is existing history.
-        let old = StatusToolScope {
-            thread_id: "archived-chat".into(),
-            ..f.scope()
+    }
+
+    #[test]
+    fn upgrade_skips_archived_inbox_rows_and_keeps_new_input() {
+        let f = Fixture::new();
+        let scope = f.scope();
+        let inbox = session_tools::inbox(&scope, "stu").unwrap();
+        let mut reference = session_tools::BridgeReference {
+            connection_id: "legacy-channel".into(),
+            message_id: format!("legacy-{}", "a".repeat(64)),
+            payload_digest: "digest".into(),
+            locator: "locator".into(),
+            reply_to: None,
         };
-        session_tools::observe_codex(&old, "Original request").unwrap();
-        accept(&f.state, &f.binding, &imported, &f.coord).unwrap();
-        assert_eq!(f.rows().len(), 1);
-        assert!(f.state.join("codex-watch/accepted/pair.json").exists());
+        let (old, _) = session_tools::observe_channel(&scope, "Old archive row", reference.clone()).unwrap();
+        session_tools::accept_live_handoff(&scope, "stu", old).unwrap();
+        reference.message_id = "legacy-outbox".into();
+        session_tools::observe_channel(&scope, "Old notice", reference.clone()).unwrap();
+        assert!(!session_tools::undelivered(&scope, "stu").unwrap());
+        assert!(session_tools::pending(&scope, "stu").unwrap().is_none());
+        reference.message_id = format!("legacy-live-{}", "b".repeat(64));
+        session_tools::observe_channel(&scope, "New Markdown append", reference).unwrap();
+        accept(&f.state, &f.binding, &f.event, &f.coord).unwrap();
+        for text in ["New Markdown append", "Original request"] {
+            let (message, through) = session_tools::pending(&scope, "stu").unwrap().unwrap();
+            assert_eq!(message.text, text);
+            session_tools::acknowledge(&scope, "stu", through).unwrap();
+        }
+        assert_eq!(std::fs::read_to_string(inbox).unwrap().lines().count(), 4);
     }
 
     #[test]
@@ -531,7 +552,7 @@ mod tests {
             ] {
                 let mut f = Fixture::new();
                 if legacy {
-                    f.event["record"]["kind"] = json!("legacy_import");
+                    f.event["record"]["kind"] = json!("legacy_live");
                 }
                 std::fs::write(f.root.join("event.json"), f.event.to_string()).unwrap();
                 let status = std::process::Command::new(std::env::current_exe().unwrap())
