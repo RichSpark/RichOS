@@ -194,6 +194,8 @@ enum FileInventory {
         let url: URL
         let relativePath: String
         let status: stat
+        let package: Bool
+        let insidePackage: Bool
 
         var isDirectory: Bool { status.st_mode & S_IFMT == S_IFDIR }
     }
@@ -204,7 +206,7 @@ enum FileInventory {
     }
 
     static func walk(
-        _ location: URL, includePackages: Bool = true, onlyChildren: Set<String>? = nil,
+        _ location: URL, includePackages: Bool = true, trackPackages: Bool = false, onlyChildren: Set<String>? = nil,
         isCancelled: () -> Bool, receive: (Entry) throws -> Void
     ) throws -> Report {
         if isCancelled() { throw CancellationError() }
@@ -216,13 +218,15 @@ enum FileInventory {
         var report = Report()
         var rootError: Error?
         let options: FileManager.DirectoryEnumerationOptions = includePackages ? [] : [.skipsPackageDescendants]
-        guard let enumerator = FileManager.default.enumerator(at: folder.url, includingPropertiesForKeys: [],
+        let keys: [URLResourceKey] = trackPackages ? [.isPackageKey] : []
+        guard let enumerator = FileManager.default.enumerator(at: folder.url, includingPropertiesForKeys: keys,
                                                                options: options, errorHandler: { url, error in
             if url.path == path { rootError = error; return false }
             report.unavailable += 1
             return true
         }) else { throw CocoaError(.fileReadUnknown) }
 
+        var packageLevel: Int?
         while let item = enumerator.nextObject() as? URL {
             if isCancelled() { throw CancellationError() }
             if let onlyChildren, let name = item.path.dropFirst(prefix.count).split(separator: "/", maxSplits: 1).first,
@@ -235,8 +239,14 @@ enum FileInventory {
                 report.unavailable += 1
                 continue
             }
+            let level = enumerator.level
+            if let previousLevel = packageLevel, level <= previousLevel { packageLevel = nil }
+            let insidePackage = packageLevel != nil
+            let package = trackPackages && !insidePackage && status.st_mode & S_IFMT == S_IFDIR
+                && (try? item.resourceValues(forKeys: [.isPackageKey]).isPackage) == true
+            if package { packageLevel = level }
             let entry = Entry(root: folder.url, url: item, relativePath: String(item.path.dropFirst(prefix.count)),
-                              status: status)
+                              status: status, package: package, insidePackage: insidePackage)
             if status.st_dev != folder.identity.device {
                 if entry.isDirectory { enumerator.skipDescendants() }
                 report.otherVolumes += 1

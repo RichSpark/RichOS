@@ -77,20 +77,27 @@ final class DirectoryReaderTests: XCTestCase {
         try fixture { root in
             let downloads = root.appendingPathComponent("Downloads", isDirectory: true)
             let projects = root.appendingPathComponent("Projects", isDirectory: true)
+            let package = root.appendingPathComponent("Example.app", isDirectory: true)
             try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: projects, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
             let installer = downloads.appendingPathComponent("installer.dmg")
             let movie = projects.appendingPathComponent("movie.mov")
             try Data(repeating: 42, count: 12_000_000).write(to: installer)
             try Data(repeating: 13, count: 20_000_000).write(to: movie)
+            try Data(repeating: 9, count: 11_000_000).write(to: package.appendingPathComponent("payload.bin"))
             try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("linked.mov"),
                                                        withDestinationURL: movie)
             var progress: [Int] = []
             let scan = try StorageAnalysis.cleanup(in: root) { progress.append($0.visited) }
             XCTAssertEqual(progress.first, 1)
-            XCTAssertEqual(scan.largeFiles.map { $0.url.lastPathComponent }, ["movie.mov", "installer.dmg"])
+            XCTAssertEqual(scan.largeFiles.map { $0.url.lastPathComponent }, ["movie.mov"])
             XCTAssertEqual(scan.installers.map(\.kind), [.installer])
             XCTAssertEqual(scan.rows.first?.url.lastPathComponent, "Projects")
+            let app = try XCTUnwrap(scan.rows.first { $0.url.lastPathComponent == "Example.app" })
+            XCTAssertFalse(app.isFolder)
+            XCTAssertGreaterThanOrEqual(app.allocated, 11_000_000)
+            XCTAssertFalse(app.canReview)
             XCTAssertEqual(scan.affectedChildren([installer]), ["Downloads"])
 
             try FileManager.default.removeItem(at: installer)

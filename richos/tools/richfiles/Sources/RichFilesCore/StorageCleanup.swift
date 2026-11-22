@@ -174,36 +174,36 @@ extension StorageAnalysis {
         for key in refresh ?? [] { branches.removeValue(forKey: key) }
         var visited = 0
         var lastUpdate = ProcessInfo.processInfo.systemUptime
-        let scan = try FileInventory.walk(root.url, includePackages: false, onlyChildren: refresh,
+        var cloudFiles = 0
+        let scan = try FileInventory.walk(root.url, trackPackages: true, onlyChildren: refresh,
                                           isCancelled: isCancelled) { entry in
             let parts = entry.relativePath.split(separator: "/", maxSplits: 1)
             guard let key = parts.first.map(String.init) else { return }
             let bytes = CleanupCandidate.allocatedBytes(entry.status)
             if parts.count == 1 {
-                let package = entry.isDirectory && (try? entry.url.resourceValues(forKeys: [.isPackageKey]).isPackage) == true
-                branches[key, default: CleanupBranch()].row = CleanupCandidate(entry, package: package)
+                branches[key, default: CleanupBranch()].row = CleanupCandidate(entry, package: entry.package)
             }
             let sum = branches[key, default: CleanupBranch()].allocated.addingReportingOverflow(bytes)
             branches[key, default: CleanupBranch()].allocated = sum.overflow ? .max : sum.partialValue
             branches[key, default: CleanupBranch()].visited += 1
-            if bytes >= minimumCleanupBytes && entry.status.st_mode & S_IFMT == S_IFREG {
+            if !entry.isDirectory && TextContentReader.isDataless(entry.status) { cloudFiles += 1 }
+            if bytes >= minimumCleanupBytes && !entry.insidePackage && entry.status.st_mode & S_IFMT == S_IFREG {
                 let candidate = CleanupCandidate(entry)
                 if !candidate.isCloudOnly {
-                    branches[key, default: CleanupBranch()].append(candidate, installer: false)
-                    if candidate.kind == .installer { branches[key, default: CleanupBranch()].append(candidate, installer: true) }
+                    branches[key, default: CleanupBranch()].append(candidate, installer: candidate.kind == .installer)
                 }
             }
             visited += 1
             let now = ProcessInfo.processInfo.systemUptime
             if visited == 1 || (visited.isMultiple(of: 256) && now - lastUpdate >= 0.2) {
                 lastUpdate = now
-                onProgress(cleanupReport(root, branches: branches, unavailable: 0, otherVolumes: 0))
+                onProgress(cleanupReport(root, branches: branches, unavailable: cloudFiles, otherVolumes: 0))
             }
         }
         try root.verifyLocation()
         for key in Array(branches.keys) { branches[key]?.trim() }
         return cleanupReport(root, branches: branches,
-            unavailable: max(scan.unavailable, refresh == nil ? 0 : (previous?.unavailable ?? 0)),
+            unavailable: max(scan.unavailable + cloudFiles, refresh == nil ? 0 : (previous?.unavailable ?? 0)),
             otherVolumes: max(scan.otherVolumes, refresh == nil ? 0 : (previous?.otherVolumes ?? 0)))
     }
 
