@@ -297,11 +297,17 @@ struct DiskCleanupView: View {
                     Text(model.inventory.map { "Measuring… \($0.visited) items" } ?? "Measuring files…")
                 case .complete:
                     Image(systemName: "checkmark").foregroundStyle(palette.signal)
-                    Text(model.inventory.map { report in
-                        let skipped = report.unavailable + report.otherVolumes
-                        let suffix = skipped > 0 ? " · \(skipped) skipped" : ""
-                        return "Scan complete · \(report.visited) items\(suffix)"
-                    } ?? "Scan complete")
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(model.inventory.map { "Scan complete · \($0.visited) items" } ?? "Scan complete")
+                        if let report = model.inventory {
+                            if report.unavailable > 0 {
+                                Text("\(report.unavailable) unavailable or cloud-only items skipped")
+                            }
+                            if report.otherVolumes > 0 {
+                                Text("\(report.otherVolumes) mounts on other volumes skipped")
+                            }
+                        }
+                    }
                 case .cancelled:
                     Text("Scan canceled. Results are partial.")
                 case .unavailable:

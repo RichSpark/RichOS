@@ -597,4 +597,3 @@ final class DiskCleanupModel: ObservableObject {
         }
     }
 }
-
