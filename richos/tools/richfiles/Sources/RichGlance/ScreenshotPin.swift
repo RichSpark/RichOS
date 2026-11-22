@@ -32,7 +32,8 @@ final class ScreenshotPin: NSPanel {
         let content = CGRect(x: place.x, y: place.y, width: width, height: art.height + 46)
         layout = PinSurface(picture: picture)
         super.init(contentRect: content, styleMask: [.borderless, .nonactivatingPanel, .resizable],
-                   backing: .buffered, defer: false, screen: screen)
+                   backing: .buffered, defer: false)
+        setFrame(content, display: false)
         layout.header = [opacity, levelLabel, actualSize, through, closeButton]
         layout.pictureWidth = art.width
         layout.windowDrag = { [weak self] event in self?.performDrag(with: event) }
