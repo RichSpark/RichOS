@@ -65,6 +65,28 @@ public enum RichFilesDiagnostics {
     private static let maximumBytes: off_t = 128 * 1024
     private static let writer = DispatchQueue(label: "app.richos.richfiles.diagnostics", qos: .utility)
 
+    private struct LegacyLoginChange: Decodable {
+        let operation: Operation
+        let outcome: Outcome
+        let confirmed: Int
+    }
+
+    static func hasCompletedBackgroundChange(in folder: URL) -> Bool {
+        let fd = open(folder.appendingPathComponent(filename).path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { return false }
+        let file = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        defer { try? file.close() }
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_uid == getuid(),
+              info.st_mode & 0o077 == 0, info.st_nlink == 1,
+              info.st_size <= maximumBytes, let bytes = try? file.read(upToCount: Int(maximumBytes)) else { return false }
+        let decoder = JSONDecoder()
+        return bytes.split(separator: 0x0A).contains { line in
+            guard let entry = try? decoder.decode(LegacyLoginChange.self, from: Data(line)) else { return false }
+            return entry.operation == .glanceCaptureHelperLogin && entry.outcome == .complete && entry.confirmed == 1
+        }
+    }
+
     public static func record(
         _ operation: Operation, id: UUID, outcome: Outcome, started: TimeInterval,
         total: Int, confirmed: Int, firstRowsMS: Int? = nil, scrollCaptureFailure: ScrollCaptureFailure? = nil

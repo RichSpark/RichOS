@@ -71,9 +71,10 @@ enum GlanceHelperControl {
         defer { try? lock?.close() }
         let record = try store.read()
         let preferences = record.preferences
+        if record.migratedBackground { try store.write(preferences) }
         let loginStatus = service.status
-        if preferences.background && loginStatus == .notRegistered {
-            return try setBackground(true, record: record)
+        if preferences.background && (loginStatus == .notRegistered || loginStatus == .notFound) {
+            return try setBackground(true, record: record, userChoice: false)
         }
         if shouldRunSession(preferences, loginEnabled: loginStatus == .enabled) {
             _ = try startSessionIfNeeded()
@@ -150,10 +151,10 @@ enum GlanceHelperControl {
         guard installed else { throw GlanceHelper.Problem("The RichGlance capture helper could not be found in this installation.") }
         let lock = try store.lock("settings")
         defer { try? lock?.close() }
-        return try setBackground(enabled, record: store.read())
+        return try setBackground(enabled, record: store.read(), userChoice: true)
     }
 
-    private static func setBackground(_ enabled: Bool, record: (preferences: GlanceHelper.Preferences, firstUse: Bool)) throws -> Status {
+    private static func setBackground(_ enabled: Bool, record: GlanceHelper.Store.Record, userChoice: Bool) throws -> Status {
         let original = record.preferences
         let item = service
         let started = ProcessInfo.processInfo.systemUptime
@@ -163,14 +164,16 @@ enum GlanceHelperControl {
                                         started: started, total: 1, confirmed: outcome == .complete ? 1 : 0)
         }
         if enabled, item.status == .enabled || item.status == .requiresApproval {
-            if !original.background { try store.write(original.settingBackground(true, firstUse: record.firstUse)) }
+            if userChoice || !original.background {
+                try store.write(original.settingBackground(true, firstUse: record.firstUse, userChoice: userChoice))
+            }
             outcome = item.status == .enabled ? .complete : .unavailable
             return try status()
         }
 
         if enabled {
             try stopSession()
-            let next = original.settingBackground(true, firstUse: record.firstUse)
+            let next = original.settingBackground(true, firstUse: record.firstUse, userChoice: userChoice)
             try store.write(next)
             do {
                 try item.register()
