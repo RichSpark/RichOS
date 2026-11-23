@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Source and consumer integration for engine/voice, including Rust's compiled metadata.
-# run-tests: inputs richos/app/scripts/voice-component.test.sh richos/engine/voice richos/engine/.env.example richos/engine/scripts/lib/machine_settings.fixtures.json richos/app/crates/richos-voice richos/app/crates/richos-core richos/app/crates/richos-command richos/app/crates/richos-search richos/app/third-party/qdrant-edge richos/engine/scripts/lib/dialect/dialect-en-US.generated.dict richos/app/Cargo.toml richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh richos/app/scripts/lib/cargo-target.sh richos/tools/richpass/RichPass.html richos/tools/richpass/releases.json
+# run-tests: inputs richos/app/scripts/voice-component.test.sh richos/engine/voice richos/engine/.env.example richos/engine/scripts/lib/machine_settings.fixtures.json richos/app/crates/richos-voice richos/app/ui/assets/app-icons/richscribe-glyph.css richos/app/crates/richos-core richos/app/crates/richos-command richos/app/crates/richos-search richos/app/third-party/qdrant-edge richos/engine/scripts/lib/dialect/dialect-en-US.generated.dict richos/app/Cargo.toml richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh richos/app/scripts/lib/cargo-target.sh richos/tools/richpass/RichPass.html richos/tools/richpass/releases.json
 # run-tests: covers richos/app/crates/richos-voice/build.rs
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,7 +9,7 @@ node "$VOICE/tests/consumers.test.mjs"
 node "$VOICE/tests/relocation.test.mjs"
 node "$VOICE/tests/mutation-runner.test.mjs"
 
-# A source build needs the model subtree, but no service or HUD source.
+# The reduced source build needs the model subtree and the tray glyph.
 APP="$(cd "$HERE/.." && pwd)"
 SCRATCH="$(mktemp -d "${TMPDIR:?}/voice-build.XXXXXX")"
 trap 'rm -rf "$SCRATCH"' EXIT
@@ -26,6 +26,10 @@ cp "$HERE/../../tools/richpass/RichPass.html" "$HERE/../../tools/richpass/releas
 # The workspace patches qdrant-edge to the vendored copy, so the copied product carries it too.
 mkdir -p "$PRODUCT/app/third-party" && cp -R "$APP/third-party/qdrant-edge" "$PRODUCT/app/third-party/"
 cp -R "$VOICE/models" "$PRODUCT/engine/voice/"
+# The voice build script rasterizes the shared nav rail SVG into tray masks.
+GLYPH="ui/assets/app-icons/richscribe-glyph.css"
+mkdir -p "$PRODUCT/app/$(dirname "$GLYPH")"
+cp "$APP/$GLYPH" "$PRODUCT/app/$GLYPH"
 # richos-core's library embeds the American-spelling table from the engine
 # (american_spelling.rs, since 8a11f174), so the copied product carries it too.
 DICT="engine/scripts/lib/dialect/dialect-en-US.generated.dict"
