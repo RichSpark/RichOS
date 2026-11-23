@@ -110,7 +110,9 @@ function mediaMomentsFixture() {
   header.setUint16(32, 1, true);
   header.setUint16(34, 8, true);
   header.setUint32(40, samples, true);
-  const url = URL.createObjectURL(new Blob([audio], { type: "audio/wav" }));
+  // Keep the PCM self-contained. In a file-origin page, fetching this fixture
+  // through a blob URL wedged WebKit while starting the reopened recording.
+  const url = "data:audio/wav;base64," + audio.toBase64();
   const localFile = {
     id: localId, name: "Founder interview.wav", source: "local", exists: true,
     moments: { durationMs, points: [

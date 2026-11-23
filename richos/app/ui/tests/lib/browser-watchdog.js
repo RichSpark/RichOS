@@ -76,6 +76,9 @@ async function launchGuardedWebKit(webkit, run) {
     if (pages.has(page)) return page;
     pages.add(page);
     guardCalls(page, "page", ["addInitScript", "addStyleTag", "close", "emulateMedia", "evaluate", "setViewportSize"]);
+    // Playwright's waitForFunction timeout tries to cancel the poll in the page.
+    // An unresponsive renderer can leave that cancellation waiting for a reply.
+    guardCalls(page, "page", ["waitForFunction"]);
     guardCalls(page.clock, "page.clock", ["setFixedTime"]);
     guardCalls(page.keyboard, "page.keyboard", ["press", "type"]);
     guardCalls(page.mouse, "page.mouse", ["click", "dblclick", "down", "move", "up", "wheel"]);
