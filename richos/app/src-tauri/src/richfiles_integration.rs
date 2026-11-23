@@ -340,6 +340,7 @@ mod mac {
     type SettingsReply = unsafe extern "C" fn(*const u8, usize, *mut c_void);
     type Settings = unsafe extern "C" fn(i32, i32, SettingsReply, *mut c_void);
     type GitRecordingFrame = unsafe extern "C" fn(*mut c_void, SettingsReply, *mut c_void) -> i32;
+    type GitFrameSender = tokio::sync::oneshot::Sender<Result<Option<Vec<u8>>, ()>>;
 
     struct Bridge {
         place_git: PlaceGit,
@@ -393,7 +394,7 @@ mod mac {
         let git_chat = unsafe { libc::dlsym(library, c"richfiles_git_chat".as_ptr()) };
         let settings = unsafe { libc::dlsym(library, c"richfiles_settings".as_ptr()) };
         let git_recording_frame =
-            unsafe { libc::dlsym(library, c"richfiles_git_recording_frame".as_ptr()) };
+            unsafe { libc::dlsym(library, c"richfiles_git_recording_frame_async".as_ptr()) };
         if git.is_null() || git_chat.is_null() || settings.is_null() {
             unsafe { libc::dlclose(library) };
             return Err("This installation has an incompatible Git view.");
@@ -507,27 +508,34 @@ mod mac {
         }
     }
 
-    pub fn recording_frame(webview: *mut c_void) -> Result<Option<Vec<u8>>, ()> {
+    pub fn recording_frame(webview: *mut c_void, sender: GitFrameSender) {
         unsafe extern "C" fn receive(bytes: *const u8, size: usize, context: *mut c_void) {
-            const HEADER_BYTES: usize = 24;
-            if bytes.is_null() || size <= HEADER_BYTES || size > crate::window_picture::MAX_BYTES + HEADER_BYTES {
+            // Status 1 transferred this box to the encoder. It calls back exactly once, even
+            // when its caller timed out or encoding produced no picture.
+            let sender = unsafe { Box::from_raw(context.cast::<GitFrameSender>()) };
+            if sender.is_closed() {
                 return;
             }
-            // Swift calls back synchronously with live bytes and the stack slot passed below.
-            unsafe {
-                let frame = &mut *context.cast::<Option<Vec<u8>>>();
-                *frame = Some(std::slice::from_raw_parts(bytes, size).to_vec());
-            }
+            const HEADER_BYTES: usize = 24;
+            let frame = if !bytes.is_null() && (HEADER_BYTES + 1..=crate::window_picture::MAX_BYTES + HEADER_BYTES).contains(&size) {
+                Ok(Some(unsafe { std::slice::from_raw_parts(bytes, size) }.to_vec()))
+            } else {
+                Err(())
+            };
+            let _ignored = sender.send(frame);
         }
 
-        let capture = BRIDGE.get().and_then(|bridge| bridge.as_ref().ok())
-            .and_then(|bridge| bridge.git_recording_frame).ok_or(())?;
-        let mut frame: Option<Vec<u8>> = None;
-        let status = unsafe { capture(webview, receive, std::ptr::from_mut(&mut frame).cast()) };
-        match status {
-            0 => Ok(None),
-            1 => frame.map(Some).ok_or(()),
-            _ => Err(()),
+        let Some(capture) = BRIDGE.get().and_then(|bridge| bridge.as_ref().ok())
+            .and_then(|bridge| bridge.git_recording_frame) else {
+            let _ignored = sender.send(Err(()));
+            return;
+        };
+        let context = Box::into_raw(Box::new(sender));
+        let status = unsafe { capture(webview, receive, context.cast()) };
+        if status != 1 {
+            // No encoder reply is promised. Take ownership back and resolve the request now.
+            let sender = unsafe { Box::from_raw(context) };
+            let _ignored = sender.send(if status == 0 { Ok(None) } else { Err(()) });
         }
     }
 
@@ -549,7 +557,9 @@ mod mac {
 pub async fn take_output_git_frame(window: &WebviewWindow) -> Result<Option<Vec<u8>>, ()> {
     let (send, receive) = tokio::sync::oneshot::channel();
     window.with_webview(move |webview| {
-        let _ignored = send.send(mac::recording_frame(webview.inner()));
+        if !send.is_closed() {
+            mac::recording_frame(webview.inner(), send);
+        }
     }).map_err(|_| ())?;
     tokio::time::timeout(std::time::Duration::from_millis(400), receive)
         .await.map_err(|_| ())?.map_err(|_| ())?

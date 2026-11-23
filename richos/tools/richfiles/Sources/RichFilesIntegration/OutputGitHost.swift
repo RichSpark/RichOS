@@ -1,7 +1,9 @@
 import AppKit
+import ImageIO
 import RichFiles
 import RichFilesCore
 import SwiftUI
+import UniformTypeIdentifiers
 import WebKit
 
 @_cdecl("richfiles_register_glance")
@@ -38,18 +40,21 @@ public func changeRichFilesGitChat(_ value: UnsafePointer<CChar>?) -> Int32 {
     }
 }
 
-// Synchronous on AppKit's thread. The caller copies the bytes during the callback.
-// Returns 0 for a hidden pane, 1 for a picture or -1 for an unavailable picture.
-@_cdecl("richfiles_git_recording_frame")
+// The snapshot is made on AppKit's thread. A return of 1 promises exactly one reply on the
+// encoder queue. A return of 0 (hidden) or -1 (unavailable) leaves the context with the caller.
+@_cdecl("richfiles_git_recording_frame_async")
 public func outputGitRecordingFrame(
     _ webViewPointer: UnsafeMutableRawPointer?,
-    _ reply: @convention(c) (UnsafePointer<UInt8>?, Int, UnsafeMutableRawPointer?) -> Void,
+    _ reply: @escaping @convention(c) (UnsafePointer<UInt8>?, Int, UnsafeMutableRawPointer?) -> Void,
     _ context: UnsafeMutableRawPointer?
 ) -> Int32 {
     guard Thread.isMainThread, let webViewPointer else { return -1 }
+    let contextAddress = UInt(bitPattern: context)
     return MainActor.assumeIsolated {
         guard let web = Unmanaged<NSView>.fromOpaque(webViewPointer).takeUnretainedValue() as? WKWebView else { return -1 }
         return OutputGitHost.shared.recordingFrame(web) { data in
+            let context = UnsafeMutableRawPointer(bitPattern: contextAddress)
+            guard let data else { reply(nil, 0, context); return }
             data.withUnsafeBytes { reply($0.bindMemory(to: UInt8.self).baseAddress, $0.count, context) }
         }
     }
@@ -63,6 +68,8 @@ private final class OutputGitHost {
     private var hosting: OutputGitHostingView?
     private var thread: String?
     private var dark: Bool?
+    private let encoder = DispatchQueue(label: "app.richos.output-git-encoder", qos: .userInitiated)
+    private var encoding = false
 
     func chatChanged(_ next: String?) {
         guard thread != next else { return }
@@ -113,10 +120,12 @@ private final class OutputGitHost {
         web.bounds.intersection(web.convert(window.contentLayoutRect, from: nil))
     }
 
-    func recordingFrame(_ web: WKWebView, reply: (Data) -> Void) -> Int32 {
+    func recordingFrame(_ web: WKWebView, reply: @escaping @Sendable (Data?) -> Void) -> Int32 {
         guard self.web === web, let hosting, let parent = hosting.superview, let window = web.window,
               hosting.window === window, !hosting.isHiddenOrHasHiddenAncestor,
               window.isVisible, !window.isMiniaturized else { return 0 }
+        // The recorder may time out waiting for compression. Keep the native queue at one picture.
+        guard !encoding else { return -1 }
         let viewport = viewport(web, in: window)
         let frame = web.convert(hosting.frame, from: parent)
         let bounds = hosting.bounds
@@ -124,7 +133,7 @@ private final class OutputGitHost {
               let bitmap = hosting.bitmapImageRepForCachingDisplay(in: bounds) else { return -1 }
         // Cache the live view so the snapshot includes SwiftUI's current scroll position and selection.
         hosting.cacheDisplay(in: bounds, to: bitmap)
-        guard let png = bitmap.representation(using: .png, properties: [:]) else { return -1 }
+        guard let image = bitmap.cgImage else { return -1 }
         let mouse = web.convert(window.mouseLocationOutsideOfEventStream, from: nil)
         let hasMouse = window.isKeyWindow && frame.contains(mouse)
         let top = web.isFlipped ? frame.minY - viewport.minY : viewport.maxY - frame.maxY
@@ -136,14 +145,30 @@ private final class OutputGitHost {
             (frame.minX - viewport.minX) / viewport.width, top / viewport.height,
             frame.width / viewport.width, frame.height / viewport.height,
         ]
-        var packet = Data(capacity: 24 + png.count)
+        encoding = true
+        encoder.async {
+            let packet = Self.encodeFrame(image, values: values)
+            DispatchQueue.main.async { OutputGitHost.shared.encoding = false }
+            reply(packet)
+        }
+        return 1
+    }
+
+    // Only the immutable image and its geometry cross threads. No AppKit view drawing runs here.
+    private nonisolated static func encodeFrame(_ image: CGImage, values: [CGFloat]) -> Data? {
+        let png = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(png, UTType.png.identifier as CFString, 1, nil) else {
+            return nil
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        var packet = Data(capacity: 24 + png.length)
         for value in values {
             var bits = Float(value).bitPattern.littleEndian
             withUnsafeBytes(of: &bits) { packet.append(contentsOf: $0) }
         }
-        packet.append(png)
-        reply(packet)
-        return 1
+        packet.append(png as Data)
+        return packet
     }
 
     private func hide(clear: Bool = true) {
