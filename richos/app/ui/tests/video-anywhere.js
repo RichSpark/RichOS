@@ -400,7 +400,7 @@ async function main() {
     assertEqual(await page.evaluate(() => window.__micAsked), 0, "the microphone was asked for and he never switched it on");
     assertEqual(page.__errors, [], "the page reported errors");
     await page.close();
-    return "Microphone (Off, On) and Mouse pointer (Shown, Hidden), 430px wide, 8px under the button; Hidden stayed; closed four ways";
+    return "Microphone (Off, On) and Mouse pointer (Shown, Hidden), 430px wide, 8px under the button; an abandoned Hidden choice reset; closed four ways";
   });
 
   await run.check("a recording with the microphone and the pointer goes on from a chat into Settings, to the RichPass page and to the home screen, and is stopped there: every one of those screens is in the saved file, with sound and the pointer and without the recorder's own button", async () => {

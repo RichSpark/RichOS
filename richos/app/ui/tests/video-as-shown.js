@@ -435,17 +435,19 @@ function gitPane() {
       const canvas = await T.until("the recording canvas", () => document.querySelector(".rv-canvas"));
       if (requests) throw new Error("requested an overlay with the Git pane closed");
       await T.press('.nav-thread[data-thread-id="hiring"]');
+      await T.until("Output to bind to the Hiring chat", () => window.RichOutput.snapshot().thread === "hiring");
       await T.press("#out-top");
       await T.press("#op-git-open");
       const placed = await T.until("the native Git pane placed", () => bounds?.visible && bounds);
       const redFrame = await picture("#cf2020", placed);
-      const shifted = { ...placed, left: placed.left + 0.15, width: placed.width - 0.15 };
+      const inset = placed.width * 0.3;
+      const shifted = { ...placed, left: placed.left + inset, width: placed.width - inset };
       const greenFrame = await picture("#20b030", shifted);
       const pixel = (x, y) => canvas.getContext("2d")
         .getImageData(Math.floor(x * canvas.width), Math.floor(y * canvas.height), 1, 1).data;
       const red = ([r, g, b]) => r > 165 && g < 75 && b < 75;
       const green = ([r, g, b]) => r < 75 && g > 140 && b < 100;
-      const left = placed.left + 0.03, right = shifted.left + 0.03, y = placed.top + placed.height / 2;
+      const left = placed.left + inset / 2, right = shifted.left + inset / 2, y = placed.top + placed.height / 2;
 
       const opened = window.RichVideoAnywhere.state().frames;
       await T.until("recording redraws after the pane opens", () => window.RichVideoAnywhere.state().frames >= opened + 8);
