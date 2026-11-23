@@ -19,9 +19,41 @@ final class GlanceViewerSizingTests: XCTestCase {
         try assertViewerSize(image, window: CGSize(width: 90, height: 110), points: CGSize(width: 90, height: 60))
     }
 
+    func testOpenedRetinaImageRendersLargeArrowAtCaptureScale() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try writePNG(dpi: 144, to: url)
+        let viewer = Viewer(preferences: GlanceInfoPreferences())
+        defer { viewer.stop() }
+        viewer.open(url)
+        let decoded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            MainActor.assumeIsolated { viewer.canEditImage }
+        }, object: nil)
+        // Wait for the production decoder to deliver the image to the viewer.
+        wait(for: [decoded], timeout: 5)
+        var opened: ScreenshotDocument?
+        viewer.openEditor = { opened = $0 }
+        viewer.editImage()
+        var file = try XCTUnwrap(opened)
+        var capture = ScreenshotDocument(original: file.original, scale: 2)
+        let arrow = ScreenshotMark(tool: .arrow, start: CGPoint(x: 20, y: 80),
+                                   end: CGPoint(x: 218, y: 80), ink: .red, large: true)
+        file.edits.marks = [arrow]
+        capture.edits.marks = [arrow]
+        XCTAssertEqual(file.scale, capture.scale)
+        let filePNG = try XCTUnwrap(ScreenshotRenderer.flattened(file).flatMap(ScreenshotRenderer.png))
+        let capturePNG = try XCTUnwrap(ScreenshotRenderer.flattened(capture).flatMap(ScreenshotRenderer.png))
+        XCTAssertEqual(filePNG, capturePNG, "The opened file and a fresh 2× capture should export identical arrows")
+    }
+
     private func png(dpi: Int) throws -> GlanceImage {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
         defer { try? FileManager.default.removeItem(at: url) }
+        try writePNG(dpi: dpi, to: url)
+        return try GlanceImage.decode(url)
+    }
+
+    private func writePNG(dpi: Int, to url: URL) throws {
         let context = try XCTUnwrap(CGContext(
             data: nil, width: 240, height: 160, bitsPerComponent: 8, bytesPerRow: 0,
             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
@@ -32,7 +64,6 @@ final class GlanceViewerSizingTests: XCTestCase {
         let output = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil))
         CGImageDestinationAddImage(output, bitmap, [kCGImagePropertyDPIWidth: dpi, kCGImagePropertyDPIHeight: dpi] as CFDictionary)
         XCTAssertTrue(CGImageDestinationFinalize(output))
-        return try GlanceImage.decode(url)
     }
 
     private func assertViewerSize(_ image: GlanceImage, window: CGSize, points: CGSize) throws {
@@ -56,9 +87,10 @@ final class GlanceViewerSizingTests: XCTestCase {
                 guard let color = bitmap.colorAt(x: x, y: y) else { return false }
                 return color.redComponent > 0.75 && color.greenComponent < 0.25 && color.blueComponent > 0.75
             }
-            // Use the center lines so the Info button in the upper-right corner is outside the samples.
+            // Sample within the picture, to the right of the viewer buttons even at small sizes.
+            let sampleX = bitmap.pixelsWide / 2 + Int(points.width * CGFloat(scale) / 3)
             let width = (0..<bitmap.pixelsWide).filter { isImage($0, bitmap.pixelsHigh / 2) }.count
-            let height = (0..<bitmap.pixelsHigh).filter { isImage(bitmap.pixelsWide / 2, $0) }.count
+            let height = (0..<bitmap.pixelsHigh).filter { isImage(sampleX, $0) }.count
             XCTAssertEqual(width, Int(points.width) * scale, "image width at \(scale)x")
             XCTAssertEqual(height, Int(points.height) * scale, "image height at \(scale)x")
         }

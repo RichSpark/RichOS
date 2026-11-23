@@ -3,14 +3,26 @@ import ImageIO
 import UniformTypeIdentifiers
 
 enum ScreenshotTool: String, CaseIterable, Codable, Sendable {
-    case select, arrow, text, box, highlight, steps, redact, crop
+    case select, arrow, text, line, box, highlight, steps, redact, crop
 
     var title: String { rawValue.capitalized }
+    var hasThickness: Bool { self == .line || self == .box }
+    var hasSideGrabbers: Bool { self == .box || self == .redact }
+    var hasEndpoints: Bool { self == .line || self == .arrow }
+    var defaultInk: ScreenshotInk? {
+        switch self {
+        case .arrow, .text, .line, .box, .steps: .red
+        case .highlight: .yellow
+        case .select, .redact, .crop: nil
+        }
+    }
+
     var key: String {
         switch self {
         case .select: "v"
         case .arrow: "a"
         case .text: "t"
+        case .line: "l"
         case .box: "b"
         case .highlight: "h"
         case .steps: "n"
@@ -24,6 +36,7 @@ enum ScreenshotTool: String, CaseIterable, Codable, Sendable {
         case .select: "cursorarrow"
         case .arrow: "arrow.up.right"
         case .text: "text.bubble"
+        case .line: "line.diagonal"
         case .box: "rectangle"
         case .highlight: "highlighter"
         case .steps: "1.circle"
@@ -38,14 +51,20 @@ enum ScreenshotInk: String, CaseIterable, Codable, Sendable {
 
     var color: NSColor {
         switch self {
-        case .red: NSColor(srgbRed: 0.70, green: 0.11, blue: 0.16, alpha: 1)
-        case .yellow: NSColor(srgbRed: 1, green: 0.78, blue: 0.22, alpha: 1)
-        case .blue: NSColor(srgbRed: 0.12, green: 0.33, blue: 0.68, alpha: 1)
+        case .red: NSColor(srgbRed: 200.0 / 255, green: 40.0 / 255, blue: 30.0 / 255, alpha: 1)
+        case .yellow: NSColor(srgbRed: 242.0 / 255, green: 194.0 / 255, blue: 48.0 / 255, alpha: 1)
+        case .blue: NSColor(srgbRed: 22.0 / 255, green: 87.0 / 255, blue: 196.0 / 255, alpha: 1)
         case .black: ScreenshotRenderer.ink
         }
     }
 
     var outline: NSColor { self == .yellow ? ScreenshotRenderer.ink : .white }
+}
+
+struct ScreenshotMarkStyle: Codable {
+    var ink: ScreenshotInk?
+    var large: Bool?
+    var thickness: Int?
 }
 
 struct ScreenshotMark: Codable, Equatable, Identifiable, Sendable {
@@ -57,6 +76,22 @@ struct ScreenshotMark: Codable, Equatable, Identifiable, Sendable {
     var text = ""
     var ink: ScreenshotInk = .red
     var large = false
+    var thickness: Int?
+
+    static let thicknessOptions = [1, 2, 3, 4, 6, 8, 12, 16]
+
+    func strokeWidth(at scale: CGFloat) -> CGFloat {
+        if let thickness, Self.thicknessOptions.contains(thickness) { return CGFloat(thickness) }
+        // Older boxes carry their original size in points.
+        return (tool == .box ? 4 * (large ? 1.5 : 1) : 2) * scale
+    }
+
+    var length: CGFloat { hypot(end.x - start.x, end.y - start.y) }
+
+    var angle: Int {
+        let degrees = Int((-atan2(end.y - start.y, end.x - start.x) * 180 / .pi).rounded())
+        return (degrees % 180 + 180) % 180
+    }
 
     var rect: CGRect { ScreenshotRenderer.rect(from: start, to: end) }
 
@@ -84,7 +119,7 @@ struct ScreenshotEdits: Codable, Equatable, Sendable {
 }
 
 enum ScreenshotKind: String, Codable, Sendable {
-    case region, window, display, scrolling
+    case region, window, display, scrolling, image
     var title: String { self == .scrolling ? "Scrolling capture" : rawValue.capitalized }
     var symbol: String {
         switch self {
@@ -92,6 +127,7 @@ enum ScreenshotKind: String, Codable, Sendable {
         case .window: "macwindow"
         case .display: "display"
         case .scrolling: "arrow.up.and.down.square"
+        case .image: "photo"
         }
     }
 }
@@ -103,6 +139,7 @@ struct ScreenshotDocument: Sendable {
     let scale: CGFloat
     let kind: ScreenshotKind
     let name: String?
+    let sourceFile: URL?
     var edits: ScreenshotEdits
     var repeatTarget: ScreenshotRepeatTarget?
     var screenRect: CGRect?
@@ -110,13 +147,14 @@ struct ScreenshotDocument: Sendable {
 
     init(original: CGImage, scale: CGFloat, kind: ScreenshotKind = .region,
          id: UUID = UUID(), created: Date = Date(), name: String? = nil, edits: ScreenshotEdits? = nil,
-         redactedGeneration: UUID? = nil) {
+         redactedGeneration: UUID? = nil, sourceFile: URL? = nil) {
         self.id = id
         self.created = created
         self.original = original
         self.scale = max(1, scale)
         self.kind = kind
         self.name = name
+        self.sourceFile = sourceFile
         self.redactedGeneration = redactedGeneration
         self.edits = edits ?? ScreenshotEdits(crop: CGRect(x: 0, y: 0, width: original.width, height: original.height))
     }
@@ -125,6 +163,17 @@ struct ScreenshotDocument: Sendable {
     var crop: CGRect { edits.crop.integral.intersection(bounds) }
     var title: String { name ?? (kind == .scrolling ? "Scrolling screenshot" : "\(kind.title) screenshot") }
     var hasRedactions: Bool { edits.marks.contains { $0.tool == .redact } }
+
+    func isSourceFile(_ url: URL) -> Bool {
+        guard let sourceFile else { return false }
+        if sourceFile.resolvingSymlinksInPath() == url.resolvingSymlinksInPath() { return true }
+        let keys: Set<URLResourceKey> = [.volumeIdentifierKey, .fileResourceIdentifierKey]
+        guard let source = try? sourceFile.resourceValues(forKeys: keys),
+              let target = try? url.resourceValues(forKeys: keys),
+              let volume = source.volumeIdentifier, volume.isEqual(target.volumeIdentifier),
+              let fileID = source.fileResourceIdentifier else { return false }
+        return fileID.isEqual(target.fileResourceIdentifier)
+    }
 }
 
 enum ScreenshotRenderer {
@@ -221,31 +270,33 @@ enum ScreenshotRenderer {
         context.setLineJoin(.round)
         switch mark.tool {
         case .arrow:
-            let angle = atan2(mark.end.y - mark.start.y, mark.end.x - mark.start.x)
-            let length = min(15 * unit, hypot(mark.end.y - mark.start.y, mark.end.x - mark.start.x) * 0.65)
-            let path = CGMutablePath()
-            path.move(to: mark.start)
-            path.addLine(to: mark.end)
-            for wing in [-CGFloat.pi / 5, .pi / 5] {
-                path.move(to: mark.end)
-                path.addLine(to: mark.end.offset(dx: -length * cos(angle + wing), dy: -length * sin(angle + wing)))
+            if let path = arrowPath(for: mark, scale: scale) {
+                // Quartz shadow offsets are in device space, independent of the flipped image transform.
+                let transform = context.ctm
+                let x = hypot(transform.a, transform.b) * scale
+                let y = hypot(transform.c, transform.d) * scale
+                context.setShadow(offset: CGSize(width: 5 * x, height: -4 * y), blur: 5 * x,
+                                  color: NSColor.black.withAlphaComponent(0.5).cgColor)
+                context.setFillColor(color.cgColor)
+                context.addPath(path)
+                context.fillPath()
             }
-            context.saveGState()
-            // Shadow offsets are expressed in captured pixels and follow the rendered zoom.
-            let transform = context.ctm
-            let dx = hypot(transform.a, transform.b)
-            let dy = hypot(transform.c, transform.d)
-            let shadowScale: CGFloat = mark.large ? 1.5 : 1
-            context.setShadow(offset: CGSize(width: 2 * dx * shadowScale, height: -2 * dy * shadowScale),
-                              blur: 2.5 * dx * shadowScale, color: ink.withAlphaComponent(0.45).cgColor)
-            context.setStrokeColor(outline.cgColor)
-            context.setLineWidth(5 * unit + 2)
-            context.addPath(path)
+        case .line, .box:
+            let width = mark.strokeWidth(at: scale)
+            let offset: CGFloat = width.truncatingRemainder(dividingBy: 2) == 1 ? 0.5 : 0
+            if mark.tool == .line {
+                context.setLineCap(width >= 4 ? .round : .butt)
+                let x = mark.start.y == mark.end.y ? 0 : offset
+                let y = mark.start.x == mark.end.x ? 0 : offset
+                context.move(to: mark.start.offset(dx: x, dy: y))
+                context.addLine(to: mark.end.offset(dx: x, dy: y))
+            } else {
+                context.setLineJoin(.miter)
+                context.addRect(rect.offsetBy(dx: offset, dy: offset))
+            }
+            context.setStrokeColor(color.cgColor)
+            context.setLineWidth(width)
             context.strokePath()
-            context.restoreGState()
-            stroke(path, color: color, outline: outline, width: 5 * unit, in: context)
-        case .box:
-            stroke(CGPath(rect: rect, transform: nil), color: color, outline: outline, width: 4 * unit, in: context)
         case .highlight:
             context.setFillColor(color.withAlphaComponent(0.28).cgColor)
             context.fill(rect)
@@ -310,19 +361,34 @@ enum ScreenshotRenderer {
                 .paragraphStyle: paragraph,
             ]).draw(with: rect.insetBy(dx: 8 * scale, dy: 5 * scale), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
         case .redact:
-            // Integral, fully opaque coverage. Draw the outline inside the covered rectangle.
+            // Integral, fully opaque coverage.
             let covered = rect.integral
             context.setShouldAntialias(false)
             context.setFillColor(ink.cgColor)
             context.fill(covered)
-            if covered.width > 4 * scale, covered.height > 4 * scale {
-                context.setLineWidth(scale)
-                context.setStrokeColor(NSColor.white.cgColor)
-                context.stroke(covered.insetBy(dx: 1.5 * scale, dy: 1.5 * scale))
-            }
         case .select, .crop:
             break
         }
+    }
+
+    static func arrowPath(for mark: ScreenshotMark, scale: CGFloat) -> CGPath? {
+        let length = mark.length
+        guard length > 0 else { return nil }
+        let shaft = (mark.large ? 10 : 6) * scale
+        let head = min(3 * shaft, 0.6 * length)
+        let halfHead = head / 2
+        let halfShaft = min(shaft / 2, halfHead * 0.55)
+        let dx = (mark.end.x - mark.start.x) / length
+        let dy = (mark.end.y - mark.start.y) / length
+        let base = mark.end.offset(dx: -head * dx, dy: -head * dy)
+        func across(_ point: CGPoint, _ distance: CGFloat) -> CGPoint {
+            point.offset(dx: -dy * distance, dy: dx * distance)
+        }
+        let path = CGMutablePath()
+        path.addLines(between: [across(mark.start, halfShaft), across(base, halfShaft), across(base, halfHead), mark.end,
+                                across(base, -halfHead), across(base, -halfShaft), across(mark.start, -halfShaft)])
+        path.closeSubpath()
+        return path
     }
 
     private static func stroke(_ path: CGPath, color: NSColor, outline: NSColor, width: CGFloat, in context: CGContext) {

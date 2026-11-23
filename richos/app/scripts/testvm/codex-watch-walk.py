@@ -71,10 +71,11 @@ class CodexWatchWalk(stu.StuReminderWalk):
     def run_python(self, program, *args):
         return json.loads(guest(self.vm, shlex.join([self.python, '-B', '-c', program, *args]), 120))
 
-    def helper_call(self, action, **request):
+    def helper_call(self, action, workdir=None, **request):
         command = shlex.join(['env', 'HOME=' + self.home, 'CODEX_COORDINATION_ROOT=' + self.coordination,
                               self.python, '-B', self.helper, action, '--request'])
-        return json.loads(guest(self.vm, 'printf %s ' + shlex.quote(json.dumps(request)) + ' | ' + command, 120))
+        cwd = 'cd ' + shlex.quote(workdir) + ' && ' if workdir else ''
+        return json.loads(guest(self.vm, cwd + 'printf %s ' + shlex.quote(json.dumps(request)) + ' | ' + command, 120))
 
     def ledger(self):
         return self.run_python('import json,sys;print(json.dumps([json.loads(l) for l in open(sys.argv[1]) if l.strip()]))',
@@ -105,9 +106,6 @@ class CodexWatchWalk(stu.StuReminderWalk):
 
     def connections(self):
         return self.run_python('import glob,json,sys;print(json.dumps([dict(json.load(open(p)),locator=p.rsplit("/",1)[0]) for p in glob.glob(sys.argv[1]+"/connections/*/*/*/connection.json")]))', self.coordination)
-
-    def coordinator(self):
-        return self.run_python('import json,os,sys;p=sys.argv[1];print(json.dumps(json.load(open(p)) if os.path.exists(p) else {}))', self.coordination + '/automatic.json')
 
     def chat_menu(self, thread):
         entity = next(r['entity_id'] for r in self.threads() if r['thread_id'] == thread)
@@ -149,7 +147,7 @@ class CodexWatchWalk(stu.StuReminderWalk):
 
     def pair(self):
         acme = self.facts['thread']
-        if self.coordinator() or self.connections():
+        if self.connections():
             raise StepFailed('fresh user already has Codex coordination state')
         guide = self.coordination + '/codex-instructions.md'
         read = 'import json,sys;from pathlib import Path;p=Path(sys.argv[1]);print(json.dumps(p.read_text() if p.is_file() else ""))'
@@ -163,12 +161,14 @@ class CodexWatchWalk(stu.StuReminderWalk):
                 capture = guest(self.vm, 'tail -n 60 ' + shlex.quote(path) + ' 2>/dev/null || true')
                 (self.out / (label + '-provisioning.log')).write_text(capture)
             raise
-        second = self.helper_call('connect', text='Harmless independent Codex transport test',
+        acme_root = next(e['roots'][0] for e in self.registry()['entities'] if e['id'] == 'acme')
+        second = self.helper_call('connect', workdir=acme_root, text='Harmless independent Codex transport test',
                                   provenance='Guest Codex-first source')['locator']
         marker = 'automatic-' + uuid.uuid4().hex[:12]
         self.helper_call('send', locator=second, message_id=marker,
                          text='Harmless Codex transport check ' + marker + '. No work is requested.')
-        target = self.wait_fact('automatic Codex destination', self.coordinator, bool)
+        target = self.wait_fact('automatic Codex destination',
+            lambda: next((r.get('binding') for r in self.connections() if r['locator'] == second), None), bool)
         codex = target['thread_id']
         owning_thread = next((r for r in self.threads() if r['thread_id'] == codex), {})
         if codex == acme or owning_thread.get('title') != 'Codex' or target['entity_id'] != 'acme':
@@ -234,18 +234,24 @@ print(json.dumps({'first_exit': one.returncode, 'retry_exit': two.returncode,
                     distinct_connections=len(set(paths)), codex_cli='isolated receiver fixture')
 
     def legacy(self):
+        acme_root = next(e['roots'][0] for e in self.registry()['entities'] if e['id'] == 'acme')
+        # This isolated repository represents the upstream project the historical
+        # channels were created for. Its origin is only read locally.
+        guest(self.vm, shlex.join(['git', '-C', acme_root, 'config', 'remote.origin.url',
+                                  'git@github.com:RichSpark/RichOS.git']))
         raw = self.coordination + '/rich-codex/to-rich.md'
         program = 'from pathlib import Path;import sys;p=Path(sys.argv[1]);p.parent.mkdir(parents=True,exist_ok=True);p.touch();print("true")'
         self.run_python(program, raw)
-        self.wait_fact('automatic legacy association', self.connections,
-            lambda rows: any(row.get('legacy_folder') for row in rows))
+        offsets = self.data + '/engine-state/codex-watch/watch/app-host/live-offsets.json'
+        read = 'import json,sys;from pathlib import Path;p=Path(sys.argv[1]);print(p.read_text() if p.exists() else "{}")'
+        self.wait_fact('live watcher cursor', lambda: self.run_python(read, offsets), lambda rows: raw in rows)
         marker = 'legacy-live-' + uuid.uuid4().hex[:12]
         program = 'import json,sys;open(sys.argv[1],"a").write("## Legacy Codex update\\n"+sys.argv[2]+"\\n");print("true")'
         self.run_python(program, raw, marker)
         records = self.wait_fact('legacy reply after association', self.inboxes,
             lambda rows: any(marker in row['text'] for row in rows))
         matches = [row for row in records if marker in row['text']]
-        if len(matches) != 1 or matches[0]['thread'] != self.coordinator()['thread_id']:
+        if len(matches) != 1 or matches[0]['thread'] != self.facts['owners'][1]:
             raise StepFailed('legacy reply after association reached the wrong conversation or duplicated')
         return dict(receipt=matches[0], still_reading_original=True)
 
