@@ -17,9 +17,9 @@ class Unavailable(ValueError):
 
 
 @contextlib.contextmanager
-def client(binary):
+def client(binary, *, cwd=None, env=None):
     with subprocess.Popen([binary, "app-server", "--listen", "stdio://"], stdin=subprocess.PIPE,
-                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0) as child:
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0, cwd=cwd, env=env) as child:
         try:
             with selectors.DefaultSelector() as ready:
                 ready.register(child.stdout, selectors.EVENT_READ)

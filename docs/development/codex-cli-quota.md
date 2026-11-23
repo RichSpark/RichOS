@@ -63,7 +63,10 @@ request and reports the outcome and resume command on its original connection.
 A read receipt can advance queued follow-ups only after that Codex turn
 succeeds. When a failed turn already has a chat, both retry paths ask it to
 check earlier progress before repeating work.
-Codex second reviews continue to use their existing Claude fallback.
+Codex second reviews and Pierce shadow adjudication use the same preflight,
+active-run polling and reset marker. A Codex second review can fall back to
+Claude. Their records include the bounded preflight and in-flight outcomes in
+`codex_quota` on the review row or the pair's adjudication record.
 
 RichDoctor's Configuration collection includes the last completed dispatch
 summary in the Codex connection watcher item. Its fixed fields record the

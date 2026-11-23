@@ -373,11 +373,11 @@ def quota_status():
         return dict(status="unavailable", limits=[], available_resets=None, ordinary_usage_allowed=None)
 
 
-def check_codex_quota(binary, expected_account=None, *, rpc=None, reading=None, active=None):
+def check_codex_quota(binary, expected_account=None, *, rpc=None, reading=None, active=None, cwd=None, env=None):
     """Read the active account and serialize redemption across RichOS jobs."""
     outcome = "unavailable"
     try:
-        with (codex_quota.client(binary) if rpc is None else contextlib.nullcontext(rpc)) as rpc:
+        with (codex_quota.client(binary, cwd=cwd, env=env) if rpc is None else contextlib.nullcontext(rpc)) as rpc:
             if reading is None:
                 reading = codex_quota.read(rpc)
             if expected_account is not None and reading.account != expected_account:
@@ -388,7 +388,7 @@ def check_codex_quota(binary, expected_account=None, *, rpc=None, reading=None, 
                 return reading, "none"
             if not reading.account:
                 return reading, "accountUnavailable"
-            config = rpc.request("config/read", {"cwd": os.getcwd(), "includeLayers": False}).get("config")
+            config = rpc.request("config/read", {"cwd": cwd or os.getcwd(), "includeLayers": False}).get("config")
             if not isinstance(config, dict):
                 return reading, "unavailable"
             if config.get("model_provider") not in (None, "openai") or config.get("openai_base_url"):
@@ -473,12 +473,12 @@ def quota_notice(path, reading, outcome):
                         f"Codex can draw from existing credits for eligible work. {reading.summary()}")
 
 
-class DispatchQuotaWatch:
-    def __init__(self, path, reading, outcome):
-        self.path = path
+class CodexQuotaWatch:
+    def __init__(self, reading, outcome, *, cwd=None, env=None, notify=None):
         self.account = reading.account if reading else None
         self.wake = threading.Event()
         self.source = self.outcome = None
+        self.cwd, self.env, self.notify = cwd, env, notify
         self.notice = (outcome, reading.exhausted_windows()) if reading else None
 
     @property
@@ -514,11 +514,12 @@ class DispatchQuotaWatch:
                     break
                 try:
                     if rpc is None:
-                        rpc = connection.enter_context(codex_quota.client(binary))
+                        rpc = connection.enter_context(codex_quota.client(binary, cwd=self.cwd, env=self.env))
                     reading = codex_quota.read(rpc)
                     if self.account is None:
                         self.account = reading.account
-                    reading, outcome = check_codex_quota(binary, self.account, rpc=rpc, reading=reading, active=active)
+                    reading, outcome = check_codex_quota(binary, self.account, rpc=rpc, reading=reading,
+                                                         active=active, cwd=self.cwd)
                 except (OSError, ValueError):
                     reading, outcome = None, "unavailable"
                 if (reading is None and outcome == "unavailable") or outcome == "unconfirmed":
@@ -528,10 +529,10 @@ class DispatchQuotaWatch:
                     self.source, self.outcome = source, outcome
                 windows = reading.exhausted_windows() if reading else []
                 notice = (outcome, windows)
-                if ((windows and active() and outcome != "resetInProgress") or
-                        outcome in ("reset", "alreadyRedeemed")) and notice != self.notice:
+                if self.notify and notice != self.notice and ((windows and active() and outcome != "resetInProgress")
+                                                               or outcome in ("reset", "alreadyRedeemed")):
                     self.notice = notice
-                    quota_notice(self.path, reading, outcome)
+                    self.notify(reading, outcome)
                 if outcome == "accountChanged":
                     break
 
@@ -639,7 +640,8 @@ def dispatch(locator, resume=False):
             reading, outcome = check_codex_quota(binary)
             preflight_ms = round((time.monotonic() - started) * 1000)
             quota_notice(path, reading, outcome)
-            watch = DispatchQuotaWatch(path, reading, outcome)
+            watch = CodexQuotaWatch(reading, outcome,
+                                    notify=lambda updated, result: quota_notice(path, updated, result))
             code, quota_failed = run_dispatch_attempt(binary, path, marker, state, prompt, recovering, watch)
             if (code and quota_failed and watch.account and
                     (outcome in ("none", "unavailable", "accountUnavailable") or watch.redeemed)):
