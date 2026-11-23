@@ -37,7 +37,9 @@ initial launch outcome is uncertain, recover the existing chat by its
 locator in the transcript. Messages require a recorded ID. Read sent history and retry an
 uncertain send with the same ID, text and reply-to. A different message needs
 a new ID. Saved replies wait for Codex's next read. The terminal watch prints
-framed replies once for their owning project, including after a restart.
+framed replies once across terminal restarts. Rich's terminal watches its own
+project and session pairs plus the registered company pairs in the same
+coordination root. The company folder continues to identify the app conversation.
 
 ```
 legacy-target.json                       # owner of the conventional legacy channels
@@ -56,8 +58,12 @@ ledger IDs. The source journals retain complete synced frames. A busy or
 damaged journal holds its own channel. The app saves a Stu inbox receipt before
 its advisory cursor. Replaying a cursor is idempotent against inbox history.
 Both review watchers use the same framed READY reader and deliver review results
-on the originating pair. Existing work, review and landing authorization still
-apply.
+on the originating pair. The terminal review watcher uses the same connections
+as the terminal notification watcher and checks its configured repositories.
+The first eligible watcher to schedule a company review claims it in the
+connection. The same watcher can retry it after a restart, while the other
+watcher leaves that review to its owner. Both watchers reuse an existing
+hold notice for the same READY and continue reading the connection.
 
 An upgrade preserves the old Markdown files and saved spool. The conventional
 `rich-codex` and `rich-codex-questions` channels belong to the company that
@@ -81,3 +87,6 @@ collection. It reads the bounded `engine-state/codex-watch/health.json`
 snapshot and reports its timestamp, deferred routing state, held source count
 and any recorded company repair outcome. The local `host-child.log` contains
 watcher errors. Startup logs record a successful or held company repair.
+For terminal delivery, the monitor output includes the connection locator and
+message ID. An unreadable journal emits a held-source diagnostic to the monitor's
+stderr and the next poll retries it.

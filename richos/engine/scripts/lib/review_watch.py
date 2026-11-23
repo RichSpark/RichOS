@@ -613,13 +613,11 @@ class World(object):
         (offset in to-rich.md and the pending handovers), updated in place."""
         to_rich = os.path.expanduser(os.environ.get("REVIEW_WATCH_TO_RICH") or DEFAULT_TO_RICH)
         to_codex = os.path.expanduser(os.environ.get("REVIEW_WATCH_TO_CODEX") or DEFAULT_TO_CODEX)
-        # Each terminal scans only its own dedicated pairs. The shared review
-        # state still fences verdicts by work and commit across terminal looks.
+        # Use the same Rich inbox as codex-watch. Terminal repository policy
+        # still comes from the project's existing review configuration.
         sid = MONITOR["session"]
         project = os.path.dirname(os.path.abspath(self.config)) if self.config else None
-        pairs = (pair for owner in channels.terminal_scopes(project, sid)
-                 for pair in channels.terminal_connections(owner))
-        dedicated, problems = self.channel_items(now, codex_state, pairs)
+        dedicated, problems = self.channel_items(now, codex_state, channels.rich_connections(project, sid))
         folder = os.path.dirname(to_rich)
         if channels.legacy_associated(folder) and not channels.legacy_live(folder):
             return dedicated, problems
@@ -780,8 +778,7 @@ class World(object):
     def channel_items(self, now, codex_state, connections):
         """The shared READY handler, with its own advisory reading position.
 
-        Only the app enumerates app-owned connections. A terminal enumerates
-        its own pairs and shares the terminal review state with other sessions.
+        The terminal shares its review state with replacement sessions.
         """
         pending = codex_state.setdefault("channel_pending", [])
         positions = codex_state.setdefault("channels", {})
@@ -789,13 +786,25 @@ class World(object):
         for path, endpoint in connections:
             if endpoint.get("legacy_folder") or endpoint["entity_id"] == channels.AUTOMATIC:
                 continue
-            owned.add(str(path))
+            locator = str(path)
+            owned.add(locator)
             try:
-                repos = self.channel_repositories(endpoint)
                 source = path / "to-rich.jsonl"
                 identity = channels.identity(source)
-                saved = positions.get(str(path), {})
+                if previous_entity := endpoint.get("previous_entity_id"):
+                    previous = channels.endpoint(previous_entity, endpoint["thread_id"], endpoint["connection_id"])
+                    if channels.moved_locator(previous) == path:
+                        previous = str(previous)
+                        if previous in positions:
+                            positions.setdefault(locator, positions.pop(previous))
+                        for item in pending:
+                            if item["channel"]["locator"] == previous:
+                                item["channel"]["locator"] = locator
+                saved = positions.get(locator, {})
                 offset = channels.position(source, saved)
+                if offset == source.stat().st_size:
+                    continue
+                repos = self.channel_repositories(endpoint)
                 # Source evidence is always recoverable from the journals. No
                 # timestamp association and no assumption that replies are tasks.
                 words = []
@@ -815,10 +824,10 @@ class World(object):
                             if isinstance(got, str):
                                 channel_reply(path, row["message_id"], "review-held", got)
                             elif got:
-                                got["channel"] = {"locator": str(path), "message_id": row["message_id"]}
+                                got["channel"] = {"locator": locator, "message_id": row["message_id"]}
                                 if not any(p["channel"] == got["channel"] and p["repo"] == got["repo"] and p["tip"] == got["tip"] for p in pending):
                                     pending.append(got)
-                    positions[str(path)] = dict(source_identity=identity, through=end)
+                    positions[locator] = dict(source_identity=identity, through=end)
             except (OSError, ValueError, KeyError) as exc:
                 print("review-watch: connection held %s: %s" % (path, exc), file=sys.stderr)
         items = []
@@ -1342,6 +1351,8 @@ class Watcher(object):
 
     # -- locks -------------------------------------------------------------------
     def take_lock(self, item, trigger, now, attempt):
+        if getattr(item, "channel", None) and not owns_channel_review(item):
+            return None
         path = lock_path(item.repo, item.tip)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         try:
@@ -1664,6 +1675,36 @@ class Watcher(object):
 # what is told
 # ---------------------------------------------------------------------------
 
+CHANNEL_VERDICT_PREFIX = "Automatic independent review observation:\n"
+
+
+def owns_channel_review(item):
+    """The first eligible review watcher owns this company's review across restarts."""
+    try:
+        with channels.locked(channels.root() / "coordinator.lock"):
+            path, endpoint = channels.connection(item.channel["locator"])
+            if endpoint["entity_id"] == channels.TERMINAL:
+                return True
+            key = hashlib.sha256(json.dumps([item.work, item.tip]).encode()).hexdigest()
+            claim = path / ("review-owner-" + key + ".json")
+            owner = os.path.realpath(state_root())
+            try:
+                return channels.load(claim)["owner"] == owner
+            except FileNotFoundError:
+                pass
+            # An older watcher may already have published a verdict without a claim.
+            if any(row.get("kind") == "review_result"
+                   and row.get("reply_to") == item.channel["message_id"]
+                   and row["text"].startswith(CHANNEL_VERDICT_PREFIX)
+                   for _, _, row in channels.records(path / "to-codex.jsonl")):
+                return False
+            channels.save(claim, {"owner": owner})
+            return True
+    except (OSError, ValueError, KeyError) as exc:
+        channels.diagnostic(item.channel["locator"], exc)
+        return False
+
+
 def channel_reply(locator, reply_to, identity, text):
     """Same durable operation on each side; replay reconciles a split write.
 
@@ -1674,8 +1715,17 @@ def channel_reply(locator, reply_to, identity, text):
     path, _ = channels.connection(locator)
     message_id = "review-" + hashlib.sha256((identity + ":" + reply_to).encode()).hexdigest()
     record = dict(version=1, message_id=message_id, kind="review_result", text=text, reply_to=reply_to)
-    for direction in ("to-codex", "to-rich"):
-        channels.append(path / (direction + ".jsonl"), record)
+    try:
+        channels.append(path / "to-codex.jsonl", record)
+    except channels.MessageConflict as conflict:
+        existing = conflict.existing
+        if (identity != "review-held" or existing.get("kind") != "review_result"
+                or existing.get("reply_to") != reply_to):
+            raise
+        # Another watcher reported a hold. Reuse its notice to repair any
+        # interrupted write to the other journal instead of holding the cursor.
+        record = existing
+    channels.append(path / "to-rich.jsonl", record)
 
 
 def publish_channel_results(rows, owners):
@@ -1688,7 +1738,7 @@ def publish_channel_results(rows, owners):
                 continue
             try:
                 channel_reply(channel["locator"], channel["message_id"], str(row.get("id")),
-                              "Automatic independent review observation:\n" + "\n".join(render_verdict(row, {})))
+                              CHANNEL_VERDICT_PREFIX + "\n".join(render_verdict(row, {})))
                 for notice_key, block in convergence_notices(row, rows, "codex"):
                     channel_reply(channel["locator"], channel["message_id"], notice_key, "\n".join(block))
             except (OSError, ValueError, KeyError) as exc:
