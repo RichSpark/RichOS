@@ -535,8 +535,10 @@ declare_rules() {
     'the Codex watcher is running with configured legacy channels'
   routine '^\[richos\] Codex watch: started \(process [1-9][0-9]*\)$' \
     'the Codex watcher started with the automatic transport'
-  routine '^\[richos\] Codex watch: automatic destination ready$' \
-    'RichOS published the destination for independent Codex messages'
+  routine '^\[richos\] Codex watch: project destination ready$' \
+    'RichOS resolved a registered company for Codex work'
+  routine '^\[richos\] Codex ownership repair: thread and delivery state moved$' \
+    'the one-time repair moved the existing Codex conversation and its delivery state'
   # THE SWEARMETER HISTORY READER (swearmeter_host.rs, 0234a504a): its background reader prints
   # one line when it first reads the local Claude and Codex histories, and again whenever the
   # count it read changes. It landed with no rule here, and the first B2 run against it was a

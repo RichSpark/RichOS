@@ -15,8 +15,10 @@ documents JSON lines over stdio, the `initialize` handshake and
 
 [Earned reset redemption](https://learn.chatgpt.com/docs/app-server#8-earned-rate-limit-resets-chatgpt)
 is `account/rateLimitResetCredit/consume`. Use one UUID per logical redemption
-and reuse it after an uncertain response. Codex chooses the next available
-reset if `creditId` is omitted. The documented outcomes are `reset`,
+and reuse it and the selected `creditId` after an uncertain response. RichOS
+passes the ID of the available reset with the earliest expiry, placing resets
+with no expiry last. When only the count is known, `creditId` is omitted and
+Codex selects the reset. The documented outcomes are `reset`,
 `alreadyRedeemed`, `nothingToReset` and `noCredit`. Read usage again after
 redemption. [Banked resets](https://help.openai.com/en/articles/20001498-how-resets-work-in-codex)
 cover the main included allowance. Scheduled reset times describe usage
@@ -47,18 +49,27 @@ lock and redeems one. A persistent attempt keys retries across concurrent
 terminal and app dispatches. Provider overrides, a missing account identity
 and non-main limits can leave automatic redemption unavailable.
 
-When included usage is exhausted, RichOS still sends the ordinary CLI turn so
-Codex can draw from eligible credits. If a known usage-limit failure occurs
-during a turn, RichOS rechecks the account and can retry once after a
-confirmed banked reset in the same Codex chat. A failed dispatch preserves the
+While a turn is active, RichOS responds to quota exhaustion notifications when
+available and otherwise checks the pinned account every five seconds over a
+reused App Server connection. If preflight could not identify the account, the
+watch uses the first identified account it reads during the run. It uses the same
+reset lock and attempt marker as preflight. Codex can draw from eligible credits
+when no banked reset is available.
+Billing is controlled by Codex, so credits can also be drawn before exhaustion
+is reported or while redemption is pending. If a known usage-limit failure occurs
+during a turn, RichOS rechecks the account and can retry once after a confirmed
+banked reset in the same Codex chat. A failed dispatch preserves the
 request and reports the outcome and resume command on its original connection.
 A read receipt can advance queued follow-ups only after that Codex turn
 succeeds. When a failed turn already has a chat, both retry paths ask it to
 check earlier progress before repeating work.
-Codex second reviews continue to use their existing Claude fallback.
+Codex second reviews and Pierce shadow adjudication use the same preflight,
+active-run polling and reset marker. A Codex second review can fall back to
+Claude. Their records include the bounded preflight and in-flight outcomes in
+`codex_quota` on the review row or the pair's adjudication record.
 
 RichDoctor's Configuration collection includes the last completed dispatch
 summary in the Codex connection watcher item. Its fixed fields record the
-quota read and reset outcomes, preflight and elapsed milliseconds and the
-process exit. Usage amounts and account identifiers are omitted from that
-diagnostic summary.
+quota read and reset outcomes, the in-flight check source and reset outcome,
+preflight and elapsed milliseconds and the process exit. Usage amounts and
+account identifiers are omitted from that diagnostic summary.

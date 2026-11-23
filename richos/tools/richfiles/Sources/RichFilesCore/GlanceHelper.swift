@@ -65,12 +65,15 @@ public enum GlanceHelper {
         public var shortcut: Shortcut
         public var againShortcut: Shortcut = .again
         public var textShortcut: Shortcut = .copyText
-        public var background: Bool
+        public private(set) var background: Bool
         public var menuBar: Bool
+        fileprivate var backgroundChosen = false
 
-        public static let initial = Self(enabled: false, shortcut: .standard, background: false, menuBar: true)
+        public static let initial = Self(enabled: false, shortcut: .standard, background: true, menuBar: true)
 
-        private enum CodingKeys: String, CodingKey { case enabled, shortcut, againShortcut, textShortcut, background, menuBar }
+        private enum CodingKeys: String, CodingKey {
+            case enabled, shortcut, againShortcut, textShortcut, background, menuBar, backgroundChosen
+        }
 
         private init(enabled: Bool, shortcut: Shortcut, background: Bool, menuBar: Bool) {
             self.enabled = enabled
@@ -85,8 +88,9 @@ public enum GlanceHelper {
             shortcut = try values.decode(Shortcut.self, forKey: .shortcut)
             againShortcut = try values.decodeIfPresent(Shortcut.self, forKey: .againShortcut) ?? .again
             textShortcut = try values.decodeIfPresent(Shortcut.self, forKey: .textShortcut) ?? .copyText
-            background = try values.decodeIfPresent(Bool.self, forKey: .background) ?? false
-            menuBar = try values.decodeIfPresent(Bool.self, forKey: .menuBar) ?? true
+            background = try values.decodeIfPresent(Bool.self, forKey: .background) ?? Self.initial.background
+            menuBar = try values.decodeIfPresent(Bool.self, forKey: .menuBar) ?? Self.initial.menuBar
+            backgroundChosen = try values.decodeIfPresent(Bool.self, forKey: .backgroundChosen) ?? false
         }
 
         public subscript(action: CaptureRequest.Action) -> Shortcut {
@@ -106,9 +110,10 @@ public enum GlanceHelper {
             }
         }
 
-        public func settingBackground(_ enabled: Bool, firstUse: Bool) -> Self {
+        public func settingBackground(_ enabled: Bool, firstUse: Bool, userChoice: Bool = true) -> Self {
             var next = self
             next.background = enabled
+            if userChoice { next.backgroundChosen = true }
             if enabled && firstUse { next.enabled = true }
             return next
         }
@@ -153,20 +158,36 @@ public enum GlanceHelper {
 
     /// Keep the old RichOS preference file so existing chords and explicit Off survive the change.
     public struct Store: Sendable {
+        public struct Record: Sendable {
+            public let preferences: Preferences
+            public let firstUse: Bool
+            public let migratedBackground: Bool
+        }
+
         public let directory: URL
         private let preference: URL
+        private let diagnostics: URL
         public var endpoint: URL { directory.appendingPathComponent("port") }
 
         public init(support: URL = GlanceHelper.applicationSupport) {
             directory = support.appendingPathComponent("app.richos.richglance/Helper", isDirectory: true)
             preference = support.appendingPathComponent("com.richos.app/richglance-shortcut.json")
+            diagnostics = support.deletingLastPathComponent().appendingPathComponent("Logs/RichOS", isDirectory: true)
         }
 
-        public func read() throws -> (preferences: Preferences, firstUse: Bool) {
+        public func read() throws -> Record {
             do {
-                return (try JSONDecoder().decode(Preferences.self, from: Data(contentsOf: preference)), false)
+                let saved = try JSONDecoder().decode(Preferences.self, from: Data(contentsOf: preference))
+                guard !saved.background, !saved.backgroundChosen else {
+                    return Record(preferences: saved, firstUse: false, migratedBackground: false)
+                }
+                // Old shortcut saves wrote the default Off. Only the old background switch
+                // recorded a login change, so that surviving receipt can identify a legacy opt-out.
+                let optedOut = RichFilesDiagnostics.hasCompletedBackgroundChange(in: diagnostics)
+                let migrated = saved.settingBackground(!optedOut, firstUse: false, userChoice: optedOut)
+                return Record(preferences: migrated, firstUse: false, migratedBackground: true)
             } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
-                return (.initial, true)
+                return Record(preferences: .initial, firstUse: true, migratedBackground: false)
             } catch {
                 throw Problem("Could not read the RichGlance shortcut settings.")
             }
@@ -189,7 +210,7 @@ public enum GlanceHelper {
             }
         }
 
-        public func restore(_ record: (preferences: Preferences, firstUse: Bool)) throws {
+        public func restore(_ record: Record) throws {
             if record.firstUse { try FileManager.default.removeItem(at: preference) }
             else { try write(record.preferences) }
         }
