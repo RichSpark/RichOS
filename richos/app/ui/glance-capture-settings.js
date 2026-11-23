@@ -78,6 +78,7 @@
     const open = el("open"), copy = el("copy"), history = el("history"), historySummary = el("historySummary");
     const confirmation = el("confirmation"), cancel = el("cancel"), remove = el("remove");
     const message = el("message"), shortcut = el("shortcut");
+    const background = el("background"), menuBar = el("menuBar"), backgroundSummary = el("backgroundSummary");
     let listening = false;
 
     function paintSurface() {
@@ -96,6 +97,16 @@
           : "Off. Turn on to keep screenshots and editable marks for seven days.";
       }
       toggle.disabled = record.disabled = !view || shortcutBusy;
+      if (onPage) {
+        const backgroundOn = view?.background === true;
+        background.disabled = toggle.disabled;
+        menuBar.disabled = toggle.disabled || !backgroundOn;
+        background.setAttribute("aria-checked", String(backgroundOn));
+        menuBar.setAttribute("aria-checked", String(backgroundOn && view?.menuBar === true));
+        backgroundSummary.textContent = backgroundOn && ["approval", "unavailable"].includes(view.service)
+          ? "Allow RichGlance Capture in Login Items to use it when RichOS is quit."
+          : "Start at login and capture from any app.";
+      }
       if (!view) return;
       toggle.setAttribute("aria-checked", String(view.enabled));
       toggle.closest(".dict-card")?.classList.toggle("is-on", view.registered);
@@ -139,8 +150,11 @@
     }
 
     async function updateShortcut(enabled, keys) {
+      await saveCapture("glance_capture_configure", { enabled, shortcut: keys }, listening);
+    }
+
+    async function saveCapture(command, args, replacing = false) {
       if (!view || shortcutBusy) return;
-      const replacing = listening;
       listening = false;
       shortcutBusy = true;
       ++shortcutRead;
@@ -148,7 +162,7 @@
       setText(saved, "Saving…");
       paint();
       try {
-        view = await call("glance_capture_configure", { enabled, shortcut: keys });
+        view = await call(command, args);
         setText(saved, "Saved.");
       } catch (error) {
         setText(saved, "");
@@ -181,6 +195,10 @@
     }
 
     toggle.addEventListener("click", () => updateShortcut(!view.enabled, view.shortcut));
+    if (onPage) {
+      background.addEventListener("click", () => saveCapture("glance_capture_set", { setting: "background", enabled: !view.background }));
+      menuBar.addEventListener("click", () => saveCapture("glance_capture_set", { setting: "menuBar", enabled: !view.menuBar }));
+    }
     record.addEventListener("click", () => {
       listening = !listening;
       setText(feedback, "");
@@ -275,7 +293,7 @@
             </div>
             <button class="dict-switch" role="switch" type="button" id="richglance-capture-on" aria-label="Capture from any app"></button>
           </div>
-          <p class="dict-copy-note"><span>Use Capture Settings to enable the menu bar and shortcut when RichOS is quit.</span></p>
+          <p class="dict-copy-note"><span>Manage background capture and the menu bar in Capture Settings.</span></p>
           <button type="button" class="dict-btn" id="richglance-background-settings">Capture Settings…</button>
           <section class="dict-sec" id="richglance-capture-fields">
             <div class="dict-sec-h"><h4 class="dict-sec-t">Your shortcut</h4><span class="dict-saved" role="status" hidden>Saved.</span></div>
@@ -351,6 +369,7 @@
     const surface = bind(page, {
       toggle: "gp-shortcut", record: "gp-change", feedback: "gp-key-error", saved: "gp-saved",
       keycaps: "gp-keys", keyHint: "gp-key-hint", summary: "gp-shortcut-summary", shortcut: "gp-cap",
+      background: "gp-background", menuBar: "gp-menu-bar", backgroundSummary: "gp-background-summary",
       open: "gp-after-edit", copy: "gp-after-copy", history: "gp-history", historySummary: "gp-history-summary",
       confirmation: "gp-history-confirm", cancel: "gp-history-keep", remove: "gp-history-remove", message: "gp-workflow-status",
     });
@@ -401,13 +420,7 @@
         }
       });
     }
-    const backgroundSettings = document.createElement("button");
-    backgroundSettings.type = "button";
-    backgroundSettings.id = "gp-background-settings";
-    backgroundSettings.className = "gp-btn";
-    backgroundSettings.textContent = "Capture Settings…";
-    $("gp-key-error").after(backgroundSettings);
-    bindBackgroundSettings(backgroundSettings, surface.message);
+    bindBackgroundSettings($("gp-background-settings"), surface.message);
     external($("gp-capture"), "glance_capture_open", {}, "Opening capture…");
     external($("gp-richfiles"), "richfiles_open", { imageViewerSettings: true }, "Opening RichFiles Settings…");
 
