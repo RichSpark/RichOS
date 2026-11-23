@@ -335,6 +335,130 @@ fn archive_unfinished_turns(path: &Path, thread_id: &str) -> io::Result<()> {
     Ok(())
 }
 
+// Move the continuity projections and preserve the original journal envelopes.
+#[cfg(target_os = "macos")]
+fn move_continuity(data: &Path, repair: &Move) -> io::Result<Vec<String>> {
+    let path = data.join("ecs/ecs.sqlite3");
+    if !path.try_exists()? {
+        return Ok(Vec::new());
+    }
+    migrate_continuity(&path, repair).map_err(io::Error::other)
+}
+
+#[cfg(target_os = "macos")]
+fn migrate_continuity(
+    path: &Path,
+    repair: &Move,
+) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+    use rusqlite::{
+        named_params, params, Connection, OpenFlags, OptionalExtension, TransactionBehavior,
+    };
+    use std::time::Duration;
+
+    const MOVE_SQL: &str = include_str!("../../../../../engine/ecs/core/legacy_codex_move.sql");
+    let mut connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?;
+    // A concurrent writer defers this move to the next launch.
+    connection.busy_timeout(Duration::ZERO)?;
+    connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL;")?;
+    let db = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let source = repair.from.as_str();
+    let destination = repair.to.as_str();
+    let thread = &repair.thread_id;
+    let owner: Option<String> = db
+        .query_row(
+            "SELECT entity_id FROM ecs_threads WHERE thread_id = ?",
+            [thread],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(owner) = owner else {
+        return Ok(Vec::new());
+    };
+    let sessions = {
+        let mut query = db.prepare(
+            "SELECT session_id FROM ecs_sessions WHERE thread_id = ?1 AND entity_id = ?2",
+        )?;
+        let rows = query.query_map(params![thread, owner], |row| row.get(0))?;
+        rows.collect::<Result<Vec<String>, _>>()?
+    };
+    let receipt = format!("legacy-codex-company:{thread}");
+    if owner == destination {
+        let moved: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM ecs_events WHERE idempotency_key = ?1
+             AND event_type = 'thread.legacy_codex_rehomed' AND entity_id = ?2 AND thread_id = ?3
+             AND json_extract(payload_json, '$.source_entity_id') = ?4)",
+            params![receipt, destination, thread, source],
+            |row| row.get(0),
+        )?;
+        return if moved {
+            Ok(sessions)
+        } else {
+            Err(invalid("Codex continuity destination has no repair receipt").into())
+        };
+    }
+    if owner != source {
+        return Err(invalid("Codex continuity belongs to another company").into());
+    }
+    let at =
+        time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339)?;
+    db.execute(
+        "INSERT INTO ecs_events(event_id, schema_version, event_type, occurred_at,
+         person_id, entity_id, thread_id, actor_kind, actor_id, source_ref, idempotency_key, payload_json)
+         VALUES (?1, 1, 'thread.legacy_codex_rehomed', ?2, 'ceo-default', ?3, ?4,
+         'app', 'richos-app-v1', 'richos:legacy-codex-company', ?5, ?6)",
+        params![
+            crate::util::new_id("evt"),
+            at,
+            destination,
+            thread,
+            receipt,
+            serde_json::json!({"source_entity_id": source}).to_string(),
+        ],
+    )?;
+    for statement in MOVE_SQL
+        .split(';')
+        .map(str::trim)
+        .filter(|sql| !sql.is_empty())
+    {
+        db.execute(
+            statement,
+            named_params! {
+                ":source": source, ":destination": destination, ":thread": thread,
+            },
+        )?;
+    }
+    db.commit()?;
+    Ok(sessions)
+}
+
+fn move_session_evidence(
+    state: &Path,
+    from: &Target,
+    to: &Target,
+    known_sessions: &[String],
+) -> io::Result<()> {
+    for evidence in directories(&state.join("evidence"))? {
+        let Some(session) = evidence.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let binding = evidence.join("binding.json");
+        let mut record: Value = match read_record(&binding) {
+            Ok(Some(record)) => record,
+            Ok(None) => continue,
+            Err(error) if known_sessions.iter().any(|id| id == session) => return Err(error),
+            Err(_) => continue,
+        };
+        if from.owns(&record) && record["session_id"] == session && component(session).is_ok() {
+            record["entity_id"] = json!(to.entity_id);
+            save(&binding, &record)?;
+        }
+    }
+    Ok(())
+}
+
 /// One-time offline data correction, before opening the ledger or starting its
 /// readers. The intent also lets old locators continue to resolve. Directory
 /// renames preserve inbox and journal inodes, so their cursors stay valid.
@@ -443,7 +567,17 @@ fn repair(data: &Path, coordination: &Path, registry: &EntityRegistry) -> io::Re
     if from.entity_id == to.entity_id || !registry.contains(&to.entity_id) {
         return Err(invalid("Codex repair requires its registered destination"));
     }
-    let inboxes = data.join("engine-state/messages");
+    let state = data.join("engine-state");
+    #[cfg(target_os = "macos")]
+    let sessions = move_continuity(data, &repair)?;
+    #[cfg(not(target_os = "macos"))]
+    let sessions = if data.join("ecs/ecs.sqlite3").try_exists()? {
+        return Err(invalid("Codex continuity repair requires the desktop app"));
+    } else {
+        Vec::new()
+    };
+    move_session_evidence(&state, &from, &to, &sessions)?;
+    let inboxes = state.join("messages");
     move_dir(
         &thread_dir(&connections, &from),
         &thread_dir(&connections, &to),
@@ -487,7 +621,9 @@ fn repair(data: &Path, coordination: &Path, registry: &EntityRegistry) -> io::Re
 /// A restart can continue with the rest of the profile even if this move has
 /// crossed a persistence boundary. Hold its deliveries until a launch finishes it.
 pub fn pending_legacy_repair(data: &Path, coordination: &Path) -> Option<(EntityId, String)> {
-    let repair = read_record::<Move>(&coordination.join(MOVE)).ok().flatten()?;
+    let repair = read_record::<Move>(&coordination.join(MOVE))
+        .ok()
+        .flatten()?;
     (!repair.complete && repair.data_dir == data).then_some((repair.to, repair.thread_id))
 }
 

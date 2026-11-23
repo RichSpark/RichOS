@@ -10034,7 +10034,7 @@
     },
     "ecs/core/ecs_core.py#load": {
       "source": "ecs/core/ecs_core.py",
-      "sha256": "57a037f5ad398cfff9f12c3259bb9e155cb8798177c38d00314a41f23af515b7",
+      "sha256": "92472cf78a5b087f52c737c327d25ec92f789aab1b69cfb33ce5acaf6b223820",
       "evidence": "Module-load imports and initializers reviewed: only stdlib, literal constants, regular expressions and class/dataclass definitions. No EventStore is instantiated.",
       "keys": [],
       "edges": []
@@ -13345,7 +13345,7 @@
     },
     "ecs/core/ecs_core.py": {
       "source": "ecs/core/ecs_core.py",
-      "sha256": "57a037f5ad398cfff9f12c3259bb9e155cb8798177c38d00314a41f23af515b7",
+      "sha256": "92472cf78a5b087f52c737c327d25ec92f789aab1b69cfb33ce5acaf6b223820",
       "evidence": "Stdlib store/parser/renderer: explicit SQLite/JSON and text inputs, fixed SQL migrations, no shell execution, engine config read or imports beyond the bound ECS core modules.",
       "keys": [],
       "edges": [
@@ -13444,7 +13444,7 @@
     },
     "ecs/tests/test_app.py#answer-operator": {
       "source": "ecs/tests/test_app.py",
-      "sha256": "0cde5be52a2542eba4b132d57d22ec07ecbc617bead77c17aedf869a84f94ada",
+      "sha256": "546c5a0b1ceea4417db5d1f11832344018492925265f12f7236356675bda0df3",
       "evidence": "Only AnswerCompleteTests/OperatorCompleteTests and inherited WorkSeatTests call/bind/rows/observe helpers run. Private SQLite and Git fixtures, fixed CLI requests, host-only MCP refusal controls. No complete-obligation/verified-work command or other test class runs. Renewed 2026-10-09 (second review slice 4): one AppProtocolTests case writes a private scope carrying about 96 KB of literal user words and calls checkpoint, then an oversized one. Renewed 2026-10-14: prepare-turn invokes the existing current, bind, receipt-sync and brief handlers in the same process. New fixed private tests cover idempotent binding, concurrent seats, receipt failure and the final stale-binding fence; no additional dynamic import target.",
       "keys": [],
       "edges": [
@@ -15942,7 +15942,7 @@
     },
     "ecs/tests/test_app.py": {
       "source": "ecs/tests/test_app.py",
-      "sha256": "0cde5be52a2542eba4b132d57d22ec07ecbc617bead77c17aedf869a84f94ada",
+      "sha256": "546c5a0b1ceea4417db5d1f11832344018492925265f12f7236356675bda0df3",
       "keys": [],
       "edges": [
         {

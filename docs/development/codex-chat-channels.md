@@ -65,6 +65,10 @@ registered the RichOS repository. If the first cutover filed their Codex
 conversation under the company that was open, the upgrade moves the original
 thread and its pairs to the repository's registered company. Inbox receipts
 and cursors keep their identities and previously issued locators still resolve.
+Rich and Stu keep their saved native sessions and transcript paths. The
+continuity store records the move and retains its original journal entries.
+If a repair cannot finish during startup, other conversations remain usable.
+The app holds delivery for the affected conversation and retries at the next launch.
 On the first start with the new app cursor, the watcher
 starts at the end of each existing incoming Markdown file. Subsequent appends
 use a separate live spool and deterministic receipt IDs. Archive contents and
