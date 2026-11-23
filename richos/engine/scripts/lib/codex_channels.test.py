@@ -95,19 +95,25 @@ class Channels(unittest.TestCase):
             self.assertIn(first, output.getvalue())
             self.assertEqual(watcher.tick(state, out=io.StringIO(), sid="rich-session-a"), 0)
 
-    def quota_fixture(self, used=100, resets=1, fail=False, fail_once=False, uncertain=False):
+    def quota_fixture(self, used=100, resets=1, fail=False, fail_once=False, uncertain=False,
+                      reset_details=None, midrun=None, concurrent_runs=1, preflight_failed=False):
         binary = self.root / "codex"
         ledger = self.root / "cli-events"
         binary.write_text(f"#!{sys.executable}\n" + r"""
-import json, sys
+import json, sys, time
 from pathlib import Path
+from threading import Event
 ledger = Path(sys.argv[0]).with_name("cli-events")
 def record(value):
     with ledger.open("a") as out:
         out.write(json.dumps(value) + "\n")
 def calls():
     return [json.loads(line) for line in ledger.read_text().splitlines()] if ledger.exists() else []
-""" + f"used, resets, fail, fail_once, uncertain = {used}, {resets}, {fail}, {fail_once}, {uncertain}\n" + """
+""" + f"""
+used, resets, fail, fail_once, uncertain = {used}, {resets}, {fail}, {fail_once}, {uncertain}
+details, midrun, concurrent_runs = {reset_details!r}, {midrun!r}, {concurrent_runs}
+preflight_failed = {preflight_failed}
+""" + """
 if sys.argv[1] == "app-server":
     for line in sys.stdin:
         request = json.loads(line)
@@ -121,27 +127,45 @@ if sys.argv[1] == "app-server":
             result = {"config": {"model_provider": "openai"}}
         if method == "account/rateLimits/read":
             events = calls()
+            if preflight_failed and not events:
+                sys.exit(1)
             redeemed = any(x[0] == "reset" for x in events)
-            percent = 0 if redeemed else 100 if fail_once and any(x[0] == "exec" for x in events) else used
+            runs = sum(x[0] == "exec" for x in events)
+            exhausted = (fail_once and runs > 0) or (midrun and runs >= concurrent_runs)
+            percent = 0 if redeemed else 100 if exhausted else used
+            credit_rows = [] if uncertain and any(x[0] == "unconfirmed" for x in events) else details
             result = {
                 "accountId": "fixture-account", "ordinaryUsageAllowed": percent < 100,
                 "rateLimits": {"limitId": "codex", "primary": {"usedPercent": percent,
                     "windowDurationMins": 10080, "resetsAt": 4200000000},
                     "credits": {"hasCredits": True, "unlimited": False, "balance": "12.345"}},
-                "rateLimitResetCredits": {"availableCount": resets - int(redeemed), "credits": None},
+                "rateLimitResetCredits": {"availableCount": resets - int(redeemed), "credits": credit_rows},
             }
         if method == "account/rateLimitResetCredit/consume":
             key = request["params"]["idempotencyKey"]
             if uncertain and not any(x[0] == "unconfirmed" for x in calls()):
-                record(["unconfirmed", key])
+                record(["unconfirmed", key, request["params"].get("creditId")])
                 sys.exit(1)
-            record(["reset", key])
+            record(["reset", key, request["params"].get("creditId")])
             result = {"outcome": "reset"}
         print(json.dumps({"id": request["id"], "result": result}), flush=True)
 else:
     previous_exec = any(x[0] == "exec" for x in calls())
     record(["exec", sys.argv[1:], sys.stdin.read()])
     print(json.dumps({"type": "thread.started", "thread_id": "quota-session"}), flush=True)
+    if midrun == "event":
+        print(json.dumps({"method": "account/rateLimits/updated", "params": {"rateLimits": {
+            "limitId": "codex", "primary": {"usedPercent": 100, "resetsAt": 4200000000}}}}), flush=True)
+    if midrun:
+        # Simulate a successful request that uses credits if no reset arrives.
+        # The deadline only bounds the fixture when the dispatcher never redeems.
+        deadline = time.monotonic() + 4
+        ready = Event()
+        while not any(row[0] == "reset" for row in calls()):
+            if time.monotonic() >= deadline:
+                record(["credits"])
+                break
+            ready.wait(0.01)
     if fail or fail_once and not previous_exec:
         print(json.dumps({"type": "turn.failed", "error": {"message": "You’ve hit your usage limit."}}))
         sys.exit(1)
@@ -213,7 +237,7 @@ else:
         followup = "Retry this correction after the limit"
         late = "Deliver this later correction too"
 
-        def run(binary, path, marker, state, prompt):
+        def run(binary, path, marker, state, prompt, watch):
             prompts.append(prompt)
             if len(prompts) == 1:
                 state["session_id"] = "fixture-session"
@@ -249,14 +273,57 @@ else:
         self.assertEqual([row[0] for row in calls()], ["exec"])
         self.assertIn("existing credits for eligible work", c.read(pair, "to-rich")["records"][0]["text"])
 
+    def test_live_codex_rate_limit_event_redeems_before_billing_credits(self):
+        calls = self.quota_fixture(used=99, midrun="event")
+        pair = self.connect(self.a)
+        with mock.patch.object(c, "QUOTA_POLL_SECONDS", 60, create=True):
+            self.assertEqual(c.dispatch(pair), 0)
+        self.assertEqual([row[0] for row in calls()], ["exec", "reset"])
+        self.assertIn("used a banked reset", c.read(pair, "to-rich")["records"][0]["text"])
+        health = c.load(c.root() / "quota/dispatch-health.json")
+        self.assertEqual((health["in_flight_source"], health["in_flight_reset"]), ("event", "reset"))
+
+    def test_live_codex_poll_redeems_once_across_two_successful_runs(self):
+        calls = self.quota_fixture(used=99, resets=2, midrun="poll", concurrent_runs=2)
+        first = self.connect(self.a)
+        second = c.connect("Independent", "Fixture", terminal_session="rich-terminal")["locator"]
+        with mock.patch.object(c, "QUOTA_POLL_SECONDS", 0.05, create=True), \
+             concurrent.futures.ThreadPoolExecutor(2) as pool:
+            self.assertEqual(list(pool.map(c.dispatch, (first, second))), [0, 0])
+        self.assertEqual([row[0] for row in calls()], ["exec", "exec", "reset"])
+        self.assertIsNone(calls()[-1][2])
+
+    def test_live_codex_poll_recovers_from_failed_preflight_read(self):
+        calls = self.quota_fixture(used=99, midrun="poll", preflight_failed=True)
+        pair = self.connect(self.a)
+        with mock.patch.object(c, "QUOTA_POLL_SECONDS", 0.05):
+            self.assertEqual(c.dispatch(pair), 0)
+        self.assertEqual([row[0] for row in calls()], ["exec", "reset"])
+        health = c.load(c.root() / "quota/dispatch-health.json")
+        self.assertEqual((health["in_flight_source"], health["in_flight_reset"]), ("poll", "reset"))
+
+    def test_codex_redeems_the_soonest_expiring_available_reset(self):
+        details = [dict(id=credit_id, status=status, expiresAt=expiry, resetType="codexRateLimits")
+                   for credit_id, status, expiry in (("later", "available", 4100000000),
+                                                     ("no-expiry", "available", None),
+                                                     ("expired", "available", 1),
+                                                     ("redeemed", "redeemed", 3800000000),
+                                                     ("soonest", "available", 4000000000))]
+        calls = self.quota_fixture(resets=3, reset_details=details)
+        self.assertEqual(c.dispatch(self.connect(self.a)), 0)
+        self.assertEqual(calls()[0][2], "soonest")
+
     def test_codex_reuses_reset_key_after_an_uncertain_response(self):
-        calls = self.quota_fixture(uncertain=True)
+        details = [dict(id="initial", status="available", expiresAt=4000000000, resetType="codexRateLimits")]
+        calls = self.quota_fixture(uncertain=True, reset_details=details)
         first, second = self.connect(self.a), self.connect(self.b)
         self.assertEqual(c.dispatch(first), 0)
         self.assertEqual(c.dispatch(second), 0)
         rows = calls()
         self.assertEqual([row[0] for row in rows], ["unconfirmed", "exec", "reset", "exec"])
         self.assertEqual(rows[0][1], rows[2][1])
+        self.assertEqual(rows[0][2], "initial")
+        self.assertEqual(rows[0][2], rows[2][2])
         self.assertIn("unconfirmed", c.read(first, "to-rich")["records"][0]["text"])
 
     def test_codex_exhaustion_during_run_resumes_same_chat_after_reset(self):
@@ -407,7 +474,7 @@ else:
         after = "Sent after that read"
         prompts = []
 
-        def run(binary, path, marker, state, prompt):
+        def run(binary, path, marker, state, prompt, watch):
             prompts.append(prompt)
             if len(prompts) == 1:
                 state["session_id"] = "initial-chat"
