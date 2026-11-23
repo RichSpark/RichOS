@@ -21,6 +21,8 @@ public enum WindowGesturePreferences {
         public static let desktopDelete = Self(rawValue: 4)
         public static let tiling = Self(rawValue: 8)
         public static let switcher = Self(rawValue: 16)
+        public static let desktopFolder = Self(rawValue: 32)
+        public static let desktop: Self = [.desktopDelete, .desktopFolder]
     }
 
     public enum Status: String {

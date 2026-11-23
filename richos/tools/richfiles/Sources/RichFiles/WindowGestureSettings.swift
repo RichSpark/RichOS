@@ -31,7 +31,7 @@ public enum WindowGestureService {
                     // Keep the existing approval when the old helper survives an app-bundle swap.
                     refreshInstalledHelper()
                 } else if status == .notRegistered || status == .notFound,
-                          action == "register" || selection.contains(.desktopDelete) {
+                          action == "register" || !selection.intersection(.desktop).isEmpty {
                     try item.register()
                 }
             case "unregister":
@@ -123,12 +123,14 @@ struct WindowGestureSettings: View {
     private var guidanceColor: Color { BrowserPalette(colorScheme).hint }
 
     private var enabled: Bool {
-        let choices: Preferences.Selection = desktopShortcut ? .desktopDelete : [.titleBar, .dock, .tiling, .switcher]
+        let choices: Preferences.Selection = desktopShortcut ? .desktop : [.titleBar, .dock, .tiling, .switcher]
         return !selection.intersection(choices).isEmpty
     }
 
     var body: some View {
         if desktopShortcut {
+            Toggle("Double-click desktop folders to open them in RichFiles", isOn: toggle(.desktopFolder))
+                .disabled(updating)
             Toggle("Press Delete to move selected desktop items to Trash", isOn: toggle(.desktopDelete))
                 .disabled(updating)
         } else {
@@ -151,7 +153,7 @@ struct WindowGestureSettings: View {
         }
         if enabled {
             Text(desktopShortcut
-                ? "This shortcut works on the macOS desktop even after you quit RichFiles."
+                ? "Desktop shortcuts work even after you quit RichFiles."
                 : "These gestures work in other apps and continue after you quit RichOS and RichFiles.")
                 .foregroundStyle(guidanceColor)
             if !desktopShortcut && selection.contains(.titleBar) && !nativeTitleBarIsOff {
@@ -168,7 +170,7 @@ struct WindowGestureSettings: View {
             } else if registration == "unavailable" || registration == "off" {
                 Text("RichFiles Window Gestures could not start. Try again from the installed copy of RichFiles.")
                     .foregroundStyle(guidanceColor)
-                Button(desktopShortcut ? "Retry Desktop Shortcut" : "Retry Window Gestures") { synchronize("register") }
+                Button(desktopShortcut ? "Retry Desktop Shortcuts" : "Retry Window Gestures") { synchronize("register") }
                     .buttonStyle(BrowserButtonStyle(bordered: true)).disabled(updating)
             } else if let runtime {
                 permissions(runtime)
@@ -220,8 +222,8 @@ struct WindowGestureSettings: View {
     private func permissionGuidance(accessibility: Bool) -> String {
         if desktopShortcut {
             return accessibility
-                ? "In Accessibility, add and allow RichFiles Window Gestures to check whether the desktop is focused."
-                : "In Input Monitoring, add and allow RichFiles Window Gestures to detect the Delete key."
+                ? "In Accessibility, add and allow RichFiles Window Gestures to identify items on the desktop."
+                : "In Input Monitoring, add and allow RichFiles Window Gestures to detect desktop mouse and keyboard shortcuts."
         }
         return accessibility
             ? "In Accessibility, add and allow RichFiles Window Gestures to move and minimize other apps’ windows."

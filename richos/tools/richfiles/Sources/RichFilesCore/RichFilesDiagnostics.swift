@@ -7,7 +7,7 @@ public enum RichFilesDiagnostics {
         case listing, listingVisible, copy, move, recovery, gitHistory, gitComparison, windowPlacement, transferStall
         case cleanupScan, cleanupDuplicates, cleanupTrash, cleanupDelete, openWithDiscovery
         case windowGestureAvailability, windowGestureMaximize, windowGestureRestore
-        case windowGestureDockMinimize, windowGestureDockRestore, desktopDeleteShortcut
+        case windowGestureDockMinimize, windowGestureDockRestore, desktopDeleteShortcut, desktopFolderOpen
         case windowGestureTile, windowGestureTileRestore
         case windowSwitcherList, windowSwitcherActivate
         case glanceCaptureFrame, glanceCaptureOutput, glanceCaptureSession, glanceScrollCapture, glanceCompare, glanceOCR, glanceSearch, glancePin, glanceRedactedCopy, glanceShare
@@ -27,7 +27,7 @@ public enum RichFilesDiagnostics {
         fileprivate var logFilename: String {
             switch self {
             case .windowGestureAvailability, .windowGestureMaximize, .windowGestureRestore,
-                 .windowGestureDockMinimize, .windowGestureDockRestore, .desktopDeleteShortcut,
+                 .windowGestureDockMinimize, .windowGestureDockRestore, .desktopDeleteShortcut, .desktopFolderOpen,
                  .windowGestureTile, .windowGestureTileRestore, .windowSwitcherList, .windowSwitcherActivate:
                 return RichFilesDiagnostics.gestureFilename
             default:
