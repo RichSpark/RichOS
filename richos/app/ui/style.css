@@ -3136,6 +3136,7 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
    places a chat under its company; the line only echoes it. */
 
 #rail-nav .nav-group--entity {
+  position: relative;
   margin: 0 0 14px;
 }
 
@@ -3167,7 +3168,30 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
   letter-spacing: 0;
   color: var(--ink);
   line-height: 1.35;
+  cursor: grab;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
 }
+
+#rail-nav.is-company-dragging,
+#rail-nav.is-company-dragging .nav-group-label {
+  cursor: grabbing;
+}
+
+.company-drop-before::before,
+.company-drop-after::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  height: 2px;
+  background: var(--gold-text);
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+.company-drop-before::before { top: -1px; }
+.company-drop-after::after { bottom: -8px; }
 
 #rail-nav .nav-group--entity .nav-group-label:hover {
   background: none;
