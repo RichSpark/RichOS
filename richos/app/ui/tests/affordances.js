@@ -606,6 +606,7 @@ const FIXTURES = {
   async "richglance-rail-page"(browser) {
     const page = await openApp(browser, undefined, undefined, {
       glance_capture_status: { value: { available: true, enabled: false, registered: false,
+        background: true, menuBar: true, service: "approval",
         shortcut: { code: "KeyC", control: true, option: false, shift: true, command: false } } },
       glance_workflow_status: { value: { opensEditor: false, keepsHistory: false } },
       glance_capture_open: { reject: true, value: "RichGlance could not start a capture." },

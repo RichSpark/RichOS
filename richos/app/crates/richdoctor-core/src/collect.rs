@@ -855,7 +855,7 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64, gestures: bo
                 | "openWithDiscovery"
                 | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata"
                 | "glanceCaptureFrame" | "glanceCaptureOutput" | "glanceCaptureSession" | "glanceScrollCapture" | "glanceCompare" | "glanceOCR" | "glanceSearch" | "glancePin" | "glanceRedactedCopy" | "glanceShare"
-                | "glanceCaptureHelperStart" | "glanceCaptureHelperLogin" | "glanceCaptureShortcutLaunch" | "glanceCaptureMenuLaunch")
+                | "glanceCaptureHelperStart" | "glanceCaptureHelperLogin" | "glanceCaptureHelperMenu" | "glanceCaptureShortcutLaunch" | "glanceCaptureMenuLaunch")
         };
         if id.len() != 36 || !id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
             || build.len() > 40 || !build.bytes().all(|b| b.is_ascii_alphanumeric() || b".-+".contains(&b))
@@ -1235,6 +1235,7 @@ mod tests {
             "glanceScrollCapture",
             "glanceCaptureHelperStart",
             "glanceCaptureHelperLogin",
+            "glanceCaptureHelperMenu",
             "glanceCaptureShortcutLaunch",
             "glanceCaptureMenuLaunch",
             "railVideoFrame",
@@ -1297,7 +1298,7 @@ mod tests {
         assert!(timing.text.contains("operation=glanceCompare"));
         assert!(timing.text.contains("operation=richFilesSuiteRestart outcome=interrupted"));
         assert!(timing.text.contains("application=app.richos.richfiles pid=123"));
-        for stage in ["glanceCaptureHelperStart", "glanceCaptureHelperLogin", "glanceCaptureShortcutLaunch", "glanceCaptureMenuLaunch"] {
+        for stage in ["glanceCaptureHelperStart", "glanceCaptureHelperLogin", "glanceCaptureHelperMenu", "glanceCaptureShortcutLaunch", "glanceCaptureMenuLaunch"] {
             assert!(timing.text.contains(&format!("operation={stage}")));
         }
         assert!(timing.text.contains("operation=glanceScrollCapture outcome=issues"));
