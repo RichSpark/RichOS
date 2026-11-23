@@ -1443,7 +1443,7 @@ async function main() {
     // neither needs a px declaration.
     assertEqual(
       SOURCES.styleSources(),
-      ["fonts/fonts.css", "style.css", "chat-list.css", "cleaner.css", "search-folder-settings.css", "speckle.css", "splash.css", "openings.css", "home.css", "instructions-update.css", "terminal-and-git.css", "suite-tools.css", "video-anywhere.css", "context-meter.css", "keep-alive.css", "dictation-overlay.css", "meeting-panel.css"],
+      ["fonts/fonts.css", "style.css", "assets/app-icons/richscribe-glyph.css", "chat-list.css", "cleaner.css", "search-folder-settings.css", "speckle.css", "splash.css", "openings.css", "home.css", "instructions-update.css", "terminal-and-git.css", "suite-tools.css", "video-anywhere.css", "context-meter.css", "keep-alive.css", "dictation-overlay.css", "meeting-panel.css"],
       "the shipped windows have a different set of stylesheets from the declared list"
     );
     // THE TWO DERIVATIONS ARE JOINED, the way `lib/harness.js` joins its two PNG decoders: a
