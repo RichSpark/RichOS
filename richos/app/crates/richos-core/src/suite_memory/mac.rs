@@ -1,5 +1,6 @@
 //! Process inventory and physical footprint, in-process via Darwin's libproc.
 use super::{Kind, KINDS};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io;
@@ -9,7 +10,7 @@ use std::sync::OnceLock;
 const PROC_UID_ONLY: u32 = 4; // sys/proc_info.h
 const RICH_SCRIBE_ARG: &[u8] = b"--richos-dictation";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 struct Identity {
     pid: i32,
     start_sec: u64,
@@ -42,6 +43,31 @@ pub(super) struct Capture {
     pub process_count: usize,
     pub unreadable: usize,
     pub readings: [Reading; KINDS.len()],
+}
+
+/// A local declaration from RichScribe's WebKit client. macOS charges both the
+/// client and its XPC services to RichOS, so its responsible PID is ambiguous.
+#[derive(Debug, Serialize, Deserialize)]
+pub(super) struct ScribeWebKit {
+    client: Identity,
+    services: Vec<Identity>,
+}
+
+impl ScribeWebKit {
+    pub fn current(pids: &[i32]) -> io::Result<Self> {
+        let uid = unsafe { libc::geteuid() };
+        let client = process_info(unsafe { libc::getpid() }, uid)
+            .ok_or_else(|| io::Error::other("RichScribe process identity unavailable"))?
+            .0;
+        let mut services: Vec<_> = pids
+            .iter()
+            .take(12)
+            .filter_map(|&pid| process_info(pid, uid).map(|row| row.0))
+            .collect();
+        services.sort_unstable();
+        services.dedup();
+        Ok(Self { client, services })
+    }
 }
 
 fn pids(uid: libc::uid_t) -> io::Result<Vec<i32>> {
@@ -270,6 +296,50 @@ fn kind_for(process: &Process, inventory: &BTreeMap<i32, Process>) -> Option<Kin
     }
 }
 
+/// A matching generation from the WebKit client overrides the coarse OS owner.
+/// Never move an unrelated service or one whose PID has been reused.
+fn attach_scribe_webkit(inventory: &mut BTreeMap<i32, Process>, snapshot: &ScribeWebKit) -> bool {
+    let Some(client) = inventory.get(&snapshot.client.pid) else {
+        return false;
+    };
+    if client.role != Role::Suite(Kind::RichScribe) || client.identity != snapshot.client {
+        return false;
+    }
+    let client = *client;
+    let mut complete = !snapshot.services.is_empty();
+    for identity in &snapshot.services {
+        match inventory.get_mut(&identity.pid) {
+            Some(service)
+                if service.identity == *identity
+                    && service.role == Role::WebKit
+                    && (service.parent == client.parent
+                        || service.parent == client.identity.pid) =>
+            {
+                service.parent = client.identity.pid;
+            }
+            _ => complete = false,
+        }
+    }
+    complete
+}
+
+fn unassigned_webkit(inventory: &BTreeMap<i32, Process>) -> usize {
+    let owners: Vec<_> = inventory
+        .values()
+        .filter_map(|p| {
+            if p.role != Role::Suite(Kind::RichScribe) {
+                return None;
+            }
+            let parent = parent_of(p, inventory)?;
+            (parent.role == Role::Suite(Kind::RichOs)).then_some(parent.identity.pid)
+        })
+        .collect();
+    inventory
+        .values()
+        .filter(|p| p.role == Role::WebKit && owners.contains(&p.parent))
+        .count()
+}
+
 fn footprint(identity: Identity, uid: libc::uid_t) -> Option<i64> {
     let mut usage = MaybeUninit::<libc::rusage_info_v2>::uninit();
     // RUSAGE_INFO_V2 fills exactly rusage_info_v2 on success. The trailing BSD check rejects
@@ -327,12 +397,12 @@ fn aggregate(
     }
 }
 
-pub(super) fn capture() -> io::Result<Capture> {
+pub(super) fn capture(scribe: Option<&ScribeWebKit>) -> io::Result<Capture> {
     let uid = unsafe { libc::geteuid() };
     let pids = pids(uid)?;
     let mut path = [0; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
     let mut args = arg_buffer();
-    let inventory = pids
+    let mut inventory = pids
         .into_iter()
         .filter_map(|pid| {
             let (identity, parent) = process_info(pid, uid)?;
@@ -354,7 +424,17 @@ pub(super) fn capture() -> io::Result<Capture> {
             ))
         })
         .collect();
-    Ok(aggregate(&inventory, |identity| footprint(identity, uid)))
+    let attributed = scribe.is_some_and(|scribe| attach_scribe_webkit(&mut inventory, scribe));
+    let mut sample = aggregate(&inventory, |identity| footprint(identity, uid));
+    if !attributed {
+        let ambiguous = unassigned_webkit(&inventory);
+        if ambiguous > 0 {
+            sample.unreadable += ambiguous;
+            sample.readings[Kind::RichOs as usize].bytes = None;
+            sample.readings[Kind::RichScribe as usize].bytes = None;
+        }
+    }
+    Ok(sample)
 }
 
 #[cfg(test)]
@@ -557,5 +637,38 @@ mod tests {
                 "{kind:?}"
             );
         }
+    }
+    #[test]
+    fn richscribe_can_disambiguate_webkit_charged_to_its_richos_parent() {
+        let gui = process(10, 1, Role::Suite(Kind::RichOs));
+        let client = process(11, 10, Role::Suite(Kind::RichScribe));
+        let gui_web = process(12, 10, Role::WebKit);
+        let scribe_web = process(13, 10, Role::WebKit);
+        let stale = process(14, 10, Role::WebKit);
+        let foreign = process(15, 1, Role::WebKit);
+        let mut inventory = [gui, client, gui_web, scribe_web, stale, foreign]
+            .into_iter()
+            .map(|p| (p.identity.pid, p))
+            .collect();
+        assert_eq!(unassigned_webkit(&inventory), 3);
+        let before = aggregate(&inventory, |_| Some(100));
+        assert_eq!(before.readings[Kind::RichScribe as usize].count, 1);
+        let previous_generation = Identity {
+            start_usec: 1,
+            ..stale.identity
+        };
+        attach_scribe_webkit(
+            &mut inventory,
+            &ScribeWebKit {
+                client: client.identity,
+                services: vec![scribe_web.identity, previous_generation, foreign.identity],
+            },
+        );
+        let capture = aggregate(&inventory, |_| Some(100));
+        assert_eq!(capture.readings[Kind::RichScribe as usize].count, 2);
+        assert_eq!(capture.readings[Kind::RichOs as usize].count, 3);
+        assert_eq!(inventory[&12].parent, 10);
+        assert_eq!(inventory[&14].parent, 10);
+        assert_eq!(inventory[&15].parent, 1);
     }
 }

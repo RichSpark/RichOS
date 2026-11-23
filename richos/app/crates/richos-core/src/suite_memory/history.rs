@@ -27,6 +27,10 @@ const SCHEMA: &str = "
         at_ms INTEGER NOT NULL, ok INTEGER NOT NULL, scanned INTEGER NOT NULL,
         matched INTEGER NOT NULL, unreadable INTEGER NOT NULL, capture_us INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS richscribe_webkit (
+        id INTEGER PRIMARY KEY CHECK(id = 1),
+        snapshot BLOB NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS minutes (
         minute INTEGER NOT NULL, kind INTEGER NOT NULL, bytes INTEGER,
         members INTEGER NOT NULL, identity INTEGER NOT NULL,
@@ -87,10 +91,35 @@ impl Recorder {
     pub fn tick(&mut self) -> Result<(), String> {
         let at_ms = crate::util::now_millis() as i64;
         let start = Instant::now();
-        let capture = mac::capture();
+        let scribe = self
+            .0
+            .query_row(
+                "SELECT snapshot FROM richscribe_webkit WHERE id = 1 AND length(snapshot) <= 2048",
+                [],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        let capture = mac::capture(scribe.as_ref());
         let capture_us = start.elapsed().as_micros() as i64;
         self.record(at_ms, capture.as_ref().ok(), capture_us)
             .map_err(|error| error.to_string())
+    }
+
+    /// Record the live WebKit processes that RichScribe's own webviews report.
+    /// A stable observation does not write another transaction or grow the file.
+    pub fn publish_richscribe_webkit(&self, pids: &[i32]) -> Result<(), String> {
+        let snapshot = mac::ScribeWebKit::current(pids).map_err(|error| error.to_string())?;
+        let bytes = serde_json::to_vec(&snapshot).map_err(|error| error.to_string())?;
+        self.0
+            .execute(
+                "INSERT INTO richscribe_webkit VALUES (1, ?1)
+             ON CONFLICT(id) DO UPDATE SET snapshot = excluded.snapshot
+             WHERE snapshot != excluded.snapshot",
+                [bytes],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
     }
 
     fn record(

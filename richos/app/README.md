@@ -2213,7 +2213,8 @@ temporarily use about another 2 MiB. The sampler runs in process and records
 neither command lines nor application content.
 
 Rich uses `mcp__richos_status__suite_memory` for the latest per-app reading and
-both history windows. Suite app figures include their own WebKit processes.
+both history windows. Suite app figures include their own WebKit processes. RichScribe supplies its
+webview process identities because macOS groups those services under RichOS.
 Claude Code and Codex each total the matching provider processes launched by
 RichOS. A possible leak requires four hours of samples with the same process
 membership and increasing hourly means. The increase must reach 32 MiB and 10%
