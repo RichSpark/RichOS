@@ -316,6 +316,25 @@ fn copy_ledger(
     }
 }
 
+fn archive_unfinished_turns(path: &Path, thread_id: &str) -> io::Result<()> {
+    let mut ledger = crate::ledger::Ledger::open(path).map_err(io::Error::other)?;
+    let unfinished: Vec<_> = ledger
+        .pending_turns()
+        .into_iter()
+        .filter(|turn| turn.thread_id == thread_id)
+        .map(|turn| turn.id.clone())
+        .collect();
+    for turn in unfinished {
+        ledger
+            .interrupt_turn_after_restart(
+                &turn,
+                "Preserved as legacy Codex history during the company repair.",
+            )
+            .map_err(io::Error::other)?;
+    }
+    Ok(())
+}
+
 /// One-time offline data correction, before opening the ledger or starting its
 /// readers. The intent also lets old locators continue to resolve. Directory
 /// renames preserve inbox and journal inodes, so their cursors stay valid.
@@ -451,6 +470,10 @@ fn repair(data: &Path, coordination: &Path, registry: &EntityRegistry) -> io::Re
         }
     }
     move_dir(&thread_dir(&inboxes, &from), &thread_dir(&inboxes, &to))?;
+    // Nightly .115 left some historical inputs without a terminal ledger row.
+    // Close those turns before startup recovery can dispatch them to a provider.
+    // The existing intake IDs and all original prompt and reply records survive.
+    archive_unfinished_turns(&ledger, &from.thread_id)?;
     atomic(&ledger, |output| copy_ledger(&ledger, &from, &to, output))?;
     save(&new_target, &to)?;
     if old_file.try_exists()? {
@@ -499,7 +522,7 @@ pub(super) fn historic_locator(
 mod tests {
     use super::*;
     use crate::entity::Entity;
-    use crate::ledger::{Ledger, Source};
+    use crate::ledger::{Ledger, Source, TurnState};
     use crate::session_tools::{self, BridgeReference};
     use crate::status_tools::StatusToolScope;
     use std::os::unix::fs::MetadataExt;
@@ -658,6 +681,14 @@ mod tests {
                 .append_assistant_delta(&turn, "Saved Codex reply", 1)
                 .unwrap();
             let unrelated = ledger.create_thread("Codex", &wrong).unwrap();
+            let unrelated_binding = ledger.thread_binding(&unrelated).unwrap();
+            let unrelated_turn = ledger
+                .record_prompt_received(
+                    &unrelated_binding,
+                    "Current request elsewhere",
+                    Source::Text,
+                )
+                .unwrap();
             drop(ledger);
             let old = Target {
                 version: 1,
@@ -784,6 +815,15 @@ mod tests {
                 &wrong
             );
             assert!(ledger.messages_scoped(&original).is_err());
+            assert_eq!(ledger.turn(&turn).unwrap().state, TurnState::Interrupted);
+            assert_eq!(
+                ledger
+                    .pending_turns()
+                    .iter()
+                    .map(|turn| turn.id.as_str())
+                    .collect::<Vec<_>>(),
+                [unrelated_turn.as_str()]
+            );
             let messages = ledger.messages_scoped(&binding).unwrap();
             assert_eq!(
                 messages
