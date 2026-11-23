@@ -9,7 +9,6 @@
 window.RichDictationMenu = (function () {
   var tauri = window.__TAURI__ || null;
   var IC = {
-    mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>',
     check: '<svg class="sb-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
     lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
     close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
@@ -120,7 +119,7 @@ window.RichDictationMenu = (function () {
     if (msg.vocabularyError) vocabulary += '<p class="sb-mid" role="status">' + esc(msg.vocabularyError) + '</p>';
     var recover = msg.recoverAvailable ? item("recover", "Recover last draft…") : '<button class="sb-item is-unavail" type="button" role="menuitem" aria-disabled="true"><span class="sb-check"></span>Recover last draft<span class="sb-aside">' + (msg.recording ? "After recording" : "No recent draft") + '</span></button>';
     m.innerHTML =
-      '<div class="sb-head"><span class="sb-name">' + IC.mic + 'RichScribe</span><span class="sb-on' + (msg.on ? "" : " is-off") + '">' +
+      '<div class="sb-head"><span class="sb-name"><span class="richscribe-glyph" aria-hidden="true"></span>RichScribe</span><span class="sb-on' + (msg.on ? "" : " is-off") + '">' +
       (paused ? "Paused" : msg.on ? "On" : "Off") + "</span></div>" +
       (paused
         ? '<p class="sb-warn" role="status">' + IC.lock + "<span>" + secureLine(k, msg.secureApp) + "</span></p>"

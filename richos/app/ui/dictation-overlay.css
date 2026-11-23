@@ -325,7 +325,8 @@ body {
   align-items: center;
   gap: 8px;
 }
-.sb-name svg {
+.sb-name .richscribe-glyph {
+  flex: none;
   width: 16px;
   height: 16px;
   color: var(--gold-text);

@@ -29,6 +29,7 @@
 const path = require("path");
 const { loadPlaywright, createRun, assert, assertEqual, UI_DIR } = require("./lib/harness");
 const C = require("./lib/contrast");
+const { decode } = require("./lib/png");
 
 const BAR = "file://" + path.join(UI_DIR, "dictation-bar.html");
 const FLIGHT = BAR + "?role=flight";
@@ -541,6 +542,37 @@ async function main() {
     assertEqual(await text(page,'.dh-label'),"Tell me how to change it","instruction recording is distinct from ordinary dictation");
     assertEqual(await page.locator('[data-bar-act="finish"],[data-bar-act="cancel"]').count(),2,"Finish and Cancel remain available");
     await page.close();
+  });
+
+  await run.check("the dropdown header uses the nav rail's RichScribe glyph in the header color", async () => {
+    const page = await open(browser, MENU);
+    const glyphStyle = (selector) => {
+      const glyph = document.querySelector(selector);
+      const style = getComputedStyle(glyph);
+      return { mask: style.maskImage, ink: style.backgroundColor };
+    };
+    const rail = await browser.newPage();
+    await rail.goto(INDEX);
+    const railGlyph = await rail.evaluate(glyphStyle, "#nr-scribe .nr-glyph");
+    try {
+      for (const theme of ["light", "dark"]) {
+        await say(page, "dictation-menu", { on: true, key: "F1", choice: "accurate", theme });
+        const header = page.locator(".sb-name [aria-hidden]");
+        const headerGlyph = await page.evaluate(glyphStyle, ".sb-name [aria-hidden]");
+        assert(headerGlyph.mask.startsWith('url("data:image/svg+xml,'), "the header masks its ink with the RichScribe SVG");
+        assertEqual(headerGlyph.mask, railGlyph.mask, "the dropdown and rail use the same asset");
+        assertEqual(headerGlyph.ink, await page.locator(".sb-on").evaluate((node) => getComputedStyle(node).color),
+          "the glyph keeps the header's gold");
+        const { r, g, b } = C.parseCssColor(headerGlyph.ink);
+        const picture = decode(await header.screenshot());
+        const hasGold = picture.data.some((value, i) => i % picture.channels === 0 &&
+          value === r && picture.data[i + 1] === g && picture.data[i + 2] === b);
+        assert(hasGold, "the shared SVG paints visible gold pixels");
+      }
+    } finally {
+      await rail.close();
+      await page.close();
+    }
   });
 
   await run.check("the menu, word for word, every row reaching the tool, Escape and the arrows", async () => {

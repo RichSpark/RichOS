@@ -1,4 +1,4 @@
-//! **THE ONLY REASON THIS FILE EXISTS: A TEST THAT DID NOT RUN MUST NOT PRINT `ok`.**
+//! **A TEST THAT DID NOT RUN MUST NOT PRINT `ok`.**
 //!
 //! Four tests in this crate opened a real audio device, so they were gated behind
 //! `RICHOS_VOICE_LIVE_AUDIO=1` — correctly, because one of them is audible for about a
@@ -78,6 +78,7 @@ fn main() {
 
     private_fixtures_cfg();
     pocket_voice_cfg();
+    render_richscribe_glyph();
 }
 
 /// `cfg(pocket_voice)` when Rich's Pocket TTS bundle is on disk where the app looks for it
@@ -183,5 +184,35 @@ fn private_fixtures_cfg() {
                 println!("cargo::warning={line}");
             }
         }
+    }
+}
+
+/// Render the nav rail's SVG to coverage masks for the 18-point tray item at 2x.
+fn render_richscribe_glyph() {
+    use resvg::tiny_skia::{Pixmap, Transform};
+    use resvg::usvg::{Options, Tree};
+    use std::{env, fs, path::PathBuf};
+
+    let stylesheet = "../../ui/assets/app-icons/richscribe-glyph.css";
+    println!("cargo::rerun-if-changed={stylesheet}");
+    let stylesheet = fs::read_to_string(stylesheet).expect("read the shared RichScribe stylesheet");
+    let (_, svg) = stylesheet.split_once("data:image/svg+xml,").expect("find the RichScribe SVG");
+    let (svg, _) = svg.split_once("')").expect("find the end of the RichScribe SVG data URL");
+    let tree = Tree::from_str(svg, &Options::default()).expect("parse the RichScribe glyph SVG");
+    // The original SVG has more padding on one side. Center its ink in the tray.
+    let bounds = tree.root().abs_bounding_box();
+    let center_x = bounds.x() + bounds.width() / 2.0;
+    let center_y = bounds.y() + bounds.height() / 2.0;
+    let out = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo sets OUT_DIR"));
+    for (px, file) in [(36, "richscribe-idle.alpha"), (26, "richscribe-listening.alpha")] {
+        let mut pixmap = Pixmap::new(px, px).expect("allocate the RichScribe glyph mask");
+        let scale = px as f32 / tree.size().width();
+        let center = px as f32 / 2.0;
+        let transform = Transform::from_scale(scale, scale)
+            .post_translate(center - center_x * scale, center - center_y * scale);
+        resvg::render(&tree, transform, &mut pixmap.as_mut());
+        let alpha: Vec<_> = pixmap.pixels().iter().map(|pixel| pixel.alpha()).collect();
+        assert!(alpha.contains(&255), "the RichScribe glyph must render solid ink");
+        fs::write(out.join(file), alpha).expect("write the RichScribe glyph mask");
     }
 }

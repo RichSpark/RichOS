@@ -1,8 +1,8 @@
 //! **RichOS in the menu bar** (plan section 6, "The menu bar item"; round 19 states 13, 14, 17).
 //!
 //! Tauri's tray icon (feature `tray-icon`; `tray-icon 0.24.2` was already in `Cargo.lock`): a
-//! template microphone while dictation is on and idle, which macOS draws in the menu bar's own
-//! ink; the gold microphone while listening. Present only while dictation is on, which in this
+//! template RichScribe glyph while dictation is on and idle, which macOS draws in the menu bar's own
+//! ink; the glyph inset in gold while listening. Present only while dictation is on, which in this
 //! tool is its whole life: the item goes when the tool does. A click opens the menu window
 //! (`bar.rs`), because a native macOS menu cannot carry round 19's type and colors.
 
@@ -15,7 +15,7 @@ use tauri::{AppHandle, Manager};
 
 pub const ID: &str = "richos-dictation";
 
-/// **The item's picture and whether macOS draws it as a template**: the template microphone
+/// **The item's picture and whether macOS draws it as a template**: the template RichScribe glyph
 /// while idle, the gold square (not a template: its colors are its own) while listening.
 pub fn picture(listening: bool, dark_menu_bar: bool) -> (Image<'static>, bool) {
     if listening {
@@ -134,7 +134,7 @@ pub fn log_item_when_placed(tray: TrayIcon) {
         .ok();
 }
 
-/// Gold while listening, the template microphone otherwise. `dark` is the menu bar's appearance.
+/// Gold while listening, the template RichScribe glyph otherwise. `dark` is the menu bar's appearance.
 pub fn set_listening(tray: &TrayIcon, listening: bool, dark: bool) {
     let (icon, template) = picture(listening, dark);
     if let Err(e) = tray.set_icon(Some(icon)).and_then(|_| tray.set_icon_as_template(template)) {
