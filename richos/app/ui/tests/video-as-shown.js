@@ -399,6 +399,85 @@ function toolWindow(files) {
   return `(${bridge.toString()})(${files}); window.addEventListener("load", () => (${drive.toString()})((${tools.toString()})(), ${files}));`;
 }
 
+function gitPane() {
+  const drive = async (T) => {
+    try {
+      await T.app();
+      await T.chat();
+      const bridge = window.RichBridge;
+      const invoke = bridge.invoke.bind(bridge);
+      let bounds, next, pending;
+      let requests = 0;
+      bridge.invoke = async (command, args, options) => {
+        if (command === "output_git_open" || command === "output_git_place") {
+          bounds = args.bounds;
+          return null;
+        }
+        if (command === "output_git_recording_frame") {
+          requests++;
+          return next ? next() : new Promise((resolve) => { pending = resolve; });
+        }
+        return invoke(command, args, options);
+      };
+      const tile = document.createElement("canvas");
+      const cx = tile.getContext("2d");
+      async function picture(color, rect) {
+        cx.fillStyle = color;
+        cx.fillRect(0, 0, tile.width, tile.height);
+        const image = await new Promise((resolve) => tile.toBlob(resolve, "image/png"));
+        const header = new Float32Array([NaN, NaN, rect.left, rect.top, rect.width, rect.height]);
+        return new Blob([header, image]).arrayBuffer();
+      }
+
+      await T.press("#set-btn");
+      await T.press("#video-anywhere");
+      await T.press("#video-anywhere-choices .rv-go");
+      const canvas = await T.until("the recording canvas", () => document.querySelector(".rv-canvas"));
+      if (requests) throw new Error("requested an overlay with the Git pane closed");
+      await T.press('.nav-thread[data-thread-id="hiring"]');
+      await T.press("#out-top");
+      await T.press("#op-git-open");
+      const placed = await T.until("the native Git pane placed", () => bounds?.visible && bounds);
+      const redFrame = await picture("#cf2020", placed);
+      const shifted = { ...placed, left: placed.left + 0.15, width: placed.width - 0.15 };
+      const greenFrame = await picture("#20b030", shifted);
+      const pixel = (x, y) => canvas.getContext("2d")
+        .getImageData(Math.floor(x * canvas.width), Math.floor(y * canvas.height), 1, 1).data;
+      const red = ([r, g, b]) => r > 165 && g < 75 && b < 75;
+      const green = ([r, g, b]) => r < 75 && g > 140 && b < 100;
+      const left = placed.left + 0.03, right = shifted.left + 0.03, y = placed.top + placed.height / 2;
+
+      const opened = window.RichVideoAnywhere.state().frames;
+      await T.until("recording redraws after the pane opens", () => window.RichVideoAnywhere.state().frames >= opened + 8);
+      if (!pending) throw new Error("Git was open during recording and the recorder never requested its pixels");
+      next = () => redFrame;
+      pending(redFrame);
+      await T.until("the live Git pixels at the placed bounds", () => red(pixel(left, y)) && red(pixel(right, y)));
+      if (red(pixel(placed.left / 2, y))) throw new Error("the Git image covered the conversation");
+      next = () => greenFrame;
+      await T.until("updated Git pixels at the new placement", () => !red(pixel(left, y)) && green(pixel(right, y)));
+
+      pending = null;
+      next = null;
+      await T.until("a pending native Git frame", () => pending);
+      await T.press("#op-git-files");
+      pending(redFrame);
+      const count = requests;
+      await T.until("the Files view replaces Git on the recording canvas", () => !green(pixel(right, y)) && !red(pixel(right, y)));
+      const frames = window.RichVideoAnywhere.state().frames;
+      await T.until("several redraws after Git closed", () => window.RichVideoAnywhere.state().frames >= frames + 8);
+      if (requests !== count || red(pixel(right, y))) throw new Error("Git persisted after closing");
+
+      await T.press("#video-anywhere-stop");
+      await T.until("the result", () => window.RichVideoAnywhere.state().state === "sheet");
+      T.post({ done: { ended: window.RichVideoAnywhere.state().ended } });
+    } catch (e) {
+      T.post({ done: { error: String((e && e.message) || e) } });
+    }
+  };
+  return `window.__RICHOS_MOCK_PRESET__ = { gitView: true }; window.addEventListener("load", () => (${drive.toString()})( (${tools.toString()})()));`;
+}
+
 /// What each recorder asks the webview for when the microphone is switched on. The microphone
 /// handed back is a silent one made in the page: no real microphone is opened.
 function asking() {
@@ -454,6 +533,22 @@ function asking() {
 
 async function main() {
   const run = createRun("a video shows the app as the window shows it, in the Mac's own webview: the empty message box, Settings, the nav tooltip, multiline text and the microphone");
+
+  await run.check("the native Git pane appears in place, updates and moves, then leaves no stale pixels", async () => {
+    const ran = await runPage(APP, gitPane(), 95);
+    try {
+      assert(ran.code === 0 && ran.done, "the page did not finish: " + JSON.stringify(ran.said.slice(-4)));
+      assert(!ran.done.error, ran.done.error);
+      assertEqual(ran.done.ended, "stopped", "the recording did not stop cleanly");
+      return "two live pictures at their respective placements, clean redraw after close";
+    } finally {
+      fs.rmSync(ran.dir, { recursive: true, force: true });
+    }
+  });
+  if (process.argv.includes("--git-only")) {
+    process.exitCode = run.report() > 0 ? 1 : 0;
+    return;
+  }
 
   await run.check("dark, with the microphone: the empty message box has its hint and no placeholder under it, Settings' closed list is not drawn until it is opened, the nav tooltip is opaque, and every line of a message starts where the box puts it", async () => asShown("dark", true));
 

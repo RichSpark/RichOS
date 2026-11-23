@@ -4772,6 +4772,7 @@ fn main() {
             home_video::home_video_save,
             home_video::cleaner_recording_frame,
             home_video::richfiles_recording_frame,
+            home_video::output_git_recording_frame,
             // --- a job's result said on its own (2026-10-15) — appended ---
             // --- the Oxford comma in what Claude writes (CEO 2026-10-19) — appended ---
             set_oxford_comma,

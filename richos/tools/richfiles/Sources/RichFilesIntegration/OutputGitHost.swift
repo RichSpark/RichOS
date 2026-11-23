@@ -38,6 +38,23 @@ public func changeRichFilesGitChat(_ value: UnsafePointer<CChar>?) -> Int32 {
     }
 }
 
+// Synchronous on AppKit's thread. The caller copies the bytes during the callback.
+// Returns 0 for a hidden pane, 1 for a picture or -1 for an unavailable picture.
+@_cdecl("richfiles_git_recording_frame")
+public func outputGitRecordingFrame(
+    _ webViewPointer: UnsafeMutableRawPointer?,
+    _ reply: @convention(c) (UnsafePointer<UInt8>?, Int, UnsafeMutableRawPointer?) -> Void,
+    _ context: UnsafeMutableRawPointer?
+) -> Int32 {
+    guard Thread.isMainThread, let webViewPointer else { return -1 }
+    return MainActor.assumeIsolated {
+        guard let web = Unmanaged<NSView>.fromOpaque(webViewPointer).takeUnretainedValue() as? WKWebView else { return -1 }
+        return OutputGitHost.shared.recordingFrame(web) { data in
+            data.withUnsafeBytes { reply($0.bindMemory(to: UInt8.self).baseAddress, $0.count, context) }
+        }
+    }
+}
+
 @MainActor
 private final class OutputGitHost {
     static let shared = OutputGitHost()
@@ -81,7 +98,7 @@ private final class OutputGitHost {
         }
         // WKWebView can extend beneath the title bar. CSS viewport coordinates
         // start at the visible content, which is also the overlay's origin.
-        let bounds = web.bounds.intersection(web.convert(window.contentLayoutRect, from: nil))
+        let bounds = viewport(web, in: window)
         guard !bounds.isEmpty else { return false }
         let top = web.isFlipped ? frame.minY : 1 - frame.maxY
         let local = CGRect(x: bounds.minX + frame.minX * bounds.width, y: bounds.minY + top * bounds.height,
@@ -90,6 +107,43 @@ private final class OutputGitHost {
         hosting?.isHidden = false
         if needsFocus || mode == 1, let hosting { window.makeFirstResponder(hosting) }
         return true
+    }
+
+    private func viewport(_ web: WKWebView, in window: NSWindow) -> CGRect {
+        web.bounds.intersection(web.convert(window.contentLayoutRect, from: nil))
+    }
+
+    func recordingFrame(_ web: WKWebView, reply: (Data) -> Void) -> Int32 {
+        guard self.web === web, let hosting, let parent = hosting.superview, let window = web.window,
+              hosting.window === window, !hosting.isHiddenOrHasHiddenAncestor,
+              window.isVisible, !window.isMiniaturized else { return 0 }
+        let viewport = viewport(web, in: window)
+        let frame = web.convert(hosting.frame, from: parent)
+        let bounds = hosting.bounds
+        guard !viewport.isEmpty, !bounds.isEmpty,
+              let bitmap = hosting.bitmapImageRepForCachingDisplay(in: bounds) else { return -1 }
+        // Cache the live view so the snapshot includes SwiftUI's current scroll position and selection.
+        hosting.cacheDisplay(in: bounds, to: bitmap)
+        guard let png = bitmap.representation(using: .png, properties: [:]) else { return -1 }
+        let mouse = web.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        let hasMouse = window.isKeyWindow && frame.contains(mouse)
+        let top = web.isFlipped ? frame.minY - viewport.minY : viewport.maxY - frame.maxY
+        let pointerTop = web.isFlipped ? mouse.y - frame.minY : frame.maxY - mouse.y
+        // Six little-endian floats: pointer within the pane, then pane bounds within the CSS viewport.
+        let values = [
+            hasMouse ? (mouse.x - frame.minX) / frame.width : .nan,
+            hasMouse ? pointerTop / frame.height : .nan,
+            (frame.minX - viewport.minX) / viewport.width, top / viewport.height,
+            frame.width / viewport.width, frame.height / viewport.height,
+        ]
+        var packet = Data(capacity: 24 + png.count)
+        for value in values {
+            var bits = Float(value).bitPattern.littleEndian
+            withUnsafeBytes(of: &bits) { packet.append(contentsOf: $0) }
+        }
+        packet.append(png)
+        reply(packet)
+        return 1
     }
 
     private func hide(clear: Bool = true) {

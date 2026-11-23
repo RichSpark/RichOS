@@ -28,7 +28,8 @@
 // own recorder does), and that canvas is recorded with the webview's own recorder, with the
 // microphone's sound added when he chose it. The recorder's own pieces (`rv-skip`) are never in
 // the file.
-// A focused RichCleaner or RichFiles window is composited over the main view.
+// The native Output Git pane is composited in place. A focused RichCleaner or RichFiles window
+// is composited over the main view.
 // TEXT HE HIGHLIGHTS IS IN THE FILE (CEO 2026-11-15, on the round's mockup: "it was
 // recording the mouse but not recording text highlights when I was highlighting the text with the
 // mouse. I would expect the screen recording to record the text highlighting as well."): the
@@ -717,23 +718,58 @@ window.RichVideoAnywhere = (function () {
     R.inHome = wasHome;
   }
 
-  // One bounded native snapshot at a time, only while the pane is visible during
-  // a recording. The canvas continues to draw the webview at its usual rate.
-  async function readWindowFrame(command, args, when) {
+  async function readWindowFrame(command, args, pane = false) {
     const data = new Uint8Array(await window.RichBridge.invoke(command, args));
-    if (data.byteLength <= 8) return null;
-    // Two little-endian floats give the pointer relative to the picture, or NaN
-    // when it is outside. The rest of the packet is the JPEG.
-    const xy = new DataView(data.buffer, data.byteOffset, 8);
+    const header = pane ? 24 : 8;
+    if (data.byteLength <= header) return null;
+    // Two little-endian floats give the pointer relative to the image (NaN outside it).
+    // An embedded pane also supplies its normalized placement within the viewport.
+    const fields = new DataView(data.buffer, data.byteOffset, header);
+    const read = (offset) => fields.getFloat32(offset, true);
     const image = new Image();
-    const url = URL.createObjectURL(new Blob([data.subarray(8)], { type: "image/jpeg" }));
+    const url = URL.createObjectURL(new Blob([data.subarray(header)], { type: pane ? "image/png" : "image/jpeg" }));
     try {
       image.src = url;
       await image.decode();
     } finally {
       URL.revokeObjectURL(url);
     }
-    return { image, when, x: xy.getFloat32(0, true), y: xy.getFloat32(4, true) };
+    return { image, x: read(0), y: read(4), bounds: pane ? [read(8), read(12), read(16), read(20)] : null };
+  }
+
+  var gitRequest = false;
+  function gitVisit() {
+    return window.RichOutput?.recordingGitVisit() ?? null;
+  }
+
+  async function sampleGit(R) {
+    const visit = gitVisit();
+    if (R.gitVisit !== visit) {
+      R.gitVisit = visit;
+      R.gitImage = null;
+      R.gitAsked = -Infinity;
+    }
+    if (visit === null || gitRequest || R.now - R.gitAsked < 100) return;
+    gitRequest = true;
+    R.gitAsked = R.now;
+    try {
+      const frame = await readWindowFrame("output_git_recording_frame", { recording: R.number }, true);
+      if (rec === R && visit === gitVisit()) R.gitImage = frame;
+    } catch (_) {
+      if (rec === R && visit === gitVisit()) R.gitImage = null;
+    } finally {
+      gitRequest = false;
+    }
+  }
+
+  function paintGitPicture(cx, frame) {
+    if (!frame) return null;
+    const [left, top, width, height] = frame.bounds;
+    const x = left * innerWidth, y = top * innerHeight;
+    const w = width * innerWidth, h = height * innerHeight;
+    cx.drawImage(frame.image, x, y, w, h);
+    if (Number.isFinite(frame.x) && Number.isFinite(frame.y)) return [x + frame.x * w, y + frame.y * h];
+    return null;
   }
 
   var cleanerFocused = false;
@@ -756,7 +792,7 @@ window.RichVideoAnywhere = (function () {
     cleanerRequest = true;
     R.cleanerAsked = R.now;
     try {
-      const frame = await readWindowFrame("cleaner_recording_frame", { recording: R.number }, R.now);
+      const frame = await readWindowFrame("cleaner_recording_frame", { recording: R.number });
       if (rec === R && visit === cleanerVisit) R.cleanerImage = frame;
     } catch (_) {
       if (rec === R && visit === cleanerVisit) R.cleanerImage = null;
@@ -781,7 +817,7 @@ window.RichVideoAnywhere = (function () {
     filesRequest = true;
     R.filesAsked = R.now;
     try {
-      const frame = await readWindowFrame("richfiles_recording_frame", {}, R.now);
+      const frame = await readWindowFrame("richfiles_recording_frame", {});
       if (rec === R && visit === filesVisit && !document.hasFocus()) R.filesImage = frame;
     } catch (_) {
       if (rec === R && visit === filesVisit) R.filesImage = null;
@@ -822,6 +858,7 @@ window.RichVideoAnywhere = (function () {
     R.inHome = false;
     R.sel = selected();
     R.tips = tooltipLayers();
+    sampleGit(R);
     sampleCleaner(R);
     sampleFiles(R);
     // what stands on the page itself, lowest first (the order the window stacks it in)
@@ -843,8 +880,10 @@ window.RichVideoAnywhere = (function () {
       else paintDom(cx, layer.e, 1, R);
     }
     cx.globalAlpha = 1;
+    const gitPointer = paintGitPicture(cx, R.gitImage);
     if (cleanerFocused) paintWindowPicture(cx, R, R.cleanerImage);
     else if (!document.hasFocus() && R.filesImage) paintWindowPicture(cx, R, R.filesImage);
+    else if (R.pointer && gitPointer) P.paintPointer(cx, ...gitPointer);
     else if (R.pointer && ptr.inside && !ptr.own) P.paintPointer(cx, ptr.x, ptr.y);
   }
 
