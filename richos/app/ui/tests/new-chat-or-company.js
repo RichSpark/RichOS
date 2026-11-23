@@ -567,7 +567,7 @@ async function main() {
     return JSON.stringify(o);
   });
 
-  await run.check("company rows can be dragged or moved by keyboard and keep their places", async () => {
+  await run.check("company rows can be dragged and keep their places", async () => {
     const page = await openApp(browser);
     try {
       await shellSettled(page);
@@ -621,12 +621,6 @@ async function main() {
         await picker.waitFor({ state: "hidden" });
       }
       assertEqual((await order()).filter((id) => TWO.includes(id)), ["lumen", "northwind"], "the order survives reload");
-      await label("northwind").focus();
-      await page.keyboard.press("Alt+ArrowUp");
-      assertEqual((await order()).filter((id) => TWO.includes(id)), ["northwind", "lumen"], "keyboard moves the focused company up");
-      assertEqual(await page.evaluate(() => document.activeElement.id), "nav-label-northwind", "focus follows the moved row");
-      await page.keyboard.press("Alt+ArrowDown");
-      assertEqual((await order()).filter((id) => TWO.includes(id)), ["lumen", "northwind"], "keyboard moves it down again");
 
       await page.click("#rail-new-thread");
       await page.click("#new-chat-menu .m-item[data-new-company]");

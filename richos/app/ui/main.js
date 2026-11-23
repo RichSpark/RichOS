@@ -794,7 +794,6 @@ function buildCompanyShell(entity, count) {
   // is untouched until a thread is opened or a new one is started.
   labelEl.addEventListener("click", () => showEntityView(id, "overview"));
   labelEl.setAttribute("aria-label", name + " overview");
-  labelEl.setAttribute("aria-keyshortcuts", "Alt+ArrowUp Alt+ArrowDown");
   head.appendChild(labelEl);
   section.setAttribute("aria-labelledby", labelEl.id);
 
@@ -1095,18 +1094,6 @@ window.addEventListener("keydown", (event) => {
   event.preventDefault();
   event.stopImmediatePropagation();
 }, true);
-railNavEl.addEventListener("keydown", (event) => {
-  if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey ||
-      (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
-  const section = companyFromLabel(event.target);
-  if (!section || !navPrefs || companyDrag?.active) return;
-  event.preventDefault();
-  const id = section.dataset.entity;
-  const index = orderedCompanyGroups().findIndex((group) => group.entity.id === id);
-  if (moveCompany(id, index + (event.key === "ArrowUp" ? -1 : 1))) {
-    document.getElementById("nav-label-" + id)?.scrollIntoView({ block: "nearest" });
-  }
-});
 
 function renderRail() {
   // A rename open in the rail is not torn down under his typing by a turn event's rebuild; the
@@ -1119,7 +1106,6 @@ function renderRail() {
     companyDrag.railStale = true;
     return;
   }
-  const focusedCompany = companyFromLabel(document.activeElement);
   railNavEl.innerHTML = "";
 
   const rows = allRows();
@@ -1143,9 +1129,6 @@ function renderRail() {
   if (later.length) railNavEl.appendChild(buildChatShelf("later", "Later", later, "laterList"));
   const archived = rows.filter((t) => t.archived);
   if (archived.length) railNavEl.appendChild(buildArchivedGroup(archived));
-  if (focusedCompany) {
-    document.getElementById("nav-label-" + focusedCompany.dataset.entity)?.focus({ preventScroll: true });
-  }
   keepRailTip();
 }
 
@@ -11392,9 +11375,9 @@ function moveListFocus(e, selector) {
   e.preventDefault();
 }
 
-railNavEl.addEventListener("keydown", (e) => {
-  if (!e.defaultPrevented) moveListFocus(e, ".nav-group-label.is-selectable, .nav-thread");
-});
+railNavEl.addEventListener("keydown", (e) =>
+  moveListFocus(e, ".nav-group-label.is-selectable, .nav-thread")
+);
 
 document.addEventListener("keydown", (e) => {
   const mod = e.metaKey || e.ctrlKey;
