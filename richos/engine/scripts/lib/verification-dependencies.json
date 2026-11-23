@@ -10034,7 +10034,7 @@
     },
     "ecs/core/ecs_core.py#load": {
       "source": "ecs/core/ecs_core.py",
-      "sha256": "57a037f5ad398cfff9f12c3259bb9e155cb8798177c38d00314a41f23af515b7",
+      "sha256": "92472cf78a5b087f52c737c327d25ec92f789aab1b69cfb33ce5acaf6b223820",
       "evidence": "Module-load imports and initializers reviewed: only stdlib, literal constants, regular expressions and class/dataclass definitions. No EventStore is instantiated.",
       "keys": [],
       "edges": []
@@ -13345,7 +13345,7 @@
     },
     "ecs/core/ecs_core.py": {
       "source": "ecs/core/ecs_core.py",
-      "sha256": "57a037f5ad398cfff9f12c3259bb9e155cb8798177c38d00314a41f23af515b7",
+      "sha256": "92472cf78a5b087f52c737c327d25ec92f789aab1b69cfb33ce5acaf6b223820",
       "evidence": "Stdlib store/parser/renderer: explicit SQLite/JSON and text inputs, fixed SQL migrations, no shell execution, engine config read or imports beyond the bound ECS core modules.",
       "keys": [],
       "edges": [
@@ -13444,7 +13444,7 @@
     },
     "ecs/tests/test_app.py#answer-operator": {
       "source": "ecs/tests/test_app.py",
-      "sha256": "0cde5be52a2542eba4b132d57d22ec07ecbc617bead77c17aedf869a84f94ada",
+      "sha256": "546c5a0b1ceea4417db5d1f11832344018492925265f12f7236356675bda0df3",
       "evidence": "Only AnswerCompleteTests/OperatorCompleteTests and inherited WorkSeatTests call/bind/rows/observe helpers run. Private SQLite and Git fixtures, fixed CLI requests, host-only MCP refusal controls. No complete-obligation/verified-work command or other test class runs. Renewed 2026-10-09 (second review slice 4): one AppProtocolTests case writes a private scope carrying about 96 KB of literal user words and calls checkpoint, then an oversized one. Renewed 2026-10-14: prepare-turn invokes the existing current, bind, receipt-sync and brief handlers in the same process. New fixed private tests cover idempotent binding, concurrent seats, receipt failure and the final stale-binding fence; no additional dynamic import target.",
       "keys": [],
       "edges": [
@@ -15942,7 +15942,7 @@
     },
     "ecs/tests/test_app.py": {
       "source": "ecs/tests/test_app.py",
-      "sha256": "0cde5be52a2542eba4b132d57d22ec07ecbc617bead77c17aedf869a84f94ada",
+      "sha256": "546c5a0b1ceea4417db5d1f11832344018492925265f12f7236356675bda0df3",
       "keys": [],
       "edges": [
         {
@@ -17659,8 +17659,8 @@
     },
     "scripts/lib/codex_channels.py": {
       "source": "scripts/lib/codex_channels.py",
-      "sha256": "db17b12fc0bfec2382f0368d3051fb2d8658e642e4a3db0fb5f53636a54cb56c",
-      "evidence": "2026-11-21 automatic connections. Import remains standard-library only. Existing review and Pierce callers use the local framed metadata and journal readers. CLI-only --terminal uses codex_watch.session to resolve the existing terminal session. CLI-only dispatch reads the first task frame, locates Codex via PATH and HOME or the bundled macOS location, claims the handoff in its own directory and invokes Codex exec with that task on stdin. No configuration key is added. Review follow-up: terminal owners derive from the configured project root. CLI dispatch reads JSON events for the exact Codex session and resumes it with pending channel frames. App watcher startup reads the packaged app/agents/codex.md guide and installs one bounded guide and its managed global reference in the host-provided CODEX_HOME. Test fixtures isolate that home. The CLI-only terminal path resolves the lead launch cwd from the existing Claude Code platform session or local workspace registry and runs the shared root resolver there. The review and Pierce import callers do not execute it. The dispatched CLI receives an internal locator in its environment and only its own unscoped read acknowledges contiguous frames in that pair; the acknowledgment never runs through the imported read method or any app tool scope. The app-only scan reads post-upgrade Markdown from codex-watch/live.jsonl and leaves the archived pending.jsonl outside delivery. The imported review and Pierce readers do not call this scan. Dispatch and resume use the same full local access for registered app and terminal handoffs. The dispatcher still requires a valid saved Rich or Stu task. No new input or setting is read. 2026-11-22 Codex quota. Imports sibling codex_quota. Only dispatch and the read-only quota CLI action invoke the installed CLI App Server. Terminal and app dispatch use the same active CLI environment. Automatic reset additionally reads documented provider configuration and account identity, uses the existing private coordination root for the reset lock, idempotency marker and bounded dispatch results, and emits notices through existing journals. Only the dedicated channel fixture invokes dispatch. It replaces the CLI and coordination root. Review follow-up: the running CLI inherits its specific dispatch attempt ID. A receipt from a failed attempt cannot advance delivery. Manual and automatic continuation reuse the existing chat and remind it to check prior effects. 2026-11-23: the CLI dispatch also watches stdout for exhaustion notifications and polls the pinned account on a reused App Server connection while exec runs. It writes the selected reset ID to the same idempotency marker and reports bounded in-flight outcomes through the existing diagnostics. A missing preflight account identity can be learned from the first identified snapshot of the live run. No new setting or input file.",
+      "sha256": "adbd08ffbedef794e138a3ea826d0748b69bffe1d105d37f5c6e1fd5bbf9bfd0",
+      "evidence": "2026-11-21 automatic connections. Import remains standard-library only. Existing review and Pierce callers use the local framed metadata and journal readers. CLI-only --terminal uses codex_watch.session to resolve the existing terminal session. CLI-only dispatch reads the first task frame, locates Codex via PATH and HOME or the bundled macOS location, claims the handoff in its own directory and invokes Codex exec with that task on stdin. No configuration key is added. Review follow-up: terminal owners derive from the configured project root. CLI dispatch reads JSON events for the exact Codex session and resumes it with pending channel frames. App watcher startup reads the packaged app/agents/codex.md guide and installs one bounded guide and its managed global reference in the host-provided CODEX_HOME. Test fixtures isolate that home. The CLI-only terminal path resolves the lead launch cwd from the existing Claude Code platform session or local workspace registry and runs the shared root resolver there. The review and Pierce import callers do not execute it. The dispatched CLI receives an internal locator in its environment and only its own unscoped read acknowledges contiguous frames in that pair; the acknowledgment never runs through the imported read method or any app tool scope. The app-only scan reads post-upgrade Markdown from codex-watch/live.jsonl and leaves the archived pending.jsonl outside delivery. The imported review and Pierce readers do not call this scan. Dispatch and resume use the same full local access for registered app and terminal handoffs. The dispatcher still requires a valid saved Rich or Stu task. No new input or setting is read. 2026-11-22 Codex quota. Imports sibling codex_quota. Only dispatch and the read-only quota CLI action invoke the installed CLI App Server. Terminal and app dispatch use the same active CLI environment. Automatic reset additionally reads documented provider configuration and account identity, uses the existing private coordination root for the reset lock, idempotency marker and bounded dispatch results, and emits notices through existing journals. Only the dedicated channel fixture invokes dispatch. It replaces the CLI and coordination root. Review follow-up: the running CLI inherits its specific dispatch attempt ID. A receipt from a failed attempt cannot advance delivery. Manual and automatic continuation reuse the existing chat and remind it to check prior effects. Unscoped CLI connect records its working directory on its own unbound endpoint. The app scanner reads the explicit legacy target and never consumes the retired automatic target. An issued locator may resolve through the private cutover move record within the same coordination root. 2026-11-23: the CLI dispatch also watches stdout for exhaustion notifications and polls the pinned account on a reused App Server connection while exec runs. It writes the selected reset ID to the same idempotency marker and reports bounded in-flight outcomes through the existing diagnostics. A missing preflight account identity can be learned from the first identified snapshot of the live run. No new setting or input file.",
       "keys": [],
       "edges": [
         {

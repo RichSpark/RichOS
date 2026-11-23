@@ -18,7 +18,7 @@ enum ScreenshotChrome {
 }
 
 @MainActor
-final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate, NSPopoverDelegate {
+final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate, NSPopoverDelegate, NSOpenSavePanelDelegate {
     typealias LeaveSheetPresenter = @MainActor (NSAlert, NSWindow, @escaping (NSApplication.ModalResponse) -> Void) -> Void
     let window: ScreenshotEditorWindow
     var closed: (() -> Void)?
@@ -337,7 +337,6 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
         }
         indexedCurrentEdits = canvas?.document.edits
         if let previous, let canvas {
-            canvas.sizes = previous.sizes
             if previous.tool != .crop { canvas.tool = previous.tool }
         }
         scroll.documentView = canvas
@@ -829,7 +828,9 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
     private func askBeforeLeaving(_ title: String, closing: Bool = false, completion: @escaping () -> Void) {
         let alert = NSAlert()
         alert.messageText = title
-        alert.informativeText = "Recent Captures is off or this screenshot could not be kept. You can copy the edited image before leaving."
+        alert.informativeText = canvas?.document.sourceFile != nil
+            ? "Edits to opened images are kept in this window. You can copy the edited image before leaving."
+            : "Recent Captures is off or this screenshot could not be kept. You can copy the edited image before leaving."
         alert.addButton(withTitle: "Cancel")
         alert.addButton(withTitle: closing ? "Close" : "Discard Changes").hasDestructiveAction = true
         alert.addButton(withTitle: closing ? "Copy Image and Close" : "Copy Image and Continue")
@@ -847,6 +848,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
         guard !sheetOpen else { return false }
         canvas?.finishCallout()
         if closeConfirmed || saveEditsNow() || canvas?.hasChanges != true { return true }
+        if let document = canvas?.document, document.sourceFile != nil, lastShared == document.edits { return true }
         askBeforeLeaving("Close without keeping your edits?", closing: true) { [weak self] in
             guard let self else { return }
             closeConfirmed = true
@@ -906,7 +908,13 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
         let date = DateFormatter()
         date.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
         let filename = document.title.replacingOccurrences(of: "/", with: " ").replacingOccurrences(of: ":", with: " ")
-        panel.nameFieldStringValue = "\(filename) \(date.string(from: document.created)).png"
+        if let sourceFile = document.sourceFile {
+            panel.directoryURL = sourceFile.deletingLastPathComponent()
+            panel.nameFieldStringValue = "\(filename) Edited.png"
+            panel.delegate = self
+        } else {
+            panel.nameFieldStringValue = "\(filename) \(date.string(from: document.created)).png"
+        }
         sheetOpen = true
         panel.beginSheetModal(for: window) { [weak self] response in
             guard let self else { return }
@@ -918,6 +926,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
                 guard let image = ScreenshotRenderer.flattened(document), let data = ScreenshotRenderer.png(image) else {
                     throw CocoaError(.fileWriteUnknown)
                 }
+                guard !document.isSourceFile(url) else { throw CocoaError(.fileWriteFileExists) }
                 try data.write(to: url, options: .atomic)
                 lastShared = document.edits
                 announce("Saved \(image.width) × \(image.height) px as one flat picture")
@@ -926,6 +935,15 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
                 announce("Could not save the PNG. Choose a different location and try again.")
                 record(.issues, for: document, from: started)
             }
+        }
+    }
+
+    func panel(_ sender: Any, validate url: URL) throws {
+        if canvas?.document.isSourceFile(url) == true {
+            throw CocoaError(.fileWriteFileExists, userInfo: [
+                NSLocalizedDescriptionKey: "Choose a different name for the edited image.",
+                NSLocalizedRecoverySuggestionErrorKey: "Save the edited image as a separate PNG."
+            ])
         }
     }
 
@@ -1169,7 +1187,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
             thickness.title = "Thickness · " + width
             thickness.setAccessibilityValue(width)
         }
-        size.isHidden = !styled || selectedTool == .highlight || selectedTool.hasThickness
+        size.isHidden = !styled || !selectedTool.hasSizeChoice
         size.selection = (mark?.large ?? canvas?.large) == true ? 1 : 0
         edit.isHidden = cropping || mark?.tool != .text
         delete.isHidden = cropping || mark == nil

@@ -308,7 +308,7 @@ async function main() {
     const pressed = await ratio(page, '#home-video-choices .hv-seg button[aria-pressed="true"]', "backgroundColor", "#home-video-choices", "backgroundColor");
     assert(pair >= 3 && pressed >= 3, `a pair's edge (${pair}) or the chosen one (${pressed}) is under 3:1 on the panel`);
 
-    // his choices stay as he left them, however the panel was closed
+    // Closing the choices without recording restores the last recorded settings.
     await choose(page, "Recording stops", "By itself");
     await choose(page, "Mouse pointer", "Hidden");
     assertEqual(await text(page, "#home-video-choices .says"), "The film plays once, from your first light to today and the recording stops when it ends.", "the sentence for By itself");
@@ -317,7 +317,7 @@ async function main() {
     assertEqual(await page.evaluate(() => window.RichHome.isOpen()), true, "Escape on the choices left the home screen");
     assertEqual(await page.evaluate(() => document.activeElement.id), "home-video", "the keyboard is not back on the button");
     await page.click("#home-video");
-    assertEqual([await chosen(page, "Recording stops"), await chosen(page, "Mouse pointer")], ["By itself", "Hidden"], "the choices did not stay as he left them");
+    assertEqual([await chosen(page, "Recording stops"), await chosen(page, "Mouse pointer")], ["When I stop it", "Shown"], "unrecorded choices became the defaults");
     await page.mouse.click(500, 500);
     assertEqual(await shown(page, "#home-video-choices"), false, "a press outside did not close the choices");
     await page.click("#home-video");
@@ -525,6 +525,7 @@ async function main() {
     assertEqual((await video(page)).state, "idle", "a count that was called off started a recording");
     // Escape while recording stops it and keeps what it has
     await page.click("#home-video");
+    await choose(page, "Mouse pointer", "Hidden");
     await page.click("#home-video-choices .hv-go");
     await until(page, "rec");
     await recorded(page, 1);
@@ -641,10 +642,12 @@ async function main() {
     assertEqual([(await video(page)).mic].concat(await page.evaluate(() => [window.__micAsked, window.__micOpen])), ["on", 1, 1], "the microphone, switched on");
     await page.keyboard.press("Escape");
     assertEqual(await page.evaluate(() => window.__micOpen), 0, "the microphone stayed open with the choices closed");
-    // his choice stays: the choices open with the microphone on again
+    // Choices made without recording do not change the default.
     await page.click("#home-video");
+    assertEqual([await chosen(page, "Microphone"), await page.evaluate(() => window.__micOpen)], ["Off", 0], "an abandoned microphone choice became the default");
+    await choose(page, "Microphone", "On");
     await page.waitForFunction(() => window.RichHomeVideo.state().mic === "on", null, { timeout: 60000 });
-    assertEqual([await chosen(page, "Microphone"), await page.evaluate(() => window.__micOpen)], ["On", 1], "his choice of the microphone did not stay");
+    assertEqual(await page.evaluate(() => window.__micOpen), 1, "the microphone did not reopen");
     await page.click("#home-video-choices .hv-go");
     await until(page, "rec");
     assertEqual(await page.evaluate(() => window.__micOpen), 1, "the microphone was let go before the recording");
@@ -655,9 +658,14 @@ async function main() {
     assert(/· with your voice ·/.test(await text(page, ".hv-sheet .meta")), "the sheet does not say the video has his voice");
     const file = await saved(page, "voice");
     assertEqual(file.audio, "aac", "a video made with the microphone has no sound in it");
+    await page.click(".hv-sheet .row .hv-plain");
+    await page.waitForFunction(() => window.RichHomeVideo.state().mic === "on");
+    assertEqual([await chosen(page, "Microphone"), await page.evaluate(() => window.__micOpen)], ["On", 1], "a completed video did not restore the microphone choice");
+    await page.keyboard.press("Escape");
+    assertEqual(await page.evaluate(() => window.__micOpen), 0, "the restored microphone stayed open");
     assertEqual(page.__errors, [], "the page reported errors");
     await page.close();
-    return `no microphone given: the sentence, Off, no sound; ${contrast}; given: asked once when switched on, let go with the choices closed and after the recording, ${file.audio} in the file`;
+    return `no microphone given: the sentence, Off, no sound; ${contrast}; given: let go with the choices closed and after recording, restored from the completed video, ${file.audio} in the file`;
   });
 
   await run.check("the save window: his Cancel changes nothing on the sheet, a folder that cannot be written is said, and saving again works", async () => {

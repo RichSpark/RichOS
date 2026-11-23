@@ -13,7 +13,7 @@ public enum RichFilesDiagnostics {
         case glanceCaptureFrame, glanceCaptureOutput, glanceCaptureSession, glanceScrollCapture, glanceCompare, glanceOCR, glanceSearch, glancePin, glanceRedactedCopy, glanceShare
         case glanceCaptureHelperStart, glanceCaptureHelperLogin, glanceCaptureHelperMenu, glanceCaptureShortcutLaunch, glanceCaptureMenuLaunch
         case glanceAnnotationDefaults
-        case glanceDisplay, glanceDecode, glanceFolder, glancePreview, glanceDefaults, glanceMetadata
+        case glanceDisplay, glanceDecode, glanceFolder, glancePreview, glanceDefaults, glanceMetadata, glanceViewerEdit
 
         fileprivate var isSuiteRestart: Bool {
             switch self {

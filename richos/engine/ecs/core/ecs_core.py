@@ -79,6 +79,7 @@ INJECTION_FLAG_FILE = "content-injection.enabled"
 EVENT_PAYLOAD_FIELDS = {
     "entity.registered": {"display_name", "canonical_root", "git_common_dir", "status"},
     "thread.created": {"title"},
+    "thread.legacy_codex_rehomed": {"source_entity_id"},
     "thread.activated": {"audience", "turn_id", "handover_from"},
     "thread.deactivated": {"reason"},
     "session.observed": {"vendor", "status"},
@@ -832,6 +833,24 @@ class EventStore:
                 event["source_ref"],
             ),
         )
+
+    def _on_thread_legacy_codex_rehomed(self, conn: sqlite3.Connection, **event: Any) -> None:
+        # The desktop writes this receipt with the offline move. Rebuild applies the
+        # same projection updates in journal order, preserving historical receipts.
+        if (event["source_ref"] != "richos:legacy-codex-company"
+                or event["actor_kind"] != "app" or event["actor_id"] != "richos-app-v1"):
+            raise ScopeError("legacy Codex company repair requires its desktop receipt")
+        source = _required(event["payload"], "source_entity_id")
+        thread = event["thread_id"]
+        destination = event["entity_id"]
+        if not destination or destination == source:
+            raise ScopeError("legacy Codex company repair requires a different destination")
+        self._require_thread(conn, source, thread)
+        params = {"source": source, "destination": destination, "thread": thread}
+        sql = Path(__file__).with_name("legacy_codex_move.sql").read_text(encoding="utf-8")
+        for statement in sql.split(";"):
+            if statement.strip():
+                conn.execute(statement, params)
 
     def _on_thread_activated(self, conn: sqlite3.Connection, **event: Any) -> None:
         entity_id = self._require_entity(conn, event["entity_id"])["entity_id"]

@@ -41,6 +41,33 @@ final class ScreenshotWorkflowTests: XCTestCase {
         }
     }
 
+    func testEditShortcutIsReservedForTheViewerImage() throws {
+        let item = try XCTUnwrap(Application.makeEditMenu().item(withTitle: "Edit"))
+        XCTAssertEqual(item.keyEquivalent, "e")
+        XCTAssertEqual(item.keyEquivalentModifierMask, .command)
+        XCTAssertNotNil(GlanceInfoShortcut(key: "e", rawModifiers: NSEvent.ModifierFlags.command.rawValue).conflict)
+    }
+
+    func testOpenedImageSourceProtectionRecognizesLinkedPaths() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("Original.png")
+        let renamed = root.appendingPathComponent("Edited.png")
+        let symlink = root.appendingPathComponent("Alias.png")
+        let hardlink = root.appendingPathComponent("Hardlink.png")
+        let image = try fixture()
+        try XCTUnwrap(ScreenshotRenderer.png(image)).write(to: source)
+        try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: source)
+        try FileManager.default.linkItem(at: source, to: hardlink)
+        let document = ScreenshotDocument(original: image, scale: 1, kind: .image, sourceFile: source)
+        XCTAssertTrue(document.isSourceFile(source))
+        XCTAssertTrue(document.isSourceFile(symlink))
+        XCTAssertTrue(document.isSourceFile(hardlink))
+        XCTAssertFalse(document.isSourceFile(renamed))
+        XCTAssertFalse(ScreenshotDocument(original: image, scale: 1).isSourceFile(source))
+    }
+
     func testFlattenedRedactionReplacesPixelsAfterCropAndOverlappingMarks() async throws {
         let original = try fixture()
         var document = ScreenshotDocument(original: original, scale: 2)
@@ -210,7 +237,9 @@ final class ScreenshotWorkflowTests: XCTestCase {
         canvas.tool = .box
         XCTAssertFalse(canvas.large)
         XCTAssertEqual(canvas.ink, .red)
+        canvas.tool = .text
         canvas.setStyle(large: true)
+        XCTAssertTrue(canvas.large)
         canvas.tool = .arrow
         XCTAssertFalse(canvas.large)
         XCTAssertEqual(canvas.ink, .blue)

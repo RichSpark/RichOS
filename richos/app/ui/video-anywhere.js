@@ -28,7 +28,8 @@
 // own recorder does), and that canvas is recorded with the webview's own recorder, with the
 // microphone's sound added when he chose it. The recorder's own pieces (`rv-skip`) are never in
 // the file.
-// A focused RichCleaner or RichFiles window is composited over the main view.
+// The native Output Git pane is composited in place. A focused RichCleaner or RichFiles window
+// is composited over the main view.
 // TEXT HE HIGHLIGHTS IS IN THE FILE (CEO 2026-11-15, on the round's mockup: "it was
 // recording the mouse but not recording text highlights when I was highlighting the text with the
 // mouse. I would expect the screen recording to record the text highlighting as well."): the
@@ -62,7 +63,7 @@ window.RichVideoAnywhere = (function () {
   var el = {};
   var wrap = null; // `.settings`, the settings button's own row
   var state = "idle"; // idle | choosing | count | rec | saving | sheet
-  var opts = { pointer: true }; // stays as he left it
+  var opts = { pointer: true };
   var NS = "http://www.w3.org/2000/svg";
   /// The choices are open without Settings under them (see `openChoices`).
   var loose = false;
@@ -717,23 +718,58 @@ window.RichVideoAnywhere = (function () {
     R.inHome = wasHome;
   }
 
-  // One bounded native snapshot at a time, only while the pane is visible during
-  // a recording. The canvas continues to draw the webview at its usual rate.
-  async function readWindowFrame(command, args, when) {
+  async function readWindowFrame(command, args, pane = false) {
     const data = new Uint8Array(await window.RichBridge.invoke(command, args));
-    if (data.byteLength <= 8) return null;
-    // Two little-endian floats give the pointer relative to the picture, or NaN
-    // when it is outside. The rest of the packet is the JPEG.
-    const xy = new DataView(data.buffer, data.byteOffset, 8);
+    const header = pane ? 24 : 8;
+    if (data.byteLength <= header) return null;
+    // Two little-endian floats give the pointer relative to the image (NaN outside it).
+    // An embedded pane also supplies its normalized placement within the viewport.
+    const fields = new DataView(data.buffer, data.byteOffset, header);
+    const read = (offset) => fields.getFloat32(offset, true);
     const image = new Image();
-    const url = URL.createObjectURL(new Blob([data.subarray(8)], { type: "image/jpeg" }));
+    const url = URL.createObjectURL(new Blob([data.subarray(header)], { type: pane ? "image/png" : "image/jpeg" }));
     try {
       image.src = url;
       await image.decode();
     } finally {
       URL.revokeObjectURL(url);
     }
-    return { image, when, x: xy.getFloat32(0, true), y: xy.getFloat32(4, true) };
+    return { image, x: read(0), y: read(4), bounds: pane ? [read(8), read(12), read(16), read(20)] : null };
+  }
+
+  var gitRequest = false;
+  function gitVisit() {
+    return window.RichOutput?.recordingGitVisit() ?? null;
+  }
+
+  async function sampleGit(R) {
+    const visit = gitVisit();
+    if (R.gitVisit !== visit) {
+      R.gitVisit = visit;
+      R.gitImage = null;
+      R.gitAsked = -Infinity;
+    }
+    if (visit === null || gitRequest || R.now - R.gitAsked < 100) return;
+    gitRequest = true;
+    R.gitAsked = R.now;
+    try {
+      const frame = await readWindowFrame("output_git_recording_frame", { recording: R.number }, true);
+      if (frame && rec === R && visit === gitVisit()) R.gitImage = frame;
+    } catch (_) {
+      // Keep the last picture through a missed sample. A new or hidden pane clears it above.
+    } finally {
+      gitRequest = false;
+    }
+  }
+
+  function paintGitPicture(cx, frame) {
+    if (!frame) return null;
+    const [left, top, width, height] = frame.bounds;
+    const x = left * innerWidth, y = top * innerHeight;
+    const w = width * innerWidth, h = height * innerHeight;
+    cx.drawImage(frame.image, x, y, w, h);
+    if (Number.isFinite(frame.x) && Number.isFinite(frame.y)) return [x + frame.x * w, y + frame.y * h];
+    return null;
   }
 
   var cleanerFocused = false;
@@ -756,7 +792,7 @@ window.RichVideoAnywhere = (function () {
     cleanerRequest = true;
     R.cleanerAsked = R.now;
     try {
-      const frame = await readWindowFrame("cleaner_recording_frame", { recording: R.number }, R.now);
+      const frame = await readWindowFrame("cleaner_recording_frame", { recording: R.number });
       if (rec === R && visit === cleanerVisit) R.cleanerImage = frame;
     } catch (_) {
       if (rec === R && visit === cleanerVisit) R.cleanerImage = null;
@@ -781,7 +817,7 @@ window.RichVideoAnywhere = (function () {
     filesRequest = true;
     R.filesAsked = R.now;
     try {
-      const frame = await readWindowFrame("richfiles_recording_frame", {}, R.now);
+      const frame = await readWindowFrame("richfiles_recording_frame", {});
       if (rec === R && visit === filesVisit && !document.hasFocus()) R.filesImage = frame;
     } catch (_) {
       if (rec === R && visit === filesVisit) R.filesImage = null;
@@ -822,6 +858,7 @@ window.RichVideoAnywhere = (function () {
     R.inHome = false;
     R.sel = selected();
     R.tips = tooltipLayers();
+    sampleGit(R);
     sampleCleaner(R);
     sampleFiles(R);
     // what stands on the page itself, lowest first (the order the window stacks it in)
@@ -843,8 +880,10 @@ window.RichVideoAnywhere = (function () {
       else paintDom(cx, layer.e, 1, R);
     }
     cx.globalAlpha = 1;
+    const gitPointer = paintGitPicture(cx, R.gitImage);
     if (cleanerFocused) paintWindowPicture(cx, R, R.cleanerImage);
     else if (!document.hasFocus() && R.filesImage) paintWindowPicture(cx, R, R.filesImage);
+    else if (R.pointer && gitPointer) P.paintPointer(cx, ...gitPointer);
     else if (R.pointer && ptr.inside && !ptr.own) P.paintPointer(cx, ptr.x, ptr.y);
   }
 
@@ -1040,7 +1079,7 @@ window.RichVideoAnywhere = (function () {
     stale = null;
     shot = out;
     state = "sheet";
-    mic.stop(); // the file is whole: the microphone is let go (his choice stays)
+    mic.stop();
     // Stop pressed in the heading of Settings: Settings closes, or the sheet would open under it
     // (the settings button and its panel stand above every overlay, this sheet among them)
     if (window.RichSettings) window.RichSettings.close();
@@ -1053,6 +1092,7 @@ window.RichVideoAnywhere = (function () {
     el.sheetDiscard.textContent = "Discard";
     el.video.style.aspectRatio = out.w + " / " + out.h;
     if (out.blob && out.blob.size) {
+      P.rememberVideoChoices(out);
       el.video.src = shot.url = URL.createObjectURL(out.blob);
       // with the made-up microphone the sheet never plays sound: a check must stay silent on a Mac
       el.video.muted = !out.voice || out.tone;
@@ -1196,8 +1236,7 @@ window.RichVideoAnywhere = (function () {
         return mic.state === "on" ? "on" : "off";
       },
       function (k) {
-        mic.want = k === "on";
-        if (mic.want) mic.start();
+        if (k === "on") mic.start();
         else mic.stop();
       }
     );
@@ -1206,24 +1245,19 @@ window.RichVideoAnywhere = (function () {
     el.micNote = make("p", "rv-mic-note", P.DENIED);
     el.micNote.hidden = true;
     el.panel.appendChild(el.micNote);
-    el.panel.appendChild(
-      row(
-        "pointer",
-        "Mouse pointer",
-        seg(
-          [
-            { key: "shown", label: "Shown" },
-            { key: "hidden", label: "Hidden" },
-          ],
-          function () {
-            return opts.pointer ? "shown" : "hidden";
-          },
-          function (k) {
-            opts.pointer = k === "shown";
-          }
-        )
-      )
+    el.pointerSeg = seg(
+      [
+        { key: "shown", label: "Shown" },
+        { key: "hidden", label: "Hidden" },
+      ],
+      function () {
+        return opts.pointer ? "shown" : "hidden";
+      },
+      function (k) {
+        opts.pointer = k === "shown";
+      }
     );
+    el.panel.appendChild(row("pointer", "Mouse pointer", el.pointerSeg));
     el.panel.appendChild(make("p", "says", "RichOS is recorded while you use it, on every screen you go to, until you press Stop."));
     el.go = make("button", "rv-main rv-go", "Start recording", { type: "button" });
     el.panel.appendChild(el.go);
@@ -1284,9 +1318,10 @@ window.RichVideoAnywhere = (function () {
     else if (state === "choosing") closePanel();
     else if (state === "rec") finish();
     else if (state === "count") {
+      const draft = { pointer: opts.pointer, voice: mic.state === "on" };
       cancelCount();
       rest();
-      openChoices();
+      openChoices(draft);
     }
   }
 
@@ -1315,18 +1350,19 @@ window.RichVideoAnywhere = (function () {
     el.panel.style.top = Math.round(r.bottom + 8) + "px";
     el.panel.style.right = Math.max(8, Math.round(innerWidth - r.right)) + "px";
   }
-  function openPanel() {
+  function openPanel(choices = P.readVideoChoices()) {
     state = "choosing";
-    if (mic.state === "denied") mic.state = "off";
+    opts.pointer = choices.pointer;
+    el.pointerSeg.paint();
+    if (choices.voice) mic.start();
     paintMic();
-    if (mic.want && !mic.stream) mic.start(); // his choice from last time: the microphone again
     el.panel.hidden = false;
     seat();
     paintState();
     el.go.focus({ preventScroll: true });
   }
   /// From anywhere (the sheet's "Record again", the count's "Cancel"): Settings, then the choices.
-  function openChoices() {
+  function openChoices(draft) {
     if (homeOpen()) {
       // on the home screen the choices are the home screen's own (round 77): its button opens them
       var own = document.getElementById("home-video");
@@ -1337,14 +1373,14 @@ window.RichVideoAnywhere = (function () {
       // a home screen that has no button of its own yet (no memory of his): these choices, under
       // the settings button, so "Record again" is never a press that does nothing
       loose = true;
-      return void openPanel();
+      return void openPanel(draft);
     }
     if (!window.RichSettings) return;
     window.RichSettings.openMenu();
     place();
     requestAnimationFrame(function () {
       place();
-      if (state === "idle" && el.make.isConnected) openPanel();
+      if (state === "idle" && el.make.isConnected) openPanel(draft);
     });
   }
   function closePanel() {
@@ -1355,7 +1391,7 @@ window.RichVideoAnywhere = (function () {
     else paintState();
     return true;
   }
-  /// Back to the button alone: the microphone is let go (his choice stays).
+  /// Back to the button alone: the microphone is let go.
   function rest() {
     state = "idle";
     mic.stop();

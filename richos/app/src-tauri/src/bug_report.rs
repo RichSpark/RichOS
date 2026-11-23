@@ -488,6 +488,10 @@ pub async fn bug_report_write(app: AppHandle, answer: String, screen: bug::Scree
                 prompt.push_str("\n\nRecent RichCleaner window recording timings:\n");
                 prompt.push_str(&capture);
             }
+            if let Some(capture) = crate::home_video::recent_output_git_capture() {
+                prompt.push_str("\n\nRecent Output Git pane recording timings:\n");
+                prompt.push_str(&capture);
+            }
         }
         if post == bug::Post::Bug {
             if let Some(chat) = crate::chat_list::recent_diagnostics() {

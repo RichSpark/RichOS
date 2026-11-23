@@ -5,6 +5,7 @@ import RichFilesCore
 final class Canvas: NSView {
     let info: GlanceInfoView
     private(set) var pinBitmap: CGImage?
+    private(set) var imageScale: CGFloat = 1
 
     private var viewport = GlanceViewport()
     private var image: NSImage?
@@ -44,6 +45,10 @@ final class Canvas: NSView {
     func show(_ decoded: GlanceImage?, filename: String, message: String? = nil) {
         info.reset(showIcon: decoded != nil)
         pinBitmap = decoded?.bitmap
+        let scale = decoded.map { $0.size.width / $0.pointSize.width } ?? 1
+        let nearest = scale.rounded()
+        // PNG stores density in whole pixels per meter, so Retina DPI may round slightly.
+        imageScale = scale.isFinite ? (abs(scale - nearest) < 0.001 ? nearest : scale) : 1
         image = decoded.map { NSImage(cgImage: $0.bitmap, size: $0.pointSize) }
         self.message = message
         setAccessibilityLabel(filename)

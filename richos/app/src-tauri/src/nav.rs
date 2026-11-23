@@ -26,7 +26,7 @@
 //! not worth refusing to start.
 
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -113,6 +113,17 @@ pub struct NavState {
 }
 
 impl NavState {
+    /// The saved display order, followed by new companies in registry order.
+    pub fn ordered_companies<'a>(
+        &self,
+        registry: &'a richos_core::entity::EntityRegistry,
+    ) -> Vec<&'a richos_core::entity::Entity> {
+        let rank: HashMap<_, _> = self.company_order.iter().map(String::as_str).zip(0..).collect();
+        let mut companies: Vec<_> = registry.entities().iter().collect();
+        companies.sort_by_key(|company| rank.get(company.id.as_str()).copied().unwrap_or(rank.len()));
+        companies
+    }
+
     /// The title a conversation is shown under, everywhere it is listed: his own rename, then
     /// Haiku's title, then the title it was created with.
     pub fn display_title(&self, thread_id: &str, created_title: &str) -> String {

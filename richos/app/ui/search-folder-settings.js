@@ -212,7 +212,7 @@
     companyPane.replaceChildren();
     if (companyPane.hidden) return;
     companyPane.appendChild(element("h3", "", "Rich in each company"));
-    for (const company of companyRows) {
+    for (const company of window.RichCompanyOrder(companyRows, (row) => row.company_id)) {
       const id = company.company_id;
       const expanded = id === editingCompany;
       const choices = new Map((company.saved_sources || []).map(source => [source.id, source]));
@@ -404,6 +404,13 @@
     invoke("search_folder_preferences").then(next => { preferences = next; paintRow(); }, () => {});
   }
   window.RichFinderFolders = { open };
+  window.addEventListener("richos:company-order-changed", () => {
+    if (companyPane) {
+      const focused = companyPane.contains(document.activeElement) && document.activeElement.id;
+      paintCompanies();
+      if (focused) document.getElementById(focused)?.focus();
+    }
+  });
   window.RichSettings.registerSearchFolders({ open, paint: paintRow, onOpen: refreshRow });
   refreshRow();
 })();

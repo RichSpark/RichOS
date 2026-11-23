@@ -33,7 +33,7 @@ struct GlanceInfoShortcut: Codable, Equatable {
         if key == "\t" || key == " " || key == "\r" || key == "\n" || key == "\u{0019}" {
             return "That key moves focus or activates a control."
         }
-        if flags == .command && ["w", "q", "h", "m", "o"].contains(key) {
+        if flags == .command && ["w", "q", "h", "m", "o", "e"].contains(key) {
             return "\(label) is already used by RichGlance."
         }
         if key.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) {
@@ -154,6 +154,7 @@ final class GlanceInfoView: NSView {
     private let preferences: GlanceInfoPreferences
     private let textShadow = TextShadow()
     private let icon = FocusButton()
+    private let editButton = FocusButton()
     private let showDefault = FocusSwitch()
     private let showDefaultLabel = NSTextField(labelWithString: "Show by default")
     private let shortcutButton = FocusButton()
@@ -173,6 +174,7 @@ final class GlanceInfoView: NSView {
 
     var announcement: ((String) -> Void)?
     var preferencesChanged: (() -> Void)?
+    var editImage: (() -> Void)?
     var explicitlyShown: Bool { overrideVisibility ?? (preferences.showByDefault && metadata != nil) }
     override var isFlipped: Bool { true }
 
@@ -180,15 +182,10 @@ final class GlanceInfoView: NSView {
         self.preferences = preferences
         super.init(frame: .zero)
         isHidden = true
-        icon.image = NSImage(systemSymbolName: "info", accessibilityDescription: nil)
-        icon.isBordered = false
-        icon.imagePosition = .imageOnly
-        icon.wantsLayer = true
-        icon.layer?.cornerRadius = 13
-        icon.contentTintColor = .white
-        icon.setAccessibilityLabel("Show RichCleaner Info")
-        icon.target = self
-        icon.action = #selector(toggleInfo)
+        configureIcon(icon, symbol: "info", action: #selector(toggleInfo))
+        configureIcon(editButton, symbol: "pencil", action: #selector(pressEdit))
+        editButton.setAccessibilityLabel("Edit Image")
+        editButton.toolTip = "Edit Image (⌘E)"
         controlsMaterial.material = .popover
         controlsMaterial.blendingMode = .withinWindow
         controlsMaterial.state = .active
@@ -208,7 +205,7 @@ final class GlanceInfoView: NSView {
         icon.focusChanged = focusChanged
         showDefault.focusChanged = focusChanged
         shortcutButton.focusChanged = focusChanged
-        for control in [icon, showDefault, shortcutButton, showDefaultLabel] as [NSView] { addSubview(control) }
+        for control in [editButton, icon, showDefault, shortcutButton, showDefaultLabel] as [NSView] { addSubview(control) }
         icon.nextKeyView = showDefault
         showDefault.nextKeyView = shortcutButton
         note.isEditable = false
@@ -245,9 +242,24 @@ final class GlanceInfoView: NSView {
     @objc private func textScrolled() { textShadow.needsDisplay = true }
 
     func linkKeyboard(after view: NSView) {
-        view.nextKeyView = icon
+        view.nextKeyView = editButton
+        editButton.nextKeyView = icon
         shortcutButton.nextKeyView = view
     }
+
+    private func configureIcon(_ button: FocusButton, symbol: String, action: Selector) {
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        button.isBordered = false
+        button.imagePosition = .imageOnly
+        button.wantsLayer = true
+        button.layer?.cornerRadius = 13
+        button.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.65).cgColor
+        button.contentTintColor = .white
+        button.target = self
+        button.action = action
+    }
+
+    @objc private func pressEdit() { editImage?() }
 
     private func configure(_ button: FocusButton, action: Selector) {
         button.target = self
@@ -356,10 +368,12 @@ final class GlanceInfoView: NSView {
 
     override func layout() {
         super.layout()
-        icon.frame = CGRect(x: 12, y: 12, width: 26, height: 26)
+        editButton.frame = CGRect(x: 12, y: 12, width: 26, height: 26)
+        icon.frame = CGRect(x: editButton.frame.maxX + 6, y: 12, width: 26, height: 26)
+        let controlsStart = icon.frame.maxX + 10
         let width = max(1, min(bounds.width - 24, 550))
         let switchSize = showDefault.intrinsicContentSize
-        showDefault.frame = CGRect(x: 48, y: 25 - switchSize.height / 2,
+        showDefault.frame = CGRect(x: controlsStart, y: 25 - switchSize.height / 2,
                                    width: switchSize.width, height: switchSize.height)
         showDefaultLabel.frame = CGRect(x: showDefault.frame.maxX + 6, y: 15,
                                         width: showDefaultLabel.intrinsicContentSize.width + 2, height: 22)
@@ -369,11 +383,11 @@ final class GlanceInfoView: NSView {
         let shortcutWidth = min(width, max(111, ceil(labelWidth) + 28))
         shortcutButton.frame = CGRect(x: showDefaultLabel.frame.maxX + 6, y: 10, width: shortcutWidth, height: 30)
         if shortcutButton.frame.maxX > bounds.width - 12 {
-            shortcutButton.frame.origin = CGPoint(x: 48, y: 44)
+            shortcutButton.frame.origin = CGPoint(x: controlsStart, y: 44)
         }
         let rowBottom = showDefault.isHidden ? icon.frame.maxY : max(shortcutButton.frame.maxY, showDefault.frame.maxY)
         var materialBounds = showDefault.frame.union(showDefaultLabel.frame).union(shortcutButton.frame)
-        status.frame = CGRect(x: 53, y: rowBottom + 4, width: max(1, materialBounds.width - 10), height: 35)
+        status.frame = CGRect(x: controlsStart + 5, y: rowBottom + 4, width: max(1, materialBounds.width - 10), height: 35)
         if !status.isHidden { materialBounds = materialBounds.union(status.frame) }
         controlsMaterial.frame = materialBounds.insetBy(dx: -5, dy: -3)
         let top = (status.isHidden ? rowBottom : status.frame.maxY) + 6

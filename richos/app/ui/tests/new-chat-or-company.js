@@ -634,6 +634,104 @@ async function main() {
     }
   });
 
+  await run.check("company lists follow a sidebar drag before the save and after reload", async () => {
+    const page = await openApp(browser);
+    const pickNames = ["Lumen Labs", "Northwind Traders"];
+    const ids = ["lumen", "northwind"];
+    const checkLists = async () => {
+      await page.click("#rail-new-thread");
+      const menu = await menuState(page);
+      assertEqual(menu.items.map((item) => item.name), [...pickNames, "New company"], "New Chat company order");
+      await page.keyboard.press("Escape");
+      await page.locator(".nav-group--unbound .nav-thread").first().click();
+      await page.click("#unbound-new-thread");
+      assertEqual(await page.locator("#entity-picker .picker-name").allTextContents(), pickNames, "company picker order");
+      await page.keyboard.press("Escape");
+      await page.click(".setbtn");
+      const settingsCompanies = page.locator("#set-company option[value]:not([value=''])");
+      await settingsCompanies.first().waitFor({ state: "attached" });
+      assertEqual((await settingsCompanies.evaluateAll((options) => options.map((option) => option.value))).slice(0, 2),
+        ids, "Settings company order");
+      await page.keyboard.press("Escape");
+    };
+    try {
+      await shellSettled(page);
+      await page.evaluate(() => {
+        const invoke = RichBridge.invoke.bind(RichBridge);
+        const saveGate = new Promise((release) => { window.releaseCompanyOrderSave = release; });
+        RichBridge.invoke = async (cmd, args) => {
+          if (cmd === "set_company_order") await saveGate;
+          return invoke(cmd, args);
+        };
+      });
+      const source = await page.locator("#nav-label-northwind").boundingBox();
+      const target = await page.locator("#nav-label-lumen").boundingBox();
+      await page.mouse.move(source.x + 30, source.y + 10);
+      await page.mouse.down();
+      await page.mouse.move(target.x + 30, target.y + target.height - 4, { steps: 6 });
+      await page.mouse.up();
+      const companyRows = page.locator("#rail-nav > [data-entity]");
+      assertEqual(await companyRows.evaluateAll((rows) => rows.map((row) => row.dataset.entity)), ids, "sidebar after drop");
+      await checkLists();
+      await page.evaluate(() => window.releaseCompanyOrderSave());
+      await page.waitForFunction(async () => (await RichBridge.invoke("nav_state")).company_order?.[0] === "lumen");
+      await page.reload();
+      await leaveHome(page);
+      await shellSettled(page);
+      if (await page.locator("#entity-picker").isVisible()) await page.keyboard.press("Escape");
+      await checkLists();
+    } finally {
+      await page.close();
+    }
+  });
+
+  await run.check("previously opened company settings show the new order while their reads are pending", async () => {
+    const page = await openApp(browser);
+    const surfaces = [
+      ["#set-home-open", "#home-prefs-done", ".home-prefs-name"],
+      ["#set-repositories-open", "#repository-close", "#repository-company option[value]:not([value=''])"],
+      ["#set-search-folders-open", "#rf-folder-done", ".rf-company-name"],
+    ];
+    async function openSettingsPanel(button) {
+      await page.click(".setbtn");
+      await page.click(button);
+    }
+    try {
+      await shellSettled(page);
+      await page.evaluate(() => RichBridge.invoke("set_search_folder_mode", { mode: "all" }));
+      for (const [open, close, rows] of surfaces) {
+        await openSettingsPanel(open);
+        await page.locator(rows).first().waitFor({ state: "attached" });
+        assertEqual((await page.locator(rows).allTextContents()).slice(0, 2),
+          ["Northwind Traders", "Lumen Labs"], "initial order in " + open);
+        await page.click(close);
+      }
+
+      await page.evaluate(() => {
+        const invoke = RichBridge.invoke.bind(RichBridge);
+        RichBridge.invoke = (cmd, args) =>
+          ["home_entity_row", "repository_connections", "search_company_folders", "set_company_order"].includes(cmd)
+            ? new Promise(() => {})
+            : invoke(cmd, args);
+      });
+      const source = await page.locator("#nav-label-northwind").boundingBox();
+      const target = await page.locator("#nav-label-lumen").boundingBox();
+      await page.mouse.move(source.x + 30, source.y + 10);
+      await page.mouse.down();
+      await page.mouse.move(target.x + 30, target.y + target.height - 4, { steps: 6 });
+      await page.mouse.up();
+
+      for (const [open, close, rows] of surfaces) {
+        await openSettingsPanel(open);
+        assertEqual((await page.locator(rows).allTextContents()).slice(0, 2),
+          ["Lumen Labs", "Northwind Traders"], "new order in " + open + " while loading");
+        await page.click(close);
+      }
+    } finally {
+      await page.close();
+    }
+  });
+
   // ---- the seven states of the round, both themes, beside the mockup ---------------------
   const STATES = {
     one: { keep: ONE, drive: async () => {} },

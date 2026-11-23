@@ -377,13 +377,13 @@ async function main() {
     });
     assertEqual(seat, [8, 0, 430], "the choices do not hang 8px under their button, flush with its right end, 430px wide");
     assertEqual(await page.evaluate(() => document.activeElement.textContent), "Start recording", "the keyboard is not on Start recording");
-    // his choices stay as he left them, however the choices were closed
+    // Closing the choices without recording restores the last recorded settings.
     await choose(page, "Mouse pointer", "Hidden");
     await page.keyboard.press("Escape");
     assertEqual([(await st(page)).state, await shown(page, "#video-anywhere-choices"), await shown(page, "#set-menu")], ["idle", false, true], "Escape did not close the choices alone");
     assertEqual(await page.evaluate(() => document.activeElement.id), "video-anywhere", "the keyboard is not back on the button");
     await page.click("#video-anywhere");
-    assertEqual(await chosen(page, "Mouse pointer"), "Hidden", "the choices did not stay as he left them");
+    assertEqual(await chosen(page, "Mouse pointer"), "Shown", "an unrecorded pointer choice became the default");
     await page.mouse.click(520, 430); // a press on Settings, outside the choices
     assertEqual([(await st(page)).state, await shown(page, "#set-menu")], ["idle", true], "a press outside did not close the choices and leave Settings open");
     await page.click("#video-anywhere");
@@ -400,7 +400,7 @@ async function main() {
     assertEqual(await page.evaluate(() => window.__micAsked), 0, "the microphone was asked for and he never switched it on");
     assertEqual(page.__errors, [], "the page reported errors");
     await page.close();
-    return "Microphone (Off, On) and Mouse pointer (Shown, Hidden), 430px wide, 8px under the button; Hidden stayed; closed four ways";
+    return "Microphone (Off, On) and Mouse pointer (Shown, Hidden), 430px wide, 8px under the button; an abandoned Hidden choice reset; closed four ways";
   });
 
   await run.check("a recording with the microphone and the pointer goes on from a chat into Settings, to the RichPass page and to the home screen, and is stopped there: every one of those screens is in the saved file, with sound and the pointer and without the recorder's own button", async () => {
@@ -516,7 +516,13 @@ async function main() {
     await page.click("#set-btn");
     assert(await appears(page, "#set-menu"), "Settings did not open during a recording");
     await page.mouse.move(560, 330, { steps: 12 });
-    assertEqual([await text(page, "#video-anywhere .w"), await page.evaluate(() => document.querySelector("#video-anywhere").classList.contains("going")), await text(page, "#video-anywhere .rv-time") === await text(page, "#video-anywhere-stop .rv-time")], ["Stop", true, true], "in Settings the button is not the same red Stop with the time");
+    const stopLabels = await page.evaluate(() => {
+      const settingsStop = document.querySelector("#video-anywhere");
+      const settingsTime = settingsStop.querySelector(".rv-time").textContent;
+      const cornerTime = document.querySelector("#video-anywhere-stop .rv-time").textContent;
+      return [settingsStop.querySelector(".w").textContent, settingsStop.classList.contains("going"), settingsTime === cornerTime];
+    });
+    assertEqual(stopLabels, ["Stop", true, true], "in Settings the button is not the same red Stop with the time");
     await painted(page, 12);
     await mark("Settings");
     // ESCAPE DOES NOT STOP A RECORDING HERE: it closes Settings and the recording goes on
@@ -609,12 +615,14 @@ async function main() {
     assertEqual((await st(page)).state, "idle", "a count that was called off started a recording");
     // Cancel on the button beside the settings button: Settings again, with the choices open as he left them
     await openChoices(page);
-    assertEqual(await chosen(page, "Mouse pointer"), "Hidden", "the choices did not stay as he left them");
+    assertEqual(await chosen(page, "Mouse pointer"), "Shown", "Escape kept a choice from a cancelled recording");
+    await choose(page, "Mouse pointer", "Hidden");
     await page.click("#video-anywhere-choices .rv-go");
     await until(page, "count");
     await page.click("#video-anywhere-stop");
     await until(page, "choosing");
     assertEqual([await appears(page, "#set-menu"), await appears(page, "#video-anywhere-choices"), await shown(page, ".rv-count")], [true, true, false], "Cancel did not go back to Settings with the choices open");
+    assertEqual(await chosen(page, "Mouse pointer"), "Hidden", "Cancel did not keep the draft open for revision");
     await page.click("#video-anywhere-choices .rv-go");
     await until(page, "rec");
     await page.mouse.move(700, 400, { steps: 12 });
