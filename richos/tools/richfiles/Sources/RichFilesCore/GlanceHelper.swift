@@ -68,7 +68,7 @@ public enum GlanceHelper {
         public var background: Bool
         public var menuBar: Bool
 
-        public static let initial = Self(enabled: false, shortcut: .standard, background: false, menuBar: true)
+        public static let initial = Self(enabled: false, shortcut: .standard, background: true, menuBar: true)
 
         private enum CodingKeys: String, CodingKey { case enabled, shortcut, againShortcut, textShortcut, background, menuBar }
 
@@ -85,8 +85,8 @@ public enum GlanceHelper {
             shortcut = try values.decode(Shortcut.self, forKey: .shortcut)
             againShortcut = try values.decodeIfPresent(Shortcut.self, forKey: .againShortcut) ?? .again
             textShortcut = try values.decodeIfPresent(Shortcut.self, forKey: .textShortcut) ?? .copyText
-            background = try values.decodeIfPresent(Bool.self, forKey: .background) ?? false
-            menuBar = try values.decodeIfPresent(Bool.self, forKey: .menuBar) ?? true
+            background = try values.decodeIfPresent(Bool.self, forKey: .background) ?? Self.initial.background
+            menuBar = try values.decodeIfPresent(Bool.self, forKey: .menuBar) ?? Self.initial.menuBar
         }
 
         public subscript(action: CaptureRequest.Action) -> Shortcut {

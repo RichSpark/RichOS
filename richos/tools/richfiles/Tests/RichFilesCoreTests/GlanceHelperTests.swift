@@ -3,13 +3,14 @@ import XCTest
 @testable import RichFilesCore
 
 final class GlanceHelperTests: XCTestCase {
-    func testFirstOptInEnablesDefaultButExistingOffAndCustomChordSurvive() throws {
+    func testBackgroundAndMenuBarDefaultOnAndSavedChoicesSurvive() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = GlanceHelper.Store(support: folder)
         let initial = try store.read()
         XCTAssertTrue(initial.firstUse)
-        XCTAssertFalse(initial.preferences.background)
+        XCTAssertTrue(initial.preferences.background)
+        XCTAssertTrue(initial.preferences.menuBar)
         XCTAssertFalse(initial.preferences.enabled)
         let optedIn = initial.preferences.settingBackground(true, firstUse: initial.firstUse)
         XCTAssertTrue(optedIn.enabled)
@@ -24,11 +25,15 @@ final class GlanceHelperTests: XCTestCase {
             .write(to: legacy)
         let existing = try store.read()
         XCTAssertFalse(existing.firstUse)
-        XCTAssertFalse(existing.preferences.background)
+        XCTAssertTrue(existing.preferences.background)
         let migrated = existing.preferences.settingBackground(true, firstUse: existing.firstUse)
         XCTAssertFalse(migrated.enabled)
         XCTAssertTrue(migrated.menuBar)
         XCTAssertEqual(migrated.shortcut.label, "⌃⌥P")
+        var optedOut = existing.preferences.settingBackground(false, firstUse: false)
+        optedOut.menuBar = false
+        try store.write(optedOut)
+        XCTAssertEqual(try store.read().preferences, optedOut)
     }
 
     func testOnlyOneHelperCanOwnTheShortcutLease() throws {
