@@ -24,7 +24,7 @@
 # would be worse than none, so the assertion is that it says 55 AND names the one file that
 # caused it.
 #
-# run-tests: inputs richos/app/scripts/lib/ios_ui_scope.py richos/app/scripts/proof-for.test.sh richos/app/scripts/proof-for.sh richos/app/scripts/battery-check.py richos/app/scripts/proof-for.ui-inputs richos/app/ui/tests/docs-claims.js richos/app/scripts/lib/proof_declarations.py richos/app/scripts/proof-for-declarations.test.py richos/app/scripts/proof-for-engine.test.py richos/engine docs/development/verification-input-qualifications.json richos/mobile richos/app/scripts/mobile-headless.test.sh
+# run-tests: inputs richos/app/scripts/lib/ios_ui_scope.py richos/app/scripts/proof-for.test.sh richos/app/scripts/proof-for.sh richos/app/scripts/battery-check.py richos/app/scripts/proof-for.ui-inputs richos/app/ui/tests/docs-claims.js richos/app/ui/tests/lib/ui-sources.js richos/app/ui/index.html richos/app/ui/cleaner.html richos/app/scripts/lib/proof_declarations.py richos/app/scripts/proof-for-declarations.test.py richos/app/scripts/proof-for-engine.test.py richos/engine docs/development/verification-input-qualifications.json richos/mobile richos/app/scripts/mobile-headless.test.sh
 # run-tests: covers richos/app/scripts/proof-for.sh richos/app/scripts/lib/proof_declarations.py richos/app/scripts/proof-for-declarations.test.py richos/app/scripts/proof-for-engine.test.py
 set -uo pipefail
 
@@ -786,6 +786,42 @@ if [ -z "$R48_MISSED" ]; then
   ok "R48 every file a UI suite reads selects that suite (output_files.rs -> attachments.js, crates/ -> dialect.js, and 25 more)"
 else
   bad "R48 every file a UI suite reads selects that suite" "not selected:$R48_MISSED"
+fi
+
+# R49. The app-title test checks geometry rules in each stylesheet linked by its two HTML
+# entry points. Derive these inputs from the documents so adding a link cannot leave it out.
+if ! R49_STYLES=$(node - "$APP/ui" <<'JS'
+const fs = require("node:fs");
+const path = require("node:path");
+const ui = process.argv[2];
+const { entryReferences, isRemote } = require(path.join(ui, "tests/lib/ui-sources.js"));
+const styles = new Set();
+for (const name of ["index.html", "cleaner.html"]) {
+  for (const { ref, kind } of entryReferences(fs.readFileSync(path.join(ui, name), "utf8"))) {
+    if (kind === "stylesheet" && !isRemote(ref)) {
+      styles.add(path.posix.join("richos/app/ui", ref.split(/[?#]/)[0]));
+    }
+  }
+}
+console.log([...styles].join(","));
+JS
+) || [ -z "$R49_STYLES" ]; then
+  bad "R49 each app-title stylesheet selects the alignment suite" "could not derive stylesheets"
+else
+  run_pf "$WORK/r49.out" --gate --explain --paths "$R49_STYLES"
+  R49_MISSED=$(awk -v expected="$R49_STYLES" '
+    BEGIN { count = split(expected, styles, ",") }
+    /^  richos\/app\/ui\/.*\.css$/ { css = $1 }
+    /^    declared by app-title-alignment\.js$/ ||
+    /^    under a directory app-title-alignment\.js reads / { seen[css] = 1 }
+    END { for (i = 1; i <= count; i++) if (!seen[styles[i]]) print styles[i] }
+  ' "$WORK/r49.out")
+  if [ "$RC" -eq 0 ] && [ -z "$R49_MISSED" ] &&
+     grep -q 'node app-title-alignment.js$' "$WORK/r49.out"; then
+    ok "R49 each app-title stylesheet selects the alignment suite"
+  else
+    bad "R49 each app-title stylesheet selects the alignment suite" "exit $RC, missing: $R49_MISSED"
+  fi
 fi
 
 echo
