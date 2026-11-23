@@ -178,9 +178,12 @@ final class GestureController {
                 let controller = Unmanaged<GestureController>.fromOpaque(context).takeUnretainedValue()
                 if type == .keyDown {
                     if controller.handleWindowShortcut(event) { return nil }
-                    if let replacement = controller.desktopTrashEvent(for: event) {
+                    switch controller.desktopFileKey(for: event) {
+                    case .ignoreBackspace: return nil
+                    case let .moveToTrash(replacement):
                         // Quartz releases a newly supplied event after dispatch.
                         return Unmanaged.passRetained(replacement)
+                    case .passThrough: break
                     }
                 } else {
                     controller.receive(type, event)
@@ -399,9 +402,9 @@ final class GestureController {
         record(.windowGestureTileRestore, restored ? .complete : .issues, started: started)
     }
 
-    private func desktopTrashEvent(for event: CGEvent) -> CGEvent? {
+    private func desktopFileKey(for event: CGEvent) -> DesktopFileKey {
         let started = ProcessInfo.processInfo.systemUptime
-        let replacement = DesktopTrashShortcut.replacement(for: event) {
+        let action = DesktopFileKey.action(for: event) {
             guard Preferences.selection.contains(.desktopDelete),
                   let app = NSWorkspace.shared.frontmostApplication, app.bundleIdentifier == "com.apple.finder" else { return false }
             let finder = AXUIElementCreateApplication(app.processIdentifier)
@@ -415,8 +418,8 @@ final class GestureController {
             // Let the native command use Finder's selection at delivery.
             return NSWorkspace.shared.frontmostApplication == app
         }
-        if replacement != nil { record(.desktopDeleteShortcut, .complete, started: started) }
-        return replacement
+        if case .moveToTrash = action { record(.desktopDeleteShortcut, .complete, started: started) }
+        return action
     }
 
     private func hit(at point: CGPoint) -> AXUIElement? {
