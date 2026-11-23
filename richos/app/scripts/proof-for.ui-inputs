@@ -65,7 +65,7 @@
 #               reading a new place cannot land with nothing to select it.
 # ========================================================================================
 
-@shell   richos/app/ui/index.html richos/app/ui/main.js richos/app/ui/authored-input.js richos/app/ui/style.css richos/app/ui/attachments.js richos/app/ui/output-panel.js richos/app/ui/suite-tools.js richos/app/ui/suite-tools.css richos/app/ui/video-anywhere.js richos/app/ui/video-anywhere.css richos/app/ui/context-meter.js richos/app/ui/context-meter.css richos/app/ui/keep-alive.js richos/app/ui/keep-alive.css
+@shell   richos/app/ui/index.html richos/app/ui/main.js richos/app/ui/authored-input.js richos/app/ui/style.css richos/app/ui/attachments.js richos/app/ui/output-panel.js richos/app/ui/rich-profile.js richos/app/ui/rich-profile.css richos/app/ui/suite-tools.js richos/app/ui/suite-tools.css richos/app/ui/video-anywhere.js richos/app/ui/video-anywhere.css richos/app/ui/context-meter.js richos/app/ui/context-meter.css richos/app/ui/keep-alive.js richos/app/ui/keep-alive.css
 @home   richos/app/ui/home.js richos/app/ui/home-growth.js richos/app/ui/home-video.js richos/app/ui/home.css richos/app/ui/swearmeter.js richos/app/ui/home/field-engine.js richos/app/ui/home/field-ghost.js richos/app/ui/home/field-prep.js richos/app/ui/home/field-ref.js
 @splash  richos/app/ui/splash.js richos/app/ui/splash-library.js richos/app/ui/splash.css richos/app/ui/theme-boot.js
 @phone   richos/app/ui/phone.js richos/app/ui/qr.js
@@ -149,6 +149,7 @@ inspector.js            @shell richos/app/ui/timeline.js richos/app/ui/mock.js
 input-area.js           @shell richos/app/ui/mock.js richos/app/ui/settings-button.js richos/app/src-tauri/src/mac_attachments.rs
 output.js               @shell richos/app/ui/timeline.js richos/app/ui/mock.js richos/app/src-tauri/src/output_files.rs
 output-truth.js         @shell richos/app/ui/mock.js
+rich-profile.js         @shell richos/app/ui/timeline.js richos/app/ui/chat-list.js richos/app/ui/mock.js
 interruption.js         @shell richos/app/ui/timeline.js richos/app/src-tauri/src/main.rs richos/app/src-tauri/src/ richos/app/crates/
 job-question.js         @shell richos/app/ui/timeline.js
 local-notice.js         @shell richos/app/ui/timeline.js
