@@ -26,7 +26,7 @@
 //! not worth refusing to start.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -89,6 +89,8 @@ pub struct NavState {
     /// Entity ids whose disclosure is closed. Absent = open, so a newly registered entity
     /// appears expanded rather than silently hidden.
     pub collapsed_entities: Vec<String>,
+    /// Sidebar company IDs in the user's order. Companies absent here follow in registry order.
+    pub company_order: Vec<String>,
     /// Thread ids pinned to the top-level `Pinned` group (§3.1).
     pub pinned_threads: Vec<String>,
     /// Thread ids removed from the normal list (§3.2) — recoverable, never deleted.
@@ -111,6 +113,17 @@ pub struct NavState {
 }
 
 impl NavState {
+    /// The saved display order, followed by new companies in registry order.
+    pub fn ordered_companies<'a>(
+        &self,
+        registry: &'a richos_core::entity::EntityRegistry,
+    ) -> Vec<&'a richos_core::entity::Entity> {
+        let rank: HashMap<_, _> = self.company_order.iter().map(String::as_str).zip(0..).collect();
+        let mut companies: Vec<_> = registry.entities().iter().collect();
+        companies.sort_by_key(|company| rank.get(company.id.as_str()).copied().unwrap_or(rank.len()));
+        companies
+    }
+
     /// The title a conversation is shown under, everywhere it is listed: his own rename, then
     /// Haiku's title, then the title it was created with.
     pub fn display_title(&self, thread_id: &str, created_title: &str) -> String {
@@ -130,6 +143,7 @@ impl Default for NavState {
             inspector_width: INSPECTOR_WIDTH_DEFAULT,
             output_width: OUTPUT_WIDTH_DEFAULT,
             collapsed_entities: Vec::new(),
+            company_order: Vec::new(),
             pinned_threads: Vec::new(),
             archived_threads: Vec::new(),
             renamed_threads: BTreeMap::new(),
@@ -265,6 +279,38 @@ impl NavStore {
     pub fn set_entity_collapsed(&mut self, entity_id: &str, collapsed: bool) -> std::io::Result<()> {
         set_membership(&mut self.state.collapsed_entities, entity_id, collapsed);
         self.persist()
+    }
+
+    pub fn set_company_order(
+        &mut self,
+        order: Vec<String>,
+        registry: &richos_core::entity::EntityRegistry,
+    ) -> std::io::Result<()> {
+        let started = std::time::Instant::now();
+        let mut available: HashSet<_> =
+            registry.entities().iter().map(|entity| entity.id.as_str()).collect();
+        let (outcome, result) = if !order.iter().all(|id| available.remove(id.as_str())) {
+            (
+                "invalid-order",
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "the companies changed while you were reordering them. Try again",
+                )),
+            )
+        } else if self.state.company_order == order {
+            ("unchanged", Ok(()))
+        } else {
+            let before = std::mem::replace(&mut self.state.company_order, order);
+            let result = self.persist().inspect_err(|_| self.state.company_order = before);
+            let outcome = match &result {
+                Ok(()) => "saved",
+                Err(_) if self.readable => "write-failed",
+                Err(_) => "unreadable",
+            };
+            (outcome, result)
+        };
+        crate::chat_list::record("company order", outcome, Some(started.elapsed().as_millis()));
+        result
     }
 
     pub fn set_thread_pinned(&mut self, thread_id: &str, pinned: bool) -> std::io::Result<()> {

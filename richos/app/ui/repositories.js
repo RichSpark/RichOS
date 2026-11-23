@@ -29,7 +29,7 @@
   /// The other companies that have `path` connected: one folder may be connected in several
   /// (plan item 11, round 36). Names, in the order the sheet lists companies.
   function otherCompanies(path, id) {
-    return companies.filter(c => c.id !== id && (c.repositories || []).includes(path)).map(c => c.name);
+    return window.RichCompanyOrder(companies).filter(c => c.id !== id && (c.repositories || []).includes(path)).map(c => c.name);
   }
   const joined = names => names.length > 1 ? names.slice(0, -1).join(", ") + " and " + names.at(-1) : names[0];
   function renderList() {
@@ -73,12 +73,18 @@
   async function refresh(preferred) {
     const result = await bridge.invoke("repository_connections");
     companies = result.companies;
+    renderCompanies(preferred);
+  }
+  function renderCompanies(preferred) {
     const select = field("repository-company"); select.replaceChildren();
     const blank = document.createElement("option"); blank.value = ""; blank.textContent = "Choose a company"; select.appendChild(blank);
-    for (const company of companies) { const option = document.createElement("option"); option.value = company.id; option.textContent = company.name; select.appendChild(option); }
+    for (const company of window.RichCompanyOrder(companies)) { const option = document.createElement("option"); option.value = company.id; option.textContent = company.name; select.appendChild(option); }
     if (preferred && companies.some(c => c.id === preferred)) select.value = preferred;
     renderList();
   }
+  window.addEventListener("richos:company-order-changed", () => {
+    renderCompanies(field("repository-company").value);
+  });
   async function open() {
     returnFocus = document.activeElement; sheet.hidden = false;
     field("repository-message").textContent = "Loading connections…";

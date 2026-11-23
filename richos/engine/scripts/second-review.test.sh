@@ -118,7 +118,7 @@ PASS=0; FAIL=0
 ok()  { printf '  PASS  %s\n' "$1"; PASS=$((PASS + 1)); }
 bad() { printf '  FAIL  %s\n' "$1"; FAIL=$((FAIL + 1)); }
 check() { if [ "$2" -eq 0 ]; then ok "$1"; else bad "$1 -- $3"; fi; }
-has()   { printf '%s' "$1" | grep -qF -- "$2"; }
+has()   { grep -qF -- "$2" <<< "$1"; }
 
 # --- isolation -------------------------------------------------------------
 unset CLAUDE_PROJECT_DIR CLAUDE_PLUGIN_ROOT RICHOS_ENGINE_ROOT CODEX_HOME
@@ -127,6 +127,8 @@ unset RICHOS_CLAUDE_HOME RICHOS_CLAUDE_ACCOUNT_DIR RICHOS_APP_STATE
 mkdir -p "$SB/bin" "$SB/state" "$SB/calls" "$SB/tmp" "$SB/claude" "$SB/codex-sessions" \
          "$SB/workspaces/agents" "$SB/workspaces/done"
 export SECOND_REVIEW_STATE_DIR="$SB/state"
+export CODEX_COORDINATION_ROOT="$SB/coord"
+export CODEX_HOME="$SB/codex-home"
 export SECOND_REVIEW_CODEX="$SB/bin/fake-reviewer"
 export SECOND_REVIEW_CLAUDE="$SB/bin/fake-reviewer"
 export SECOND_REVIEW_QUOTA_CMD="$SB/bin/fake-quota"
@@ -143,6 +145,32 @@ cat >"$SB/bin/fake-reviewer" <<'PY'
 #!/usr/bin/env python3
 import json, os, re, sys, time
 argv = sys.argv[1:]
+quota_marker = os.environ.get("FAKE_CODEX_QUOTA_MARKER")
+if argv[:1] == ["app-server"]:
+    if not quota_marker:
+        sys.exit(1)
+    for line in sys.stdin:
+        request = json.loads(line)
+        if "id" not in request:
+            continue
+        method = request["method"]
+        result = {}
+        if method == "account/read":
+            result = {"account": {"type": "chatgpt"}, "userId": "fixture-user"}
+        if method == "config/read":
+            result = {"config": {"model_provider": "openai"}}
+        if method == "account/rateLimits/read":
+            reset = os.path.exists(quota_marker + ".reset")
+            exhausted = os.path.exists(quota_marker) and not reset
+            result = {"accountId": "fixture-review", "ordinaryUsageAllowed": not exhausted,
+                      "rateLimits": {"limitId": "codex", "credits": {"hasCredits": True}, "primary": {
+                          "usedPercent": 100 if exhausted else 99, "resetsAt": 4200000000}},
+                      "rateLimitResetCredits": {"availableCount": int(not reset)}}
+        if method == "account/rateLimitResetCredit/consume":
+            open(quota_marker + ".reset", "w").close()
+            result = {"outcome": "reset"}
+        print(json.dumps({"id": request["id"], "result": result}), flush=True)
+    sys.exit(0)
 if argv[:1] == ["--version"]:
     print("codex-cli 9.9.9-fake")
     sys.exit(0)
@@ -232,6 +260,14 @@ os.makedirs("fixtures", exist_ok=True)
 with open(os.path.join("fixtures", "witness.txt"), "w") as f:
     f.write("fixture output\n")
 if kind == "codex":
+    if quota_marker:
+        from threading import Event
+        open(quota_marker, "w").close()
+        # Wait for redemption. The deadline bounds the fake on the old launcher.
+        deadline = time.monotonic() + 12
+        wake = Event()
+        while not os.path.exists(quota_marker + ".reset") and time.monotonic() < deadline:
+            wake.wait(0.02)
     with open(argv[argv.index("-o") + 1], "w") as f:
         json.dump(answer, f)
     tid = "019fake0-0000-7000-8000-%012d" % len(os.listdir(log))
@@ -336,9 +372,10 @@ echo "second-review.test.sh"
 # The blocking test, in the words of Sage's check of follow-up 12 (F4): a hole in this work's
 # normal use, or a regression it caused; never any hole elsewhere in the app (282530b2b).
 BLOCK_TEST="It blocks only when a user could hit it in normal use AND it would matter to them AND either it breaks what this work promises (the original words above), or this work broke something that worked before; a hole that was already there, outside what this work promises, is a follow-up however real."
-FAKE_MODE=pass run --name echo-sonnet-x1 --repo "$REPO" --trigger handover
+FAKE_MODE=pass FAKE_CODEX_QUOTA_MARKER="$SB/codex-quota" run --name echo-sonnet-x1 --repo "$REPO" --trigger handover
 C="$(last_call)"
 check "C01 the command exits 0 on a passing verdict" "$([ "$RC" -eq 0 ] && echo 0 || echo 1)" "rc=$RC out=$OUT"
+[ -f "$SB/codex-quota.reset" ]; check "C01 the running Codex reviewer redeems a banked reset at exhaustion" $? "$OUT"
 python3 - "$SB/brief.txt" "$C/prompt.md" <<'PY'
 import sys
 brief, prompt = open(sys.argv[1]).read(), open(sys.argv[2]).read()
@@ -375,6 +412,7 @@ TREE_A="$(field "$(cat "$C/call.json")" 'r["tree_a"]')"
 [ -n "$CWD" ] && [ "${CWD#"$REPO"}" = "$CWD" ] && has "$TREE_A" "slice one"
 check "C01 the reviewer works in an export of the tip, never in the author's workspace" $? "cwd=$CWD tree_a=$TREE_A"
 ROW="$(last_row)"
+[ "$(field "$ROW" 'r.get("codex_quota", {}).get("in_flight_reset")')" = "reset" ]; check "C01 the ledger records the in-flight reset outcome" $? "$ROW"
 [ "$(field "$ROW" 'r["verdict"]')" = "passed" ]; check "C01 one ledger row: verdict passed" $? "$ROW"
 [ "$(field "$ROW" 'r["tip"]')" = "$TIP1" ]; check "C01 the row names the exact tip" $? "$ROW"
 [ "$(field "$ROW" 'r["reviewer"]')" = "codex" ] && [ "$(field "$ROW" 'r["reviewer_model"]')" = "gpt-6.2-sol" ] \

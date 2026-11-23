@@ -22,14 +22,25 @@ cache="$(python3 "$machine_lib/machine_settings.py" cache)"
 checkout_key="$(printf '%s' "$root" | shasum -a 256 | cut -c1-10)"
 build="$cache/richfiles/proof/$checkout_key"
 package="$root/richos/tools/richfiles"
+scripts="$root/richos/app/scripts"
+suite_version="${RICHOS_SUITE_VERSION:-}"
+version="$suite_version"
+if [ -z "$version" ]; then
+  version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$scripts/../src-tauri/Cargo.toml" | head -1)"
+fi
+suite_stamp="$(python3 "$scripts/lib/suite_version.py" resolve "$version")"
+read -r suite_base suite_build <<< "$suite_stamp"
+suite_build="${RICHOS_SUITE_BUILD:-$suite_build}"
 
 mkdir "$output"
 complete=0
 trap 'if [ "$complete" -eq 0 ]; then rm -rf -- "$output"; fi' EXIT
 configuration=debug
 stamp_suite_version() {
-  if [ "$embedded" -eq 1 ] && [ -n "${RICHOS_SUITE_VERSION:-}" ]; then
-    /usr/libexec/PlistBuddy -c "Add :RichOSSuiteVersion string $RICHOS_SUITE_VERSION" "$1"
+  /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $suite_base" \
+    -c "Add :CFBundleVersion string $suite_build" "$1"
+  if [ "$embedded" -eq 1 ] && [ -n "$suite_version" ]; then
+    /usr/libexec/PlistBuddy -c "Add :RichOSSuiteVersion string $suite_version" "$1"
   fi
 }
 swift_args=(--package-path "$package" --scratch-path "$build")

@@ -259,6 +259,10 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let viewer = self.viewer ?? Viewer(preferences: infoPreferences)
         self.viewer = viewer
         viewer.pinImage = { [weak self] image in self?.pin(image, frame: nil, captureID: nil) }
+        viewer.openEditor = { [weak self, weak viewer] document in
+            self?.showEditor(document, origin: self?.returnTo, previousWindow: viewer?.window)
+        }
+        viewer.info.editImage = { [weak self] in self?.editViewerImage() }
         viewer.info.preferencesChanged = { [weak self] in self?.updateInfoShortcut() }
         openingPanel?.cancel(nil)
         viewer.window.delegate = self
@@ -530,11 +534,12 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
             for pin in self?.pins.filter({ $0.captureID == id }) ?? [] { pin.close() }
             if self?.lastRegionDocument?.id == id { self?.lastRegionDocument = nil }
         }
-        editor.closed = { [weak self, weak previousWindow] in
+        editor.closed = { [weak self, weak editor, weak previousWindow] in
             guard let self else { return }
+            let returnWindow = editor?.canvas?.document.sourceFile != nil ? viewer?.window : previousWindow
             self.editor = nil
-            if let previousWindow, previousWindow.isVisible, !previousWindow.isMiniaturized {
-                previousWindow.makeKeyAndOrderFront(nil)
+            if let returnWindow, returnWindow.isVisible, !returnWindow.isMiniaturized {
+                returnWindow.makeKeyAndOrderFront(nil)
             } else if let origin, !origin.isTerminated, NSApp.isActive {
                 if #available(macOS 14, *) { _ = origin.activate(from: .current, options: []) }
                 else { _ = origin.activate(options: []) }
@@ -581,8 +586,17 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         infoMenuItem?.keyEquivalentModifierMask = infoPreferences.shortcut.flags
     }
 
-    static func makeEditMenu() -> NSMenu {
+    private var keyViewer: Viewer? {
+        guard let viewer, NSApp.keyWindow === viewer.window, openingPanel == nil, capture == nil else { return nil }
+        return viewer
+    }
+
+    @objc private func editViewerImage() { keyViewer?.editImage() }
+
+    static func makeEditMenu(target: Application? = nil) -> NSMenu {
         let menu = NSMenu(title: "Edit")
+        menu.addItem(withTitle: "Edit", action: #selector(editViewerImage), keyEquivalent: "e").target = target
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Undo", action: NSSelectorFromString("undo:"), keyEquivalent: "z")
         let redo = menu.addItem(withTitle: "Redo", action: NSSelectorFromString("redo:"), keyEquivalent: "z")
         redo.keyEquivalentModifierMask = [.command, .shift]
@@ -628,7 +642,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menuBar.addItem(file)
 
         let edit = NSMenuItem()
-        edit.submenu = Self.makeEditMenu()
+        edit.submenu = Self.makeEditMenu(target: self)
         menuBar.addItem(edit)
 
         let view = NSMenuItem()
@@ -654,6 +668,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
 extension Application: NSMenuItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(editViewerImage) { return keyViewer?.canEditImage == true }
         if menuItem.action == #selector(startCapture) { return capture?.canRevisitPermission ?? true }
         if menuItem.action == #selector(editLastCapture) { return (try? screenshotStore.entries().isEmpty) == false }
         if menuItem.action == #selector(showRecents) { return capture == nil }

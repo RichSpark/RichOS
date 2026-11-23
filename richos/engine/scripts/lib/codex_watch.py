@@ -383,16 +383,16 @@ def legacy_folders(state):
 
 def prepare_app_connections(state):
     pending = legacy_folders(state)
-    waiting = codex_channels.automatic_waiting()
-    if not (pending or waiting):
+    if not pending:
         return False
-    target = codex_channels.automatic_target()
+    # Only the historical RichOS channels have an implicit project identity.
+    conventional = {codex_channels.root() / name for name in ("rich-codex", "rich-codex-questions")}
+    if any(folder not in conventional for folder in pending):
+        return False
+    target = codex_channels.legacy_target()
     if not target:
-        return waiting or (Path(state) / codex_channels.LIVE_LEGACY_SPOOL).is_file()
-    if waiting:
-        codex_channels.bind_automatic(target)
-    if pending:
-        codex_channels.associate_legacy(dict(target, state_root=state), pending)
+        return (Path(state) / codex_channels.LIVE_LEGACY_SPOOL).is_file()
+    codex_channels.associate_legacy(dict(target, state_root=state), pending)
     return False
 
 
@@ -433,9 +433,12 @@ def run_host_loop():
                 errors = []
                 waiting = False
                 try:
-                    waiting = prepare_app_connections(state)
-                    if waiting:
-                        sys.stdout.write(json.dumps({"type": "automatic"}) + "\n")
+                    requests = list(codex_channels.automatic_requests())
+                    if prepare_app_connections(state):
+                        requests.append({"type": "automatic", "legacy": True})
+                    waiting = bool(requests)
+                    for request in requests:
+                        sys.stdout.write(json.dumps(request) + "\n")
                 except (OSError, ValueError, KeyError) as error:
                     errors.append(str(error))
                 events, scan_errors = codex_channels.scan(state)
@@ -448,6 +451,12 @@ def run_host_loop():
                         print("Codex channel held: " + error, file=sys.stderr)
                 reported = set(errors)
                 health = dict(waiting=waiting, held=len(reported))
+                try:
+                    repair = codex_channels.load(Path(state) / "codex-watch/ownership-health.json")
+                    if repair.get("outcome") in ("moved", "held") and type(repair.get("at_ms")) is int:
+                        health["ownership_repair"] = dict(at_ms=repair["at_ms"], outcome=repair["outcome"])
+                except (OSError, ValueError):
+                    pass
                 try:
                     health["dispatch"] = codex_channels.load(codex_channels.root() / "quota/dispatch-health.json")
                 except (OSError, ValueError):

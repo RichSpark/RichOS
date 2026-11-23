@@ -3230,6 +3230,7 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
    places a chat under its company; the line only echoes it. */
 
 #rail-nav .nav-group--entity {
+  position: relative;
   margin: 0 0 14px;
 }
 
@@ -3261,7 +3262,30 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
   letter-spacing: 0;
   color: var(--ink);
   line-height: 1.35;
+  cursor: grab;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
 }
+
+#rail-nav.is-company-dragging,
+#rail-nav.is-company-dragging .nav-group-label {
+  cursor: grabbing;
+}
+
+.company-drop-before::before,
+.company-drop-after::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  height: 2px;
+  background: var(--gold-text);
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+.company-drop-before::before { top: -1px; }
+.company-drop-after::after { bottom: -8px; }
 
 #rail-nav .nav-group--entity .nav-group-label:hover {
   background: none;
@@ -14146,6 +14170,9 @@ body.bug-dock-open .sp-title { display: none; }   /* the eyebrow names the scree
    the key hints at the foot and the ⏎ glyph inside the Open original button. Everything else
    here is 16px or larger. */
 .overlay-panel--search {
+  position: relative;
+  left: var(--srch-left, 0px);
+  top: var(--srch-top, 0px);
   width: min(860px, 92vw);
   /* The list scrolls, never the panel: the head with the query and the two checkboxes stays
      in view. 82vh under a 9vh top margin leaves the panel's shadow clear of the bottom. */
@@ -14155,8 +14182,47 @@ body.bug-dock-open .sp-title { display: none; }   /* the eyebrow names the scree
   flex-direction: column;
   border-radius: 14px;
 }
+.overlay-panel--search.is-sized {
+  width: min(var(--srch-width), calc(100% - 24px));
+  height: var(--srch-height);
+  max-height: calc(100vh - 24px);
+  /* Start at the normal top margin unless the saved height needs more of the window. */
+  top: var(--srch-top, min(0px, calc(91vh - 12px - min(var(--srch-height), 100vh - 24px))));
+}
 #search-overlay {
   padding-top: 9vh;
+}
+.srch-resize {
+  display: none;
+  position: absolute;
+  z-index: 2;
+  touch-action: none;
+}
+.is-results > .srch-resize { display: block; }
+.srch-resize:is([data-edge="n"], [data-edge="s"]) {
+  inset-inline: 14px;
+  height: 6px;
+  cursor: ns-resize;
+}
+.srch-resize:is([data-edge="e"], [data-edge="w"]) {
+  inset-block: 14px;
+  width: 6px;
+  cursor: ew-resize;
+}
+.srch-resize:is([data-edge="nw"], [data-edge="ne"], [data-edge="sw"], [data-edge="se"]) {
+  width: 14px;
+  height: 14px;
+}
+.srch-resize:is([data-edge="nw"], [data-edge="se"]) { cursor: nwse-resize; }
+.srch-resize:is([data-edge="ne"], [data-edge="sw"]) { cursor: nesw-resize; }
+.srch-resize[data-edge^="n"] { top: 0; }
+.srch-resize[data-edge^="s"] { bottom: 0; }
+.srch-resize[data-edge$="e"] { right: 0; }
+.srch-resize[data-edge$="w"] { left: 0; }
+#search-overlay.is-resizing,
+#search-overlay.is-resizing * {
+  cursor: var(--srch-cursor);
+  user-select: none;
 }
 .srch-head {
   flex-shrink: 0;
@@ -14393,6 +14459,9 @@ body.bug-dock-open .sp-title { display: none; }   /* the eyebrow names the scree
   max-height: 36vh;
   scrollbar-width: thin;
 }
+@media (min-width: 661px) {
+  .is-sized .srch-source-options { max-height: none; }
+}
 .srch-source-options .srch-check {
   display: flex;
   min-height: 30px;
@@ -14435,6 +14504,11 @@ body.bug-dock-open .sp-title { display: none; }   /* the eyebrow names the scree
   scrollbar-width: thin;
   scrollbar-color: var(--line) transparent;
   overscroll-behavior: contain;
+}
+.is-results #search-results.srch-results {
+  /* Separate the scrollbar from the resize strip while keeping the result text aligned. */
+  margin-inline-end: 8px;
+  padding-inline-end: 4px;
 }
 #search-overlay .result-group {
   display: flex;
