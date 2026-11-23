@@ -2921,9 +2921,17 @@ fn main() {
         .menu(|handle| {
             use tauri::menu::{AboutMetadata, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
             let name = handle.package_info().name.clone();
+            let version = &handle.package_info().version;
+            // AppKit reads the build number from CFBundleVersion. The full nightly
+            // version in CFBundleShortVersionString is the updater's identity.
+            let about_version = if cfg!(target_os = "macos") && version.pre.as_str().starts_with("nightly.") {
+                format!("{}.{}.{}", version.major, version.minor, version.patch)
+            } else {
+                version.to_string()
+            };
             let about = AboutMetadata {
                 name: Some(name.clone()),
-                version: Some(handle.package_info().version.to_string()),
+                version: Some(about_version),
                 ..Default::default()
             };
             // OURS. The id is what `on_menu_event` matches, and the label and accelerator
