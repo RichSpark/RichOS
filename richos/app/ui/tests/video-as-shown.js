@@ -399,6 +399,173 @@ function toolWindow(files) {
   return `(${bridge.toString()})(${files}); window.addEventListener("load", () => (${drive.toString()})((${tools.toString()})(), ${files}));`;
 }
 
+function gitPane() {
+  const drive = async (T) => {
+    try {
+      await T.app();
+      await T.chat();
+      const bridge = window.RichBridge;
+      const invoke = bridge.invoke.bind(bridge);
+      let bounds, next, pending;
+      let requests = 0;
+      bridge.invoke = async (command, args, options) => {
+        if (command === "output_git_open" || command === "output_git_place") {
+          bounds = args.bounds;
+          return null;
+        }
+        if (command === "output_git_recording_frame") {
+          requests++;
+          return next ? next() : new Promise((resolve) => { pending = resolve; });
+        }
+        return invoke(command, args, options);
+      };
+      const tile = document.createElement("canvas");
+      const cx = tile.getContext("2d");
+      async function picture(color, rect) {
+        cx.fillStyle = color;
+        cx.fillRect(0, 0, tile.width, tile.height);
+        const image = await new Promise((resolve) => tile.toBlob(resolve, "image/png"));
+        const header = new Float32Array([NaN, NaN, rect.left, rect.top, rect.width, rect.height]);
+        return new Blob([header, image]).arrayBuffer();
+      }
+
+      await T.press("#set-btn");
+      await T.press("#video-anywhere");
+      await T.press("#video-anywhere-choices .rv-go");
+      const canvas = await T.until("the recording canvas", () => document.querySelector(".rv-canvas"));
+      if (requests) throw new Error("requested an overlay with the Git pane closed");
+      await T.press('.nav-thread[data-thread-id="hiring"]');
+      await T.until("Output to bind to the Hiring chat", () => window.RichOutput.snapshot().thread === "hiring");
+      await T.press("#out-top");
+      await T.press("#op-git-open");
+      const placed = await T.until("the native Git pane placed", () => bounds?.visible && bounds);
+      const redFrame = await picture("#cf2020", placed);
+      const inset = placed.width * 0.3;
+      const shifted = { ...placed, left: placed.left + inset, width: placed.width - inset };
+      const greenFrame = await picture("#20b030", shifted);
+      const pixel = (x, y) => canvas.getContext("2d")
+        .getImageData(Math.floor(x * canvas.width), Math.floor(y * canvas.height), 1, 1).data;
+      const red = ([r, g, b]) => r > 165 && g < 75 && b < 75;
+      const green = ([r, g, b]) => r < 75 && g > 140 && b < 100;
+      const left = placed.left + inset / 2, right = shifted.left + inset / 2, y = placed.top + placed.height / 2;
+
+      const opened = window.RichVideoAnywhere.state().frames;
+      await T.until("recording redraws after the pane opens", () => window.RichVideoAnywhere.state().frames >= opened + 8);
+      if (!pending) throw new Error("Git was open during recording and the recorder never requested its pixels");
+      next = () => redFrame;
+      pending(redFrame);
+      await T.until("the live Git pixels at the placed bounds", () => red(pixel(left, y)) && red(pixel(right, y)));
+      if (red(pixel(placed.left / 2, y))) throw new Error("the Git image covered the conversation");
+      next = () => greenFrame;
+      await T.until("updated Git pixels at the new placement", () => !red(pixel(left, y)) && green(pixel(right, y)));
+
+      const beforeMiss = requests;
+      next = () => new ArrayBuffer(0);
+      await T.until("two requests with no native picture", () => requests >= beforeMiss + 2);
+      if (!green(pixel(right, y))) throw new Error("a missed native frame erased the visible Git pane");
+
+      pending = null;
+      next = null;
+      await T.until("a pending native Git frame", () => pending);
+      await T.press("#op-git-files");
+      pending(redFrame);
+      const count = requests;
+      await T.until("the Files view replaces Git on the recording canvas", () => !green(pixel(right, y)) && !red(pixel(right, y)));
+      const frames = window.RichVideoAnywhere.state().frames;
+      await T.until("several redraws after Git closed", () => window.RichVideoAnywhere.state().frames >= frames + 8);
+      if (requests !== count || red(pixel(right, y))) throw new Error("Git persisted after closing");
+
+      await T.press("#video-anywhere-stop");
+      await T.until("the result", () => window.RichVideoAnywhere.state().state === "sheet");
+      T.post({ done: { ended: window.RichVideoAnywhere.state().ended } });
+    } catch (e) {
+      T.post({ done: { error: String((e && e.message) || e) } });
+    }
+  };
+  return `window.__RICHOS_MOCK_PRESET__ = { gitView: true }; window.addEventListener("load", () => (${drive.toString()})( (${tools.toString()})()));`;
+}
+
+function rememberedChoices() {
+  const drive = async (T) => {
+    try {
+      await T.app();
+      window.RichHome.startField();
+      const home = "#home-video-choices";
+      const anywhere = "#video-anywhere-choices";
+      const stage = sessionStorage.getItem("video-choices-test");
+      const choice = (panel, label) => Array.from(document.querySelectorAll(panel + " button"))
+        .find((button) => button.textContent === label);
+      const choose = (panel, label) => choice(panel, label).click();
+      const check = async (panel, labels) => {
+        if (labels.includes("On")) await T.until("the restored test microphone to finish asking",
+          () => choice(panel, "On"));
+        const actual = Array.from(document.querySelectorAll(panel + ' button[aria-pressed="true"]'))
+          .map((button) => button.textContent);
+        if (JSON.stringify(actual) !== JSON.stringify(labels)) {
+          throw new Error("after opening " + panel + " expected " + labels + " but found " + actual);
+        }
+      };
+      const record = async (panel, recorder, stop) => {
+        await T.press(panel + " .hv-go, " + panel + " .rv-go");
+        await T.until("some frames of the recording", () => recorder.state().frames >= 12);
+        await T.press(stop);
+        await T.until("the completed video", () => recorder.state().ended === "stopped");
+        if (!T.seen(stop === "#home-video" ? ".hv-sheet .hv-main" : ".rv-sheet .rv-main")) {
+          throw new Error("the recorder offered no video");
+        }
+      };
+      const reload = (next) => {
+        sessionStorage.setItem("video-choices-test", next);
+        location.reload();
+      };
+      const escape = () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+
+      await T.press("#home-video");
+      if (!stage) {
+        await check(home, ["Off", "When I stop it", "Shown"]);
+        choose(home, "On");
+        choose(home, "By itself");
+        choose(home, "Hidden");
+        await check(home, ["On", "By itself", "Hidden"]);
+        await record(home, window.RichHomeVideo, "#home-video");
+        reload("from-home");
+        return;
+      }
+      if (stage === "from-anywhere") {
+        await check(home, ["Off", "By itself", "Shown"]);
+        T.post({ done: { persisted: true } });
+        return;
+      }
+
+      await check(home, ["On", "By itself", "Hidden"]);
+      escape();
+      await T.chat();
+      await T.press("#set-btn");
+      await T.press("#video-anywhere");
+      await check(anywhere, ["On", "Hidden"]);
+      choose(anywhere, "Off");
+      choose(anywhere, "Shown");
+      await T.press(anywhere + " .rv-go");
+      await T.until("the countdown", () => window.RichVideoAnywhere.state().state === "count");
+      escape();
+      await T.press("#set-btn");
+      await T.press("#video-anywhere");
+      await check(anywhere, ["On", "Hidden"]);
+      choose(anywhere, "Off");
+      choose(anywhere, "Shown");
+      await record(anywhere, window.RichVideoAnywhere, "#video-anywhere-stop");
+      reload("from-anywhere");
+    } catch (e) {
+      T.post({ done: { error: String((e && e.message) || e) } });
+    }
+  };
+  return [
+    `window.__RICHOS_MOCK_PRESET__ = ${JSON.stringify({ ...HOME, homeVideoInput: "tone" })};`,
+    `window.localStorage.setItem("richos-home-growth", ${JSON.stringify(JSON.stringify(STORE))});`,
+    `window.addEventListener("load", () => (${drive.toString()})( (${tools.toString()})()));`,
+  ].join("\n");
+}
+
 /// What each recorder asks the webview for when the microphone is switched on. The microphone
 /// handed back is a silent one made in the page: no real microphone is opened.
 function asking() {
@@ -454,6 +621,40 @@ function asking() {
 
 async function main() {
   const run = createRun("a video shows the app as the window shows it, in the Mac's own webview: the empty message box, Settings, the nav tooltip, multiline text and the microphone");
+
+  if (!process.argv.includes("--git-only")) {
+    await run.check("the two recorders reuse the last video's choices after reload and after cancellation", async () => {
+      const ran = await runPage(APP, rememberedChoices(), 110);
+      try {
+        assert(ran.code === 0 && ran.done, "the page did not finish: " + JSON.stringify(ran.said.slice(-4)));
+        assert(!ran.done.error, ran.done.error);
+        assert(ran.done.persisted, "the choices did not survive reload");
+        return "Home and Settings share microphone and pointer. Home keeps its stop mode.";
+      } finally {
+        fs.rmSync(ran.dir, { recursive: true, force: true });
+      }
+    });
+  }
+  if (process.argv.includes("--choices-only")) {
+    process.exitCode = run.report() > 0 ? 1 : 0;
+    return;
+  }
+
+  await run.check("the native Git pane appears in place, updates, survives a missed picture and clears after close", async () => {
+    const ran = await runPage(APP, gitPane(), 95);
+    try {
+      assert(ran.code === 0 && ran.done, "the page did not finish: " + JSON.stringify(ran.said.slice(-4)));
+      assert(!ran.done.error, ran.done.error);
+      assertEqual(ran.done.ended, "stopped", "the recording did not stop cleanly");
+      return "two live pictures at their placements, the last good picture held through a miss and no stale pixels after close";
+    } finally {
+      fs.rmSync(ran.dir, { recursive: true, force: true });
+    }
+  });
+  if (process.argv.includes("--git-only")) {
+    process.exitCode = run.report() > 0 ? 1 : 0;
+    return;
+  }
 
   await run.check("dark, with the microphone: the empty message box has its hint and no placeholder under it, Settings' closed list is not drawn until it is opened, the nav tooltip is opaque, and every line of a message starts where the box puts it", async () => asShown("dark", true));
 

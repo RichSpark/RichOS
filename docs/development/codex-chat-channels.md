@@ -6,12 +6,12 @@ terminal project's lead, across session restarts. Codex starts one persisted cha
 gets the original task, source and connection in its initial prompt. Follow-ups
 use that same connection.
 
-Codex can start a connection independently. It can save messages before RichOS
-opens. The app automatically finds or creates the Codex conversation in the
-configured company when independent work first arrives. It can also use the
-sole registered company. When a company is still needed, the messages stay on
-disk until the app has a destination. Opening a different conversation does
-not change a connection's owner.
+Codex can start a connection independently and save messages before RichOS
+opens. Run `connect` from the work's project directory. RichOS resolves that
+directory against the company registry, including Git worktrees whose common
+repository is registered, then finds or creates that company's Codex
+conversation. Work without a registered project stays queued. Opening a
+different company or conversation leaves the connection's owner unchanged.
 
 The CLI is `richos/engine/scripts/codex-channel.sh`. The app hands Rich and
 Stu the packaged runtime command. Terminal Rich receives the
@@ -40,10 +40,10 @@ a new ID. Saved replies wait for Codex's next read. The terminal watch prints
 framed replies once for their owning project, including after a restart.
 
 ```
-automatic.json                          # installed app's automatic destination
+legacy-target.json                       # owner of the conventional legacy channels
 connections/COMPANY/CHAT/CONNECTION/
 connections/_terminal/SESSION/CONNECTION/
-connections/_automatic/codex/CONNECTION/ # pending until first destination
+connections/_automatic/codex/CONNECTION/ # independently initiated pair
   connection.json
   to-rich.jsonl
   to-codex.jsonl
@@ -59,8 +59,17 @@ Both review watchers use the same framed READY reader and deliver review results
 on the originating pair. Existing work, review and landing authorization still
 apply.
 
-An upgrade preserves the old Markdown files, saved spool and any prior frozen
-legacy association. On the first start with the new app cursor, the watcher
+An upgrade preserves the old Markdown files and saved spool. The conventional
+`rich-codex` and `rich-codex-questions` channels belong to the company that
+registered the RichOS repository. If the first cutover filed their Codex
+conversation under the company that was open, the upgrade moves the original
+thread and its pairs to the repository's registered company. Inbox receipts
+and cursors keep their identities and previously issued locators still resolve.
+Rich and Stu keep their saved native sessions and transcript paths. The
+continuity store records the move and retains its original journal entries.
+If a repair cannot finish during startup, other conversations remain usable.
+The app holds delivery for the affected conversation and retries at the next launch.
+On the first start with the new app cursor, the watcher
 starts at the end of each existing incoming Markdown file. Subsequent appends
 use a separate live spool and deterministic receipt IDs. Archive contents and
 migration notices stay available on disk without waking Stu. The old outgoing
@@ -69,5 +78,6 @@ original request and current owner before resending it on a dedicated pair.
 
 RichDoctor includes the watcher's last routing state in its Configuration
 collection. It reads the bounded `engine-state/codex-watch/health.json`
-snapshot and reports only its timestamp, deferred routing state and held
-source count. The local `host-child.log` contains the detailed watcher errors.
+snapshot and reports its timestamp, deferred routing state, held source count
+and any recorded company repair outcome. The local `host-child.log` contains
+watcher errors. Startup logs record a successful or held company repair.

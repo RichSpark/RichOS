@@ -18,6 +18,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 
@@ -40,6 +41,7 @@ AUTOMATIC = "_automatic"
 TERMINAL = "_terminal"
 DISPATCH_LOCATOR = "RICHOS_CODEX_DISPATCH_LOCATOR"
 DISPATCH_ATTEMPT = "RICHOS_CODEX_DISPATCH_ATTEMPT"
+QUOTA_POLL_SECONDS = 5
 
 
 def root():
@@ -153,7 +155,14 @@ def connection(locator, scope=None):
     path = Path(locator).absolute()
     if path.name == "connection.json":
         path = path.parent
-    record = load(path / "connection.json")
+    try:
+        record = load(path / "connection.json")
+    except FileNotFoundError:
+        previous_entity = path.parent.parent.name
+        path = moved_locator(path)
+        record = load(path / "connection.json")
+        if record.get("previous_entity_id") != previous_entity:
+            raise ValueError("Connection does not match its original locator")
     if type(record.get("version")) is not int or record["version"] != VERSION:
         raise ValueError("Unsupported connection version")
     if record.get("legacy_folder") is not None:
@@ -177,6 +186,18 @@ def connection(locator, scope=None):
     if scope and (record["entity_id"], record["thread_id"]) != (scope["entity_id"], scope["thread_id"]):
         raise ValueError("Connection belongs to another company or conversation")
     return path, record
+
+
+def moved_locator(path):
+    # Existing handoffs and inbox receipts keep the locators they were issued with.
+    try:
+        move = load(root() / "legacy-company-move.json")
+        old = endpoint(move["from"], move["thread_id"], path.name)
+        if move.get("version") == VERSION and path == old:
+            return endpoint(move["to"], move["thread_id"], path.name)
+    except (FileNotFoundError, KeyError, ValueError):
+        pass
+    return path
 
 
 def registered(entity="*", thread="*", ident="*"):
@@ -251,29 +272,23 @@ def handoff(path):
             % (path, helper))
 
 
-def automatic_target():
+def legacy_target():
     try:
-        target = load(root() / "automatic.json")
+        target = load(root() / "legacy-target.json")
     except FileNotFoundError:
         return None
     if type(target.get("version")) is not int or target["version"] != VERSION:
-        raise ValueError("Invalid automatic Codex destination version")
+        raise ValueError("Invalid legacy Codex destination version")
     if component(target.get("entity_id")) in (AUTOMATIC, TERMINAL):
-        raise ValueError("Invalid automatic Codex company")
+        raise ValueError("Invalid legacy Codex company")
     component(target.get("thread_id"))
     return target
 
 
-def bind_automatic(target):
-    # Only the app receiver calls this. Its receiver lock fences other hosts.
+def automatic_requests():
     for path, record in registered(AUTOMATIC, "codex"):
         if record["entity_id"] == AUTOMATIC:
-            save(path / "connection.json", dict(record, binding={
-                "entity_id": target["entity_id"], "thread_id": target["thread_id"]}))
-
-
-def automatic_waiting():
-    return any(record["entity_id"] == AUTOMATIC for _, record in registered(AUTOMATIC, "codex"))
+            yield dict(type="automatic", locator=str(path))
 
 
 def terminal_scope(project, session=""):
@@ -311,6 +326,13 @@ def terminal_connections(session):
         yield from registered(TERMINAL, component(session))
 
 
+def work_directory():
+    try:
+        return dict(project_dir=os.getcwd())
+    except OSError:
+        return {}
+
+
 def connect(text, provenance, locator=None, scope=None, terminal_session=None):
     if not text.strip() or not provenance.strip():
         raise ValueError("Supply the original task text and its provenance")
@@ -323,7 +345,7 @@ def connect(text, provenance, locator=None, scope=None, terminal_session=None):
     elif terminal_session is not None:
         target = dict(entity_id=TERMINAL, thread_id=component(terminal_session))
     else:
-        target = automatic_target() or dict(entity_id=AUTOMATIC, thread_id="codex")
+        target = dict(entity_id=AUTOMATIC, thread_id="codex", **work_directory())
     ident = uuid.uuid4().hex
     p = endpoint(target["entity_id"], target["thread_id"], ident)
     mkdir(p)
@@ -334,6 +356,8 @@ def connect(text, provenance, locator=None, scope=None, terminal_session=None):
             f.flush()
             os.fsync(f.fileno())
     record = dict(version=VERSION, entity_id=target["entity_id"], thread_id=target["thread_id"], connection_id=ident)
+    if target["entity_id"] == AUTOMATIC and "project_dir" in target:
+        record["project_dir"] = target["project_dir"]
     direction = "to-codex" if scope or terminal_session is not None else "to-rich"
     append(p / (direction + ".jsonl"), dict(version=VERSION, message_id="task-context", kind="task_context",
            text=text, provenance=provenance))
@@ -371,30 +395,36 @@ def quota_status():
         return dict(status="unavailable", limits=[], available_resets=None, ordinary_usage_allowed=None)
 
 
-def check_codex_quota(binary, expected_account=None):
+def check_codex_quota(binary, expected_account=None, *, rpc=None, reading=None, active=None, cwd=None, env=None):
     """Read the active account and serialize redemption across RichOS jobs."""
-    reading = None
     outcome = "unavailable"
     try:
-        with codex_quota.client(binary) as rpc:
-            reading = codex_quota.read(rpc)
+        with (codex_quota.client(binary, cwd=cwd, env=env) if rpc is None else contextlib.nullcontext(rpc)) as rpc:
+            if reading is None:
+                reading = codex_quota.read(rpc)
             if expected_account is not None and reading.account != expected_account:
                 return None, "accountChanged"
             if not reading.exhausted_windows() or not reading.resets:
                 return reading, "none"
-            if not isinstance(reading.account, str) or not 0 < len(reading.account) <= 256:
+            if active is not None and not active():
+                return reading, "none"
+            if not reading.account:
                 return reading, "accountUnavailable"
-            config = rpc.request("config/read", {"cwd": os.getcwd(), "includeLayers": False}).get("config")
+            config = rpc.request("config/read", {"cwd": cwd or os.getcwd(), "includeLayers": False}).get("config")
             if not isinstance(config, dict):
                 return reading, "unavailable"
             if config.get("model_provider") not in (None, "openai") or config.get("openai_base_url"):
                 return reading, "otherProvider"
+            if active is not None and not active():
+                return reading, "none"
 
             auth = rpc.request("account/read", {"refreshToken": False})
             if codex_quota.obj(auth.get("account")).get("type") != "chatgpt":
                 return reading, "otherProvider"
             user = auth.get("userId") or ""
-            with locked(root() / "quota" / "reset.lock"):
+            # A live monitor can retry if another job owns the lock. Preflight
+            # must wait for that job's result before it starts Codex.
+            with locked(root() / "quota" / "reset.lock", wait=active is None):
                 fresh = codex_quota.read(rpc)
                 if fresh.account != reading.account:
                     return None, "accountChanged"
@@ -411,19 +441,28 @@ def check_codex_quota(binary, expected_account=None):
                 prior = attempt.get("outcome")
                 if prior in ("reset", "alreadyRedeemed") and set(windows).intersection(attempt["windows"]):
                     return reading, "previousAttempt"
+                if active is not None and not active():
+                    return reading, "none"
                 # Uncertain requests reuse their UUID even if the reading has
                 # changed. Known refusals can be tried again with fresh inventory.
                 if not attempt or prior is not None:
                     attempt = dict(windows=windows, key=str(uuid.uuid4()))
+                    if (credit_id := reading.next_reset_id()) is not None:
+                        attempt["credit_id"] = credit_id
                     save(marker, attempt)
+                params = {"idempotencyKey": attempt["key"]}
+                if "credit_id" in attempt:
+                    params["creditId"] = attempt["credit_id"]
                 outcome = "unconfirmed"
-                result = rpc.request("account/rateLimitResetCredit/consume", {"idempotencyKey": attempt["key"]})
+                result = rpc.request("account/rateLimitResetCredit/consume", params)
                 if result.get("outcome") not in codex_quota.RESET_OUTCOMES:
                     return reading, outcome
                 outcome = result["outcome"]
                 save(marker, dict(attempt, outcome=outcome))
                 refreshed = codex_quota.read(rpc)
                 return (refreshed if refreshed.account == reading.account else None), outcome
+    except BlockingIOError:
+        return reading, "resetInProgress"
     except (OSError, ValueError, KeyError, TypeError):
         return (None if outcome in codex_quota.RESET_OUTCOMES else reading), outcome
 
@@ -456,7 +495,71 @@ def quota_notice(path, reading, outcome):
                         f"Codex can draw from existing credits for eligible work. {reading.summary()}")
 
 
-def run_codex(binary, path, marker, state, prompt):
+class CodexQuotaWatch:
+    def __init__(self, reading, outcome, *, cwd=None, env=None, notify=None):
+        self.account = reading.account if reading else None
+        self.wake = threading.Event()
+        self.source = self.outcome = None
+        self.cwd, self.env, self.notify = cwd, env, notify
+        self.notice = (outcome, reading.exhausted_windows()) if reading else None
+
+    @property
+    def redeemed(self):
+        return self.outcome in ("reset", "alreadyRedeemed")
+
+    @contextlib.contextmanager
+    def during(self, binary, child):
+        self.wake.clear()
+        stopped = threading.Event()
+
+        def active():
+            return not stopped.is_set() and child.poll() is None
+
+        worker = threading.Thread(target=self.watch, args=(binary, active))
+        worker.start()
+        try:
+            yield
+        finally:
+            stopped.set()
+            self.wake.set()
+            worker.join()
+
+    def watch(self, binary, active):
+        # Keep one App Server connection for periodic reads. Short turns never
+        # start it, and the exec stdout reader stays responsive during RPCs.
+        with contextlib.ExitStack() as connection:
+            rpc = None
+            while active():
+                source = "event" if self.wake.wait(QUOTA_POLL_SECONDS) else "poll"
+                self.wake.clear()
+                if not active():
+                    break
+                try:
+                    if rpc is None:
+                        rpc = connection.enter_context(codex_quota.client(binary, cwd=self.cwd, env=self.env))
+                    reading = codex_quota.read(rpc)
+                    if self.account is None:
+                        self.account = reading.account
+                    reading, outcome = check_codex_quota(binary, self.account, rpc=rpc, reading=reading,
+                                                         active=active, cwd=self.cwd)
+                except (OSError, ValueError):
+                    reading, outcome = None, "unavailable"
+                if (reading is None and outcome == "unavailable") or outcome == "unconfirmed":
+                    connection.close()
+                    rpc = None
+                if not self.redeemed or outcome in ("reset", "alreadyRedeemed"):
+                    self.source, self.outcome = source, outcome
+                windows = reading.exhausted_windows() if reading else []
+                notice = (outcome, windows)
+                if self.notify and notice != self.notice and ((windows and active() and outcome != "resetInProgress")
+                                                               or outcome in ("reset", "alreadyRedeemed")):
+                    self.notice = notice
+                    self.notify(reading, outcome)
+                if outcome == "accountChanged":
+                    break
+
+
+def run_codex(binary, path, marker, state, prompt, watch):
     command = [binary, "exec", "--json", "--skip-git-repo-check",
                "--sandbox", "danger-full-access"]
     if session := state.get("session_id"):
@@ -468,7 +571,8 @@ def run_codex(binary, path, marker, state, prompt):
         source.seek(0)
         env = dict(os.environ, **{DISPATCH_LOCATOR: str(path), DISPATCH_ATTEMPT: state["attempt_id"]})
         quota_failed = False
-        with subprocess.Popen([*command, "-"], stdin=source, stdout=subprocess.PIPE, text=True, env=env) as child:
+        with (subprocess.Popen([*command, "-"], stdin=source, stdout=subprocess.PIPE, text=True, env=env) as child,
+              watch.during(binary, child)):
             for line in child.stdout:
                 try:
                     event = json.loads(line)
@@ -477,6 +581,8 @@ def run_codex(binary, path, marker, state, prompt):
                     continue
                 event = codex_quota.obj(event)
                 quota_failed |= codex_quota.usage_failed(event)
+                if codex_quota.usage_exhausted(event):
+                    watch.wake.set()
                 if event.get("type") == "thread.started":
                     session_id = component(event.get("thread_id"))
                     if session and session_id != session:
@@ -489,14 +595,14 @@ def run_codex(binary, path, marker, state, prompt):
             return child.wait(), quota_failed
 
 
-def run_dispatch_attempt(binary, path, marker, state, prompt, recovering):
+def run_dispatch_attempt(binary, path, marker, state, prompt, recovering, watch):
     state["attempt_id"] = uuid.uuid4().hex
     state.pop("exit_code", None)
     save(marker, state)
     if recovering and state.get("session_id"):
         prompt = ("Continue the pending RichOS task in this chat. "
                   "Check prior progress before repeating any effects. Pending request follows.\n\n" + prompt)
-    return run_codex(binary, path, marker, state, prompt)
+    return run_codex(binary, path, marker, state, prompt, watch)
 
 
 def dispatch(locator, resume=False):
@@ -550,19 +656,25 @@ def dispatch(locator, resume=False):
         preflight_ms = None
         quota_failed = False
         retry_outcome = None
+        watch = None
         try:
             binary = codex_binary()
             reading, outcome = check_codex_quota(binary)
             preflight_ms = round((time.monotonic() - started) * 1000)
             quota_notice(path, reading, outcome)
-            code, quota_failed = run_dispatch_attempt(binary, path, marker, state, prompt, recovering)
-            if code and quota_failed and outcome == "none":
-                updated, retry_outcome = check_codex_quota(binary, expected_account=reading.account)
+            watch = CodexQuotaWatch(reading, outcome,
+                                    notify=lambda updated, result: quota_notice(path, updated, result))
+            code, quota_failed = run_dispatch_attempt(binary, path, marker, state, prompt, recovering, watch)
+            if (code and quota_failed and watch.account and
+                    (outcome in ("none", "unavailable", "accountUnavailable") or watch.redeemed)):
+                updated, retry_outcome = check_codex_quota(binary, expected_account=watch.account)
                 if updated is not None:
                     reading = updated
-                if retry_outcome in ("reset", "alreadyRedeemed"):
+                reset_for_retry = retry_outcome in ("reset", "alreadyRedeemed")
+                if reset_for_retry:
                     quota_notice(path, updated, retry_outcome)
-                    code, quota_failed = run_dispatch_attempt(binary, path, marker, state, prompt, recovering=True)
+                if reset_for_retry or (watch.redeemed and retry_outcome == "none" and updated and updated.allowed):
+                    code, quota_failed = run_dispatch_attempt(binary, path, marker, state, prompt, True, watch)
         except (OSError, ValueError) as error:
             diagnostic(path, error)
             code = 1
@@ -575,6 +687,7 @@ def dispatch(locator, resume=False):
         state["quota_diagnostics"] = dict(
             at_ms=time.time_ns() // 1_000_000, elapsed_ms=round((time.monotonic() - started) * 1000),
             preflight_ms=preflight_ms, reading="available" if reading else "unavailable", reset=outcome,
+            in_flight_source=watch.source if watch else None, in_flight_reset=watch.outcome if watch else None,
             retry_reset=retry_outcome, quota_failed=quota_failed, exit_code=code)
         save(marker, state)
         try:

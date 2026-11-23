@@ -487,6 +487,7 @@
     output_width: 400,
     sidebar_collapsed: false,
     collapsed_entities: [],
+    company_order: [],
     pinned_threads: [],
     archived_threads: [],
     renamed_threads: {},
@@ -532,6 +533,12 @@
   // (`richos-sidebar-hidden`): a suite must be able to set one without the other to prove that
   // nav.rs, not the mirror, decides. A fresh browser context has neither, and boots open.
   const MOCK_SIDEBAR_KEY = "richos-mock-sidebar-collapsed";
+  const MOCK_COMPANY_ORDER_KEY = "richos-mock-company-order";
+  try {
+    navPrefs.company_order = JSON.parse(window.localStorage.getItem(MOCK_COMPANY_ORDER_KEY)) ?? [];
+  } catch (e) {
+    /* storage unavailable, use registry order */
+  }
   try {
     navPrefs.sidebar_collapsed = window.localStorage.getItem(MOCK_SIDEBAR_KEY) === "1";
   } catch (e) {
@@ -4594,6 +4601,10 @@
           return null;
         case "set_entity_collapsed":
           setMembership(navPrefs.collapsed_entities, args.entityId ?? args.entity_id, !!args.collapsed);
+          return null;
+        case "set_company_order":
+          window.localStorage.setItem(MOCK_COMPANY_ORDER_KEY, JSON.stringify(args.order));
+          navPrefs.company_order = args.order;
           return null;
         case "set_thread_pinned":
           setMembership(navPrefs.pinned_threads, args.threadId ?? args.thread_id, !!args.pinned);

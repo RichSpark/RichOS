@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Source and consumer integration for engine/voice, including Rust's compiled metadata.
-# run-tests: inputs richos/app/scripts/voice-component.test.sh richos/engine/voice richos/engine/.env.example richos/engine/scripts/lib/machine_settings.fixtures.json richos/app/crates/richos-voice richos/app/ui/assets/app-icons/richscribe-glyph.css richos/app/crates/richos-core richos/app/crates/richos-command richos/app/crates/richos-search richos/app/third-party/qdrant-edge richos/engine/scripts/lib/dialect/dialect-en-US.generated.dict richos/app/Cargo.toml richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh richos/app/scripts/lib/cargo-target.sh richos/tools/richpass/RichPass.html richos/tools/richpass/releases.json
+# run-tests: inputs richos/app/scripts/voice-component.test.sh richos/engine/voice richos/engine/ecs/core/legacy_codex_move.sql richos/engine/.env.example richos/engine/scripts/lib/machine_settings.fixtures.json richos/app/crates/richos-voice richos/app/ui/assets/app-icons/richscribe-glyph.css richos/app/crates/richos-core richos/app/crates/richos-command richos/app/crates/richos-search richos/app/third-party/qdrant-edge richos/engine/scripts/lib/dialect/dialect-en-US.generated.dict richos/app/Cargo.toml richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh richos/app/scripts/lib/cargo-target.sh richos/tools/richpass/RichPass.html richos/tools/richpass/releases.json
 # run-tests: covers richos/app/crates/richos-voice/build.rs
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,9 +35,9 @@ cp "$APP/$GLYPH" "$PRODUCT/app/$GLYPH"
 DICT="engine/scripts/lib/dialect/dialect-en-US.generated.dict"
 mkdir -p "$PRODUCT/$(dirname "$DICT")"
 cp "$HERE/../../$DICT" "$PRODUCT/$DICT"
-for SETTINGS_INPUT in engine/.env.example engine/scripts/lib/machine_settings.fixtures.json; do
-  mkdir -p "$PRODUCT/$(dirname "$SETTINGS_INPUT")"
-  cp "$HERE/../../$SETTINGS_INPUT" "$PRODUCT/$SETTINGS_INPUT"
+for CORE_INPUT in engine/.env.example engine/scripts/lib/machine_settings.fixtures.json engine/ecs/core/legacy_codex_move.sql; do
+  mkdir -p "$PRODUCT/$(dirname "$CORE_INPUT")"
+  cp "$HERE/../../$CORE_INPUT" "$PRODUCT/$CORE_INPUT"
 done
 CARGO_BIN="$HERE/bin/cargo"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$APP/target}"

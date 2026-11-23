@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import ImageIO
+import RichFilesCore
 
 /// RichOS Settings uses the same files and advisory lock. Screenshots are only written by RichGlance.
 struct ScreenshotStore: Sendable {
@@ -75,6 +76,36 @@ struct ScreenshotStore: Sendable {
             let data = try JSONEncoder().encode(region)
             try data.write(to: root.appendingPathComponent("last-region.json"), options: .atomic)
         }
+    }
+
+    func annotationStyle(for tool: ScreenshotTool) -> ScreenshotMarkStyle {
+        let url = annotationStyleFile(for: tool)
+        guard let data = try? Data(contentsOf: url),
+              let style = try? JSONDecoder().decode(ScreenshotMarkStyle.self, from: data) else {
+            return ScreenshotMarkStyle()
+        }
+        return style
+    }
+
+    func rememberAnnotationStyle(_ changes: ScreenshotMarkStyle, for tool: ScreenshotTool) throws {
+        let started = ProcessInfo.processInfo.systemUptime
+        var saved = false
+        defer {
+            RichFilesDiagnostics.record(.glanceAnnotationDefaults, id: UUID(), outcome: saved ? .complete : .issues,
+                                        started: started, total: 1, confirmed: saved ? 1 : 0)
+        }
+        try withLock {
+            var style = annotationStyle(for: tool)
+            if let ink = changes.ink { style.ink = ink }
+            if let large = changes.large { style.large = large }
+            if let thickness = changes.thickness { style.thickness = thickness }
+            try JSONEncoder().encode(style).write(to: annotationStyleFile(for: tool), options: .atomic)
+        }
+        saved = true
+    }
+
+    private func annotationStyleFile(for tool: ScreenshotTool) -> URL {
+        root.appendingPathComponent("annotation-\(tool.rawValue).json")
     }
 
     var showsShelf: Bool { readSetting("shelf-visibility") != "closed" }

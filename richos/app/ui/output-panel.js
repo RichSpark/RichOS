@@ -2611,6 +2611,7 @@
     toggle,
     escape,
     syncScrim,
+    recordingGitVisit: () => git.ready && git.active && gitBounds(true).visible ? git.ticket : null,
     nativeGitClosed: () => closeGit(true),
     nativeGitRefresh: () => openGit(null, null, true),
     nativeGitUnavailable() {

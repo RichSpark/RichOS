@@ -43,33 +43,47 @@ enum GlanceHelperControl {
             case ["status"]:
                 result = try status()
             case ["restore"]:
-                if installed {
-                    let lock = try store.lock("settings")
-                    defer { try? lock?.close() }
-                    let preferences = try store.read().preferences
-                    let loginEnabled = service.status == .enabled
-                    if shouldRunSession(preferences, loginEnabled: loginEnabled) {
-                        _ = try startSessionIfNeeded()
-                    } else if preferences.background && loginEnabled {
-                        if try !waitForHelper(), shouldRunSession(preferences, loginEnabled: service.status == .enabled) {
-                            _ = try startSessionIfNeeded()
-                        }
-                    }
-                }
-                result = try status()
+                result = try restore()
             case let values where values.count == 2 && values[0] == "configure":
                 let change = try JSONDecoder().decode(ShortcutChange.self, from: Data(values[1].utf8))
                 result = try setShortcut(change.shortcut, enabled: change.enabled)
+            case let values where values.count == 2 && values[0] == "background" && Bool(values[1]) != nil:
+                result = try setBackground(values[1] == "true")
+            case let values where values.count == 2 && values[0] == "menu-bar" && Bool(values[1]) != nil:
+                result = try setMenuBar(values[1] == "true")
             default:
                 throw GlanceHelper.Problem("Unknown RichGlance Capture command.")
             }
             let data = try JSONEncoder().encode(result)
+            RichFilesDiagnostics.flush()
             FileHandle.standardOutput.write(data)
         } catch {
+            RichFilesDiagnostics.flush()
             FileHandle.standardError.write(Data(error.localizedDescription.utf8))
             exit(EXIT_FAILURE)
         }
         return true
+    }
+
+    private static func restore() throws -> Status {
+        guard installed else { return try status() }
+        let lock = try store.lock("settings")
+        defer { try? lock?.close() }
+        let record = try store.read()
+        let preferences = record.preferences
+        if record.migratedBackground { try store.write(preferences) }
+        let loginStatus = service.status
+        if preferences.background && (loginStatus == .notRegistered || loginStatus == .notFound) {
+            return try setBackground(true, record: record, userChoice: false)
+        }
+        if shouldRunSession(preferences, loginEnabled: loginStatus == .enabled) {
+            _ = try startSessionIfNeeded()
+        } else if preferences.background && loginStatus == .enabled {
+            if try !waitForHelper(), shouldRunSession(preferences, loginEnabled: service.status == .enabled) {
+                _ = try startSessionIfNeeded()
+            }
+        }
+        return try status()
     }
 
     static func shouldRunSession(_ preferences: GlanceHelper.Preferences, loginEnabled: Bool) -> Bool {
@@ -102,7 +116,15 @@ enum GlanceHelperControl {
     }
 
     static func setMenuBar(_ enabled: Bool) throws -> Status {
-        try update { $0.menuBar = enabled }
+        let started = ProcessInfo.processInfo.systemUptime
+        var outcome: RichFilesDiagnostics.Outcome = .issues
+        defer {
+            RichFilesDiagnostics.record(.glanceCaptureHelperMenu, id: UUID(), outcome: outcome,
+                                        started: started, total: 1, confirmed: outcome == .complete ? 1 : 0)
+        }
+        let result = try update { $0.menuBar = enabled }
+        outcome = .complete
+        return result
     }
 
     private static func update(requiring required: CaptureRequest.Action? = nil,
@@ -129,7 +151,10 @@ enum GlanceHelperControl {
         guard installed else { throw GlanceHelper.Problem("The RichGlance capture helper could not be found in this installation.") }
         let lock = try store.lock("settings")
         defer { try? lock?.close() }
-        let record = try store.read()
+        return try setBackground(enabled, record: store.read(), userChoice: true)
+    }
+
+    private static func setBackground(_ enabled: Bool, record: GlanceHelper.Store.Record, userChoice: Bool) throws -> Status {
         let original = record.preferences
         let item = service
         let started = ProcessInfo.processInfo.systemUptime
@@ -139,14 +164,16 @@ enum GlanceHelperControl {
                                         started: started, total: 1, confirmed: outcome == .complete ? 1 : 0)
         }
         if enabled, item.status == .enabled || item.status == .requiresApproval {
-            if !original.background { try store.write(original.settingBackground(true, firstUse: record.firstUse)) }
+            if userChoice || !original.background {
+                try store.write(original.settingBackground(true, firstUse: record.firstUse, userChoice: userChoice))
+            }
             outcome = item.status == .enabled ? .complete : .unavailable
             return try status()
         }
 
         if enabled {
             try stopSession()
-            let next = original.settingBackground(true, firstUse: record.firstUse)
+            let next = original.settingBackground(true, firstUse: record.firstUse, userChoice: userChoice)
             try store.write(next)
             do {
                 try item.register()

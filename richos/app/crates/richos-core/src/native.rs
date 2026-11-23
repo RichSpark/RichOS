@@ -6670,6 +6670,89 @@ while True:
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn resumes_rich_and_stu_from_their_original_transcripts_after_codex_repair() {
+        use crate::entity::{Entity, EntityId, EntityRegistry};
+        use crate::ledger::Ledger;
+
+        let root = fixture_root().join(crate::util::new_id("resume-codex"));
+        let coordination = root.join("coordination");
+        let repo = root.join("RichOS");
+        let exporter = root.join("Exporter");
+        for folder in [&coordination, &repo, &exporter] {
+            std::fs::create_dir_all(folder).unwrap();
+        }
+        for arguments in [
+            &["init", "-q"][..],
+            &["config", "remote.origin.url", "git@github.com:RichSpark/RichOS.git"],
+        ] {
+            assert!(std::process::Command::new("/usr/bin/git")
+                .current_dir(&repo).args(arguments).status().unwrap().success());
+        }
+        let registry = EntityRegistry::new(vec![
+            Entity::try_new("gpt-exporter", "GPT Exporter", vec![exporter]).unwrap(),
+            Entity::try_new("richos", "RichOS", vec![repo]).unwrap(),
+        ]).unwrap();
+        let ledger_path = root.join("conversation-ledger.jsonl");
+        let mut ledger = Ledger::open(&ledger_path).unwrap();
+        let old = EntityId::parse("gpt-exporter").unwrap();
+        let thread = ledger.create_thread("Codex", &old).unwrap();
+        drop(ledger);
+        let owner = json!({"version": 1, "entity_id": old, "thread_id": thread});
+        std::fs::write(coordination.join("automatic.json"), owner.to_string()).unwrap();
+        for (id, folder) in [("legacy-one", "rich-codex"), ("legacy-two", "rich-codex-questions")] {
+            let endpoint = coordination.join("connections/gpt-exporter").join(&thread).join(id);
+            std::fs::create_dir_all(&endpoint).unwrap();
+            let mut record = owner.clone();
+            record["connection_id"] = json!(id);
+            record["legacy_folder"] = json!(coordination.join(folder));
+            record["legacy_live"] = json!(true);
+            std::fs::write(endpoint.join("connection.json"), record.to_string()).unwrap();
+        }
+        let output = std::process::Command::new("python3")
+            .args(["-c", "import sys; print(sys.executable)"]).output().unwrap();
+        assert!(output.status.success());
+        let engine = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine");
+        let python = String::from_utf8(output.stdout).unwrap();
+        let bridge = crate::ecs::EcsBridge::new(Path::new(python.trim()), &engine, &root.join("ecs")).unwrap();
+        let mut profile = fixture_profile(&root);
+        profile.state = root.join("engine-state");
+        profile.work_scope = Some((old.to_string(), thread.clone()));
+        let scope = crate::status_tools::StatusToolScope {
+            version: 1, state_root: profile.state.clone(), entity_id: old.to_string(), thread_id: thread.clone(),
+        };
+        let mut saved = Vec::new();
+        for (role, name, audience, prefix) in [
+            (LeaseRole::Conversation, "rich", "ceo", "ceo-thread"),
+            (LeaseRole::Work, "stu", "rich", "stu-thread"),
+        ] {
+            let seat = format!("{prefix}:{thread}");
+            let session = uuid::Uuid::new_v4().to_string();
+            let before = bridge.bind(old.as_str(), &thread, &session, "before", Some(&seat), audience).unwrap();
+            crate::session_tools::bind(&root.join(format!("{name}-scope.json")), &scope, &session, name, None).unwrap();
+            let transcript = root.join(format!("{session}.jsonl"));
+            std::fs::write(&transcript, "existing native history").unwrap();
+            std::fs::write(profile.state.join("evidence").join(&session).join("callbacks.jsonl"),
+                format!("{}\n", json!({"callback": {"transcript_path": transcript}}))).unwrap();
+            saved.push((role, audience, seat, session, transcript, before.revision));
+        }
+        assert!(crate::codex_bridge::ownership::repair_legacy_company(&root, &coordination, &registry).unwrap());
+        let ledger = Ledger::open(&ledger_path).unwrap();
+        let new = ledger.thread_binding(&thread).unwrap().entity_id().to_string();
+        assert_eq!(new, "richos");
+        profile.work_scope = Some((new.clone(), thread.clone()));
+        for (role, audience, seat, session, transcript, revision) in saved {
+            assert_eq!(
+                native_resume(Some(&profile), Some((&bridge, &root)), role).unwrap(),
+                Some((session.clone(), transcript))
+            );
+            let next = bridge.bind(&new, &thread, &session, "after", Some(&seat), audience).unwrap();
+            assert_eq!(next.revision, revision + 1);
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// **A session resumed on another account counts its new turns to that account** (Hank's
     /// parity audit 2026-10-30, item 1: Stu ran on Work and resumed his record by its full path
     /// in Home's folder, so every new turn was written, and counted, there). Each account's token
