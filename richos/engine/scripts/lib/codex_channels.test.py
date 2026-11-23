@@ -48,6 +48,18 @@ class Channels(unittest.TestCase):
         path = Path(locator) / "connection.json"
         c.save(path, dict(c.load(path), binding={key: scope[key] for key in ("entity_id", "thread_id")}))
 
+    def move_pair(self, locator, entity):
+        old = Path(locator)
+        _, endpoint = c.connection(old)
+        new = c.endpoint(entity, endpoint["thread_id"], old.name)
+        c.mkdir(new.parent)
+        old.rename(new)
+        c.save(new / "connection.json", dict(endpoint, entity_id=entity, previous_entity_id=endpoint["entity_id"]))
+        c.save(c.root() / "legacy-company-move.json",
+               {"version": 1, "from": endpoint["entity_id"], "to": entity,
+                "thread_id": endpoint["thread_id"], "complete": True})
+        return new
+
     def test_independent_work_never_inherits_the_old_automatic_company(self):
         c.save(c.root() / "automatic.json", self.a)
         with contextlib.chdir(self.root):
@@ -68,15 +80,7 @@ class Channels(unittest.TestCase):
 
     def test_old_locator_reopens_the_moved_pair_in_its_registered_scope(self):
         old = Path(self.connect(self.a))
-        new = c.endpoint(self.b["entity_id"], self.a["thread_id"], old.name)
-        c.mkdir(new.parent)
-        old.rename(new)
-        path = new / "connection.json"
-        c.save(path, dict(c.load(path), entity_id=self.b["entity_id"],
-                          previous_entity_id=self.a["entity_id"]))
-        c.save(c.root() / "legacy-company-move.json",
-               {"version": 1, "from": self.a["entity_id"], "to": self.b["entity_id"],
-                "thread_id": self.a["thread_id"], "complete": True})
+        self.move_pair(old, self.b["entity_id"])
         owner = dict(self.b, thread_id=self.a["thread_id"])
         c.send(old, "new-reply", "Through the original locator", scope=owner)
         self.assertEqual(c.read(old)["records"][-1]["message_id"], "new-reply")
@@ -466,6 +470,42 @@ else:
             items, _ = world.codex_items(10, {})
         self.assertEqual([str(path) for path, _ in items], [pair])
 
+    def test_terminal_review_reads_company_ready_with_original_context(self):
+        import review_watch
+        config = self.root / "project" / "orchestration.config"
+        config.parent.mkdir()
+        config.write_text('SECOND_REVIEW_REPOS="richos"\n')
+        repo = self.root / "richos"
+        repo.mkdir()
+        git = ["git", "-C", str(repo), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"]
+        subprocess.run(git + ["init", "-q", "-b", "main"], check=True)
+        tree = subprocess.check_output(git + ["mktree"], input="", text=True).strip()
+        base = subprocess.check_output(git + ["commit-tree", tree, "-m", "Base"], text=True).strip()
+        subprocess.run(git + ["update-ref", "refs/heads/main", base], check=True)
+        tip = subprocess.check_output(git + ["commit-tree", tree, "-p", base, "-m", "Tip"], text=True).strip()
+        pair = self.connect(self.b)
+        self.assertEqual(Path(pair).parent.parent.name, "company-b")
+        c.send(pair, "company-review", f"READY TO LAND: codex/company-ready\nRepository: richos\nCommit: {tip}")
+
+        world = review_watch.World(str(Path(c.__file__).parents[2]), str(config))
+        world.ws = mock.Mock(known_repos=mock.Mock(return_value=[str(repo)]))
+        state = {}
+        with mock.patch.dict(os.environ, {
+            "REVIEW_WATCH_STATE_DIR": str(self.root / "review"),
+            "REVIEW_WATCH_TO_RICH": str(self.root / "unused-to-rich.md"),
+            "REVIEW_WATCH_TO_CODEX": str(self.root / "unused-to-codex.md"),
+        }):
+            for session in ("original", "replacement", "after-move"):
+                if session == "after-move":
+                    pair = str(self.move_pair(pair, self.a["entity_id"]))
+                with mock.patch.dict(review_watch.MONITOR, {"session": session}):
+                    items, problems = world.codex_items(10, state)
+                self.assertEqual(problems, [])
+                self.assertEqual([item.tip for item in items], [tip])
+                self.assertEqual(items[0].channel, {"locator": pair, "message_id": "company-review"})
+                self.assertIn("Exact user task", Path(items[0].words[0]).read_text())
+                self.assertEqual(len(state["channel_pending"]), 1)
+
     def test_terminal_shell_uses_lead_project_from_work_folder(self):
         scripts = Path(c.__file__).resolve().parents[1]
         project = self.root / "lead project"
@@ -499,11 +539,20 @@ else:
         self.assertEqual(Path(pair).parent, Path(local).parent)
         channel(other, "send", "--terminal", "--locator", local, "--id", "follow-up", "--text", "Proceed")
         c.send(pair, "result", "Dedicated reply from the task.")
-        seat("replacement", project)
-        for expected in (1, 0):
+        company = self.connect(self.a)
+        ready = "READY TO LAND: codex/company-ready"
+        c.send(company, "company-ready", ready)
+        second_company = self.connect(self.b)
+        c.send(second_company, "company-reply", "Another company reply")
+        for session, expected in (("replacement", 1), ("restarted", 0), ("after-move", 0)):
+            if session == "after-move":
+                self.move_pair(company, self.b["entity_id"])
+            seat(session, project)
             result = subprocess.run(["bash", str(scripts / "codex-watch.sh"), "--tick"],
                                     cwd=project, env=env, check=True, text=True, capture_output=True)
             self.assertEqual(result.stdout.count("Dedicated reply from the task."), expected)
+            self.assertEqual(result.stdout.count(ready), expected, result.stdout)
+            self.assertEqual(result.stdout.count("Another company reply"), expected)
         seat("unrelated", other)
         refused = channel(work, "send", "--terminal", "--locator", local, "--id", "wrong", "--text", "No",
                           check=False)

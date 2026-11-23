@@ -321,9 +321,20 @@ def terminal_project(directory):
     return result.stdout if result.returncode == 0 else None
 
 
-def terminal_connections(session):
-    if session:
-        yield from registered(TERMINAL, component(session))
+def rich_connections(project, session):
+    """Rich's company inbox plus this terminal's project and older session pairs."""
+    owners = set(terminal_scopes(project, session))
+    if not owners:
+        return
+    for path, record in registered():
+        entity = record["entity_id"]
+        if entity == TERMINAL:
+            if record["thread_id"] in owners:
+                yield path, record
+        elif project and entity != AUTOMATIC and not record.get("legacy_folder"):
+            # Direct company pairs carry no terminal project ID. The company
+            # folder is their app owner, independent of delivery to Rich.
+            yield path, record
 
 
 def work_directory():

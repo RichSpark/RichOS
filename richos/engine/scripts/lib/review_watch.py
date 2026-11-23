@@ -613,13 +613,11 @@ class World(object):
         (offset in to-rich.md and the pending handovers), updated in place."""
         to_rich = os.path.expanduser(os.environ.get("REVIEW_WATCH_TO_RICH") or DEFAULT_TO_RICH)
         to_codex = os.path.expanduser(os.environ.get("REVIEW_WATCH_TO_CODEX") or DEFAULT_TO_CODEX)
-        # Each terminal scans only its own dedicated pairs. The shared review
-        # state still fences verdicts by work and commit across terminal looks.
+        # Use the same Rich inbox as codex-watch. Terminal repository policy
+        # still comes from the project's existing review configuration.
         sid = MONITOR["session"]
         project = os.path.dirname(os.path.abspath(self.config)) if self.config else None
-        pairs = (pair for owner in channels.terminal_scopes(project, sid)
-                 for pair in channels.terminal_connections(owner))
-        dedicated, problems = self.channel_items(now, codex_state, pairs)
+        dedicated, problems = self.channel_items(now, codex_state, channels.rich_connections(project, sid))
         folder = os.path.dirname(to_rich)
         if channels.legacy_associated(folder) and not channels.legacy_live(folder):
             return dedicated, problems
@@ -780,8 +778,7 @@ class World(object):
     def channel_items(self, now, codex_state, connections):
         """The shared READY handler, with its own advisory reading position.
 
-        Only the app enumerates app-owned connections. A terminal enumerates
-        its own pairs and shares the terminal review state with other sessions.
+        The terminal shares its review state with replacement sessions.
         """
         pending = codex_state.setdefault("channel_pending", [])
         positions = codex_state.setdefault("channels", {})
@@ -789,13 +786,25 @@ class World(object):
         for path, endpoint in connections:
             if endpoint.get("legacy_folder") or endpoint["entity_id"] == channels.AUTOMATIC:
                 continue
-            owned.add(str(path))
+            locator = str(path)
+            owned.add(locator)
             try:
-                repos = self.channel_repositories(endpoint)
                 source = path / "to-rich.jsonl"
                 identity = channels.identity(source)
-                saved = positions.get(str(path), {})
+                if previous_entity := endpoint.get("previous_entity_id"):
+                    previous = channels.endpoint(previous_entity, endpoint["thread_id"], endpoint["connection_id"])
+                    if channels.moved_locator(previous) == path:
+                        previous = str(previous)
+                        if previous in positions:
+                            positions.setdefault(locator, positions.pop(previous))
+                        for item in pending:
+                            if item["channel"]["locator"] == previous:
+                                item["channel"]["locator"] = locator
+                saved = positions.get(locator, {})
                 offset = channels.position(source, saved)
+                if offset == source.stat().st_size:
+                    continue
+                repos = self.channel_repositories(endpoint)
                 # Source evidence is always recoverable from the journals. No
                 # timestamp association and no assumption that replies are tasks.
                 words = []
@@ -815,10 +824,10 @@ class World(object):
                             if isinstance(got, str):
                                 channel_reply(path, row["message_id"], "review-held", got)
                             elif got:
-                                got["channel"] = {"locator": str(path), "message_id": row["message_id"]}
+                                got["channel"] = {"locator": locator, "message_id": row["message_id"]}
                                 if not any(p["channel"] == got["channel"] and p["repo"] == got["repo"] and p["tip"] == got["tip"] for p in pending):
                                     pending.append(got)
-                    positions[str(path)] = dict(source_identity=identity, through=end)
+                    positions[locator] = dict(source_identity=identity, through=end)
             except (OSError, ValueError, KeyError) as exc:
                 print("review-watch: connection held %s: %s" % (path, exc), file=sys.stderr)
         items = []

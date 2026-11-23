@@ -226,18 +226,17 @@ def tick(sd, now=None, out=None, json_lines=False, config="", sid=""):
     with _one_whole_look():
         with codex_channels.locked(codex_channels.root() / "coordinator.lock"):
             printed = _legacy_tick(sd, now, out, json_lines, config)
-        if not json_lines:
-            for owner in codex_channels.terminal_scopes(Path(config).parent if config else None, sid):
-                lock = Path(state_root()) / "terminal" / (codex_channels.component(owner) + ".lock")
-                with codex_channels.locked(lock):
-                    printed += _terminal_tick(owner, out or sys.stdout)
+        if not json_lines and sid:
+            lock = Path(state_root()) / "terminal" / ".framed.lock"
+            with codex_channels.locked(lock):
+                printed += _terminal_tick(Path(config).parent if config else None, sid, out or sys.stdout)
         return printed
 
 
-def _terminal_tick(sid, out):
-    """Only the owning terminal session receives these framed replies."""
+def _terminal_tick(project, sid, out):
+    """Report framed replies once, using the same position if a pair moves."""
     printed = 0
-    for locator, endpoint in codex_channels.terminal_connections(sid):
+    for locator, endpoint in codex_channels.rich_connections(project, sid):
         source = locator / "to-rich.jsonl"
         pos = Path(state_root()) / "terminal" / (endpoint["connection_id"] + ".json")
         try:
