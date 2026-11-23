@@ -336,6 +336,7 @@ mod thread_title;
 pub mod writing;
 
 /// Shared live host resource observations for the desktop and its agents.
+pub mod suite_memory;
 pub mod system_resources;
 
 /// Host-scoped acceptance of dedicated engine channels.
