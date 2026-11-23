@@ -196,6 +196,9 @@
   let vocabulary = null, vocabularyBusy = false, vocabularyError = null, vocabularyForm = null;
   let vocabularyPicker = false, moreOptions = false, vocabularySaved = false, vocabularyEpoch = 0;
   let writingAllowed = false, writingBusy = false;
+  window.addEventListener("richos:company-order-changed", () => {
+    if (!sheet.hidden && vocabularyPicker) paintSheet();
+  });
   const chevron = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m8 5 7 7-7 7"/></svg>';
   const downChevron = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
   const arrow = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg>';
@@ -243,7 +246,7 @@
   function vocabularyHtml() {
     let html = `<section class="dict-sec" id="dict-vocabulary"><div class="dict-sec-h"><h4 class="dict-sec-t">Vocabulary</h4>${vocabularySaved ? '<span class="dict-saved" role="status">Saved.</span>' : ""}</div><p class="voc-lede">Fix the spelling of names you use often. Choose a company to keep its spelling rules separate.</p>`;
     if (!vocabulary) return html + `<p class="voc-state" role="status">${esc(vocabularyError || "Loading…")}</p></section>`;
-    const companies = vocabulary.companies || [], selected = vocabulary.selectedCompany;
+    const companies = window.RichCompanyOrder(vocabulary.companies || []), selected = vocabulary.selectedCompany;
     const company = companies.find(c => c.id === selected);
     if (!companies.length) {
       html += `<div class="voc-empty">${ICON.info}<p class="voc-empty-t">Add a company in RichOS to save its vocabulary.</p><button class="dict-btn" type="button" data-act="voc-add-company">Add company</button></div>`;

@@ -115,6 +115,10 @@ pub fn tools() -> Value {
          "description":"Read the Mac's current CPU, RAM, memory pressure, swap and last minute of samples. Consult when current host resources matter. Reads the shared one-second sampler immediately; never starts a measurement. Check status and age_ms before relying on a reading. Observations only; this tool changes nothing.",
          "inputSchema":{"type":"object","properties":{},"additionalProperties":false},
          "annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},
+        {"name":crate::suite_memory::TOOL,
+         "description":"Read RichDoctor's per-app physical memory in bytes, with a sample timestamp, summaries for the last 48 hours and 90 days and suspected sustained growth. Use for questions about RichOS suite memory and trends. App figures include their own WebKit processes. Claude Code and Codex each total the provider processes launched by RichOS. Check status, age and coverage. A growth flag is a signal to investigate.",
+         "inputSchema":{"type":"object","properties":{},"additionalProperties":false},
+         "annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},
         {"name":LOOK_TOOL_NAME,
          "description":"Read the scoped background-work record for this conversation. Lists starting, running, waiting and finished assignments, including each work kind and observed state. Registration is distinct from execution; a running state does not prove progress. This tool changes nothing and cannot start, stop, approve or retry work.",
          "inputSchema":{"type":"object","properties":{},"additionalProperties":false},
@@ -189,6 +193,14 @@ pub fn call(
         if arguments != json!({}) { return Err("system_resources takes no arguments.".into()); }
         let scope = read_scope(scope_path)?;
         return serde_json::to_value(crate::system_resources::read(&scope.state_root)).map_err(|e| e.to_string());
+    }
+    if name == crate::suite_memory::TOOL {
+        if arguments != json!({}) {
+            return Err("suite_memory takes no arguments.".into());
+        }
+        let scope = read_scope(scope_path)?;
+        return serde_json::to_value(crate::suite_memory::read(&scope.state_root))
+            .map_err(|error| error.to_string());
     }
     if name == crate::codex_bridge::TOOL {return crate::codex_bridge::call(scope_path,&read_scope(scope_path)?,arguments)}
     if name == "delegate" {return crate::session_tools::delegate(scope_path, &read_scope(scope_path)?, arguments)}
@@ -791,7 +803,7 @@ mod tests {
         // Direct session reads are read-only; peer send has a separate host-bound contract.
         let listed = tools();
         let listed = listed["tools"].as_array().unwrap();
-        let read_only = [crate::system_resources::TOOL, LOOK_TOOL_NAME, LIVE_MEETING_TOOL, "sessions", "transcript"];
+        let read_only = [crate::system_resources::TOOL, crate::suite_memory::TOOL, LOOK_TOOL_NAME, LIVE_MEETING_TOOL, "sessions", "transcript"];
         let peer_tools = ["send", "delegate", crate::codex_bridge::TOOL];
         assert_eq!(listed.len(), read_only.len() + peer_tools.len());
         for name in read_only {

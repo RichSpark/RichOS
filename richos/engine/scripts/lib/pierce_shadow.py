@@ -330,8 +330,8 @@ def adjudicate(pair):
                 "-c", 'approval_policy="never"', "--output-schema", str(schema), "-o", str(answer_path),
                 "--json", "--color", "never", "-"]
             prompt = judge_prompt(job, reports, kind.get("commits", {}))
-            code, seconds = SR.run_bounded(argv, cwd, prompt, str(work / "stdout.jsonl"),
-                                           str(work / "stderr.log"), ADJUDICATION_LIMIT_SECONDS, env=SR.codex_env())
+            code, seconds, quota = SR.run_codex_bounded(argv, cwd, prompt, str(work / "stdout.jsonl"),
+                                                        str(work / "stderr.log"), ADJUDICATION_LIMIT_SECONDS)
             facts = SR.codex_run_facts(str(work / "stdout.jsonl"), str(work / "stderr.log"))
             answer = read(answer_path)
             problem = ("Codex did not finish within %d s" % ADJUDICATION_LIMIT_SECONDS if code is None
@@ -339,6 +339,7 @@ def adjudicate(pair):
             if problem:
                 state["attempts"] = state.get("attempts", 0) + 1
                 state["last_reason"] = problem
+                state["codex_quota"] = quota
                 if state["attempts"] >= ADJUDICATION_ATTEMPTS:
                     state["status"] = "abandoned"
                 write(path, state)
@@ -346,6 +347,7 @@ def adjudicate(pair):
                 return
             counts, positive = summarize(answer, order)
             write(path, {"pair": pair, "status": "done", "at": time.time(), "order": order,
+                         "codex_quota": quota,
                          "judge": {"model": facts.get("model") or SR.CODEX_MODEL, "effort": facts.get("effort")
                                    or SR.CODEX_EFFORT, "tokens": facts.get("tokens"), "seconds": round(seconds, 1)},
                          "answer": answer, "counts": counts, "positive": positive,
