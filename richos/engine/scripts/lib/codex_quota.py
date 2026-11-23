@@ -114,7 +114,9 @@ class Reading:
         self.main = bucket(main)
         self.account = value.get("accountId")
         self.allowed = flag(value.get("ordinaryUsageAllowed"))
-        self.resets = number(obj(value.get("rateLimitResetCredits")).get("availableCount"))
+        inventory = obj(value.get("rateLimitResetCredits"))
+        self.resets = number(inventory.get("availableCount"))
+        self.reset_details = inventory.get("credits")
         self.limits = [self.main]
         self.limits.extend(bucket(row) for row in buckets.values() if isinstance(row, dict) and row != main)
 
@@ -131,6 +133,24 @@ class Reading:
         return sorted(w["resets_at"] for w in self.main["windows"]
                       if (w["used_percent"] or 0) >= 100 and (w["resets_at"] or 0) > now)
 
+    def next_reset_id(self):
+        if self.reset_details is None:
+            return None  # Only the count is known. Let Codex select the reset.
+        candidates = []
+        now = time.time()
+        for detail in self.reset_details if isinstance(self.reset_details, list) else []:
+            row = obj(detail)
+            credit_id = row.get("id")
+            raw_expiry = row.get("expiresAt")
+            expiry = number(raw_expiry)
+            if (row.get("status") == "available" and row.get("resetType") == "codexRateLimits" and
+                    isinstance(credit_id, str) and credit_id and
+                    (raw_expiry is None or expiry is not None and expiry > now)):
+                candidates.append((expiry is None, expiry or 0, credit_id))
+        if not candidates:
+            raise Unavailable("Codex returned no eligible reset details")
+        return min(candidates)[2]
+
     def summary(self):
         windows = ", ".join(f'{w["duration_minutes"]}-minute window {w["used_percent"]}% used'
                             for w in self.main["windows"]
@@ -143,6 +163,13 @@ class Reading:
 
 def read(rpc):
     return Reading(rpc.request("account/rateLimits/read"))
+
+
+def usage_exhausted(event):
+    if event.get("method") != "account/rateLimits/updated":
+        return False
+    params = obj(event.get("params"))
+    return isinstance(params.get("rateLimits"), dict) and bool(Reading(params).exhausted_windows())
 
 
 def usage_failed(event):
