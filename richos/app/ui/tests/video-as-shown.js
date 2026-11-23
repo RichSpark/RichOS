@@ -478,6 +478,87 @@ function gitPane() {
   return `window.__RICHOS_MOCK_PRESET__ = { gitView: true }; window.addEventListener("load", () => (${drive.toString()})( (${tools.toString()})()));`;
 }
 
+function rememberedChoices() {
+  const drive = async (T) => {
+    try {
+      await T.app();
+      window.RichHome.startField();
+      const home = "#home-video-choices";
+      const anywhere = "#video-anywhere-choices";
+      const stage = sessionStorage.getItem("video-choices-test");
+      const choice = (panel, label) => Array.from(document.querySelectorAll(panel + " button"))
+        .find((button) => button.textContent === label);
+      const choose = (panel, label) => choice(panel, label).click();
+      const check = async (panel, labels) => {
+        if (labels.includes("On")) await T.until("the restored test microphone to finish asking",
+          () => choice(panel, "On"));
+        const actual = Array.from(document.querySelectorAll(panel + ' button[aria-pressed="true"]'))
+          .map((button) => button.textContent);
+        if (JSON.stringify(actual) !== JSON.stringify(labels)) {
+          throw new Error("after opening " + panel + " expected " + labels + " but found " + actual);
+        }
+      };
+      const record = async (panel, recorder, stop) => {
+        await T.press(panel + " .hv-go, " + panel + " .rv-go");
+        await T.until("some frames of the recording", () => recorder.state().frames >= 12);
+        await T.press(stop);
+        await T.until("the completed video", () => recorder.state().ended === "stopped");
+        if (!T.seen(stop === "#home-video" ? ".hv-sheet .hv-main" : ".rv-sheet .rv-main")) {
+          throw new Error("the recorder offered no video");
+        }
+      };
+      const reload = (next) => {
+        sessionStorage.setItem("video-choices-test", next);
+        location.reload();
+      };
+      const escape = () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+
+      await T.press("#home-video");
+      if (!stage) {
+        await check(home, ["Off", "When I stop it", "Shown"]);
+        choose(home, "On");
+        choose(home, "By itself");
+        choose(home, "Hidden");
+        await check(home, ["On", "By itself", "Hidden"]);
+        await record(home, window.RichHomeVideo, "#home-video");
+        reload("from-home");
+        return;
+      }
+      if (stage === "from-anywhere") {
+        await check(home, ["Off", "By itself", "Shown"]);
+        T.post({ done: { persisted: true } });
+        return;
+      }
+
+      await check(home, ["On", "By itself", "Hidden"]);
+      escape();
+      await T.chat();
+      await T.press("#set-btn");
+      await T.press("#video-anywhere");
+      await check(anywhere, ["On", "Hidden"]);
+      choose(anywhere, "Off");
+      choose(anywhere, "Shown");
+      await T.press(anywhere + " .rv-go");
+      await T.until("the countdown", () => window.RichVideoAnywhere.state().state === "count");
+      escape();
+      await T.press("#set-btn");
+      await T.press("#video-anywhere");
+      await check(anywhere, ["On", "Hidden"]);
+      choose(anywhere, "Off");
+      choose(anywhere, "Shown");
+      await record(anywhere, window.RichVideoAnywhere, "#video-anywhere-stop");
+      reload("from-anywhere");
+    } catch (e) {
+      T.post({ done: { error: String((e && e.message) || e) } });
+    }
+  };
+  return [
+    `window.__RICHOS_MOCK_PRESET__ = ${JSON.stringify({ ...HOME, homeVideoInput: "tone" })};`,
+    `window.localStorage.setItem("richos-home-growth", ${JSON.stringify(JSON.stringify(STORE))});`,
+    `window.addEventListener("load", () => (${drive.toString()})( (${tools.toString()})()));`,
+  ].join("\n");
+}
+
 /// What each recorder asks the webview for when the microphone is switched on. The microphone
 /// handed back is a silent one made in the page: no real microphone is opened.
 function asking() {
@@ -533,6 +614,24 @@ function asking() {
 
 async function main() {
   const run = createRun("a video shows the app as the window shows it, in the Mac's own webview: the empty message box, Settings, the nav tooltip, multiline text and the microphone");
+
+  if (!process.argv.includes("--git-only")) {
+    await run.check("the two recorders reuse the last video's choices after reload and after cancellation", async () => {
+      const ran = await runPage(APP, rememberedChoices(), 110);
+      try {
+        assert(ran.code === 0 && ran.done, "the page did not finish: " + JSON.stringify(ran.said.slice(-4)));
+        assert(!ran.done.error, ran.done.error);
+        assert(ran.done.persisted, "the choices did not survive reload");
+        return "Home and Settings share microphone and pointer. Home keeps its stop mode.";
+      } finally {
+        fs.rmSync(ran.dir, { recursive: true, force: true });
+      }
+    });
+  }
+  if (process.argv.includes("--choices-only")) {
+    process.exitCode = run.report() > 0 ? 1 : 0;
+    return;
+  }
 
   await run.check("the native Git pane appears in place, updates and moves, then leaves no stale pixels", async () => {
     const ran = await runPage(APP, gitPane(), 95);

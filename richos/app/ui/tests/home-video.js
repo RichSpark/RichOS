@@ -308,7 +308,7 @@ async function main() {
     const pressed = await ratio(page, '#home-video-choices .hv-seg button[aria-pressed="true"]', "backgroundColor", "#home-video-choices", "backgroundColor");
     assert(pair >= 3 && pressed >= 3, `a pair's edge (${pair}) or the chosen one (${pressed}) is under 3:1 on the panel`);
 
-    // his choices stay as he left them, however the panel was closed
+    // Closing the choices without recording restores the last recorded settings.
     await choose(page, "Recording stops", "By itself");
     await choose(page, "Mouse pointer", "Hidden");
     assertEqual(await text(page, "#home-video-choices .says"), "The film plays once, from your first light to today and the recording stops when it ends.", "the sentence for By itself");
@@ -317,7 +317,7 @@ async function main() {
     assertEqual(await page.evaluate(() => window.RichHome.isOpen()), true, "Escape on the choices left the home screen");
     assertEqual(await page.evaluate(() => document.activeElement.id), "home-video", "the keyboard is not back on the button");
     await page.click("#home-video");
-    assertEqual([await chosen(page, "Recording stops"), await chosen(page, "Mouse pointer")], ["By itself", "Hidden"], "the choices did not stay as he left them");
+    assertEqual([await chosen(page, "Recording stops"), await chosen(page, "Mouse pointer")], ["When I stop it", "Shown"], "unrecorded choices became the defaults");
     await page.mouse.click(500, 500);
     assertEqual(await shown(page, "#home-video-choices"), false, "a press outside did not close the choices");
     await page.click("#home-video");
@@ -525,6 +525,7 @@ async function main() {
     assertEqual((await video(page)).state, "idle", "a count that was called off started a recording");
     // Escape while recording stops it and keeps what it has
     await page.click("#home-video");
+    await choose(page, "Mouse pointer", "Hidden");
     await page.click("#home-video-choices .hv-go");
     await until(page, "rec");
     await recorded(page, 1);

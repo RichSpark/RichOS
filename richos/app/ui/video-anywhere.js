@@ -63,7 +63,7 @@ window.RichVideoAnywhere = (function () {
   var el = {};
   var wrap = null; // `.settings`, the settings button's own row
   var state = "idle"; // idle | choosing | count | rec | saving | sheet
-  var opts = { pointer: true }; // stays as he left it
+  var opts = { pointer: true };
   var NS = "http://www.w3.org/2000/svg";
   /// The choices are open without Settings under them (see `openChoices`).
   var loose = false;
@@ -1079,7 +1079,7 @@ window.RichVideoAnywhere = (function () {
     stale = null;
     shot = out;
     state = "sheet";
-    mic.stop(); // the file is whole: the microphone is let go (his choice stays)
+    mic.stop();
     // Stop pressed in the heading of Settings: Settings closes, or the sheet would open under it
     // (the settings button and its panel stand above every overlay, this sheet among them)
     if (window.RichSettings) window.RichSettings.close();
@@ -1092,6 +1092,7 @@ window.RichVideoAnywhere = (function () {
     el.sheetDiscard.textContent = "Discard";
     el.video.style.aspectRatio = out.w + " / " + out.h;
     if (out.blob && out.blob.size) {
+      P.rememberVideoChoices(out);
       el.video.src = shot.url = URL.createObjectURL(out.blob);
       // with the made-up microphone the sheet never plays sound: a check must stay silent on a Mac
       el.video.muted = !out.voice || out.tone;
@@ -1235,8 +1236,7 @@ window.RichVideoAnywhere = (function () {
         return mic.state === "on" ? "on" : "off";
       },
       function (k) {
-        mic.want = k === "on";
-        if (mic.want) mic.start();
+        if (k === "on") mic.start();
         else mic.stop();
       }
     );
@@ -1245,24 +1245,19 @@ window.RichVideoAnywhere = (function () {
     el.micNote = make("p", "rv-mic-note", P.DENIED);
     el.micNote.hidden = true;
     el.panel.appendChild(el.micNote);
-    el.panel.appendChild(
-      row(
-        "pointer",
-        "Mouse pointer",
-        seg(
-          [
-            { key: "shown", label: "Shown" },
-            { key: "hidden", label: "Hidden" },
-          ],
-          function () {
-            return opts.pointer ? "shown" : "hidden";
-          },
-          function (k) {
-            opts.pointer = k === "shown";
-          }
-        )
-      )
+    el.pointerSeg = seg(
+      [
+        { key: "shown", label: "Shown" },
+        { key: "hidden", label: "Hidden" },
+      ],
+      function () {
+        return opts.pointer ? "shown" : "hidden";
+      },
+      function (k) {
+        opts.pointer = k === "shown";
+      }
     );
+    el.panel.appendChild(row("pointer", "Mouse pointer", el.pointerSeg));
     el.panel.appendChild(make("p", "says", "RichOS is recorded while you use it, on every screen you go to, until you press Stop."));
     el.go = make("button", "rv-main rv-go", "Start recording", { type: "button" });
     el.panel.appendChild(el.go);
@@ -1323,9 +1318,10 @@ window.RichVideoAnywhere = (function () {
     else if (state === "choosing") closePanel();
     else if (state === "rec") finish();
     else if (state === "count") {
+      const draft = { pointer: opts.pointer, voice: mic.state === "on" };
       cancelCount();
       rest();
-      openChoices();
+      openChoices(draft);
     }
   }
 
@@ -1354,18 +1350,19 @@ window.RichVideoAnywhere = (function () {
     el.panel.style.top = Math.round(r.bottom + 8) + "px";
     el.panel.style.right = Math.max(8, Math.round(innerWidth - r.right)) + "px";
   }
-  function openPanel() {
+  function openPanel(choices = P.readVideoChoices()) {
     state = "choosing";
-    if (mic.state === "denied") mic.state = "off";
+    opts.pointer = choices.pointer;
+    el.pointerSeg.paint();
+    if (choices.voice) mic.start();
     paintMic();
-    if (mic.want && !mic.stream) mic.start(); // his choice from last time: the microphone again
     el.panel.hidden = false;
     seat();
     paintState();
     el.go.focus({ preventScroll: true });
   }
   /// From anywhere (the sheet's "Record again", the count's "Cancel"): Settings, then the choices.
-  function openChoices() {
+  function openChoices(draft) {
     if (homeOpen()) {
       // on the home screen the choices are the home screen's own (round 77): its button opens them
       var own = document.getElementById("home-video");
@@ -1376,14 +1373,14 @@ window.RichVideoAnywhere = (function () {
       // a home screen that has no button of its own yet (no memory of his): these choices, under
       // the settings button, so "Record again" is never a press that does nothing
       loose = true;
-      return void openPanel();
+      return void openPanel(draft);
     }
     if (!window.RichSettings) return;
     window.RichSettings.openMenu();
     place();
     requestAnimationFrame(function () {
       place();
-      if (state === "idle" && el.make.isConnected) openPanel();
+      if (state === "idle" && el.make.isConnected) openPanel(draft);
     });
   }
   function closePanel() {
@@ -1394,7 +1391,7 @@ window.RichVideoAnywhere = (function () {
     else paintState();
     return true;
   }
-  /// Back to the button alone: the microphone is let go (his choice stays).
+  /// Back to the button alone: the microphone is let go.
   function rest() {
     state = "idle";
     mic.stop();
