@@ -2,6 +2,19 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.3.7-nightly.20261123.117
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.7-nightly.20261123.117)
+
+- Added asking Rich how much Codex usage you have left, including your banked resets and credit balance
+- Changed RichFiles, RichGlance and Window Gestures to switch to the new version by themselves after a RichOS update, from your next update on: each waits until you are not in the middle of something, such as a copy or unsaved marks, then reopens your windows where they were
+- Changed Codex work started from a RichOS conversation to run with full access to your Mac instead of only its own folder, so it can finish the whole job
+- Improved Codex work that reaches its usage limit: RichOS now uses one of your banked resets by itself when you have one and says so in the conversation
+- Fixed Codex work that stopped partway ending without a word: the conversation is now told why it stopped; resuming hands Codex the unfinished request again
+- Fixed RichScribe cutting off a dictation in progress when RichOS restarted itself to finish an update; from your next update on, it finishes first
+- Fixed RichOS sometimes failing to come back after it restarted itself to finish an update; this works from your next update on
+- [technical] Added to RichDoctor's reports whether RichFiles, RichGlance and Window Gestures restarted after an update or waited because they were busy; they also note how the last Codex job went, including any usage limit or banked reset
+
 ## 1.3.7-nightly.20261122.116
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.7-nightly.20261122.116)

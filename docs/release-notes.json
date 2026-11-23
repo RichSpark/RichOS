@@ -526,5 +526,16 @@
     "previous_tag": "v1.3.7-nightly.20261122.115",
     "previous_source": "ef49fe0a10f3006e1ebb520e2e1d38a3e6959db1",
     "entry": "- Changed RichOS to stop using your Claude usage to get a new conversation ready when it opens onto Home; it does that once you choose a company or open a conversation\n- Fixed RichOS handing Stu old messages from your earlier Codex handoffs when it opened after an update; only new messages from Codex reach him now"
+  },
+  "v1.3.7-nightly.20261123.117": {
+    "schema": 1,
+    "tag": "v1.3.7-nightly.20261123.117",
+    "version": "1.3.7-nightly.20261123.117",
+    "channel": "nightly",
+    "source_commit": "5e700f8750d6937a16e28c6247961d59b0af6f0d",
+    "build_commit": "5418816a7d2e986afe5fdd29c62254422730127e",
+    "previous_tag": "v1.3.7-nightly.20261122.116",
+    "previous_source": "16080b6d0caf13ead3654c3196dd93a9c1bb22ef",
+    "entry": "- Added asking Rich how much Codex usage you have left, including your banked resets and credit balance\n- Changed RichFiles, RichGlance and Window Gestures to switch to the new version by themselves after a RichOS update, from your next update on: each waits until you are not in the middle of something, such as a copy or unsaved marks, then reopens your windows where they were\n- Changed Codex work started from a RichOS conversation to run with full access to your Mac instead of only its own folder, so it can finish the whole job\n- Improved Codex work that reaches its usage limit: RichOS now uses one of your banked resets by itself when you have one and says so in the conversation\n- Fixed Codex work that stopped partway ending without a word: the conversation is now told why it stopped; resuming hands Codex the unfinished request again\n- Fixed RichScribe cutting off a dictation in progress when RichOS restarted itself to finish an update; from your next update on, it finishes first\n- Fixed RichOS sometimes failing to come back after it restarted itself to finish an update; this works from your next update on\n- [technical] Added to RichDoctor's reports whether RichFiles, RichGlance and Window Gestures restarted after an update or waited because they were busy; they also note how the last Codex job went, including any usage limit or banked reset"
   }
 }
