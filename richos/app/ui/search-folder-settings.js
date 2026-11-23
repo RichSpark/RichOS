@@ -405,7 +405,7 @@
   }
   window.RichFinderFolders = { open };
   window.addEventListener("richos:company-order-changed", () => {
-    if (sheet && !sheet.hidden) {
+    if (companyPane) {
       const focused = companyPane.contains(document.activeElement) && document.activeElement.id;
       paintCompanies();
       if (focused) document.getElementById(focused)?.focus();

@@ -83,7 +83,7 @@
     renderList();
   }
   window.addEventListener("richos:company-order-changed", () => {
-    if (!sheet.hidden) renderCompanies(field("repository-company").value);
+    renderCompanies(field("repository-company").value);
   });
   async function open() {
     returnFocus = document.activeElement; sheet.hidden = false;

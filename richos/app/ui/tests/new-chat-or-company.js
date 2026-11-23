@@ -685,6 +685,53 @@ async function main() {
     }
   });
 
+  await run.check("previously opened company settings show the new order while their reads are pending", async () => {
+    const page = await openApp(browser);
+    const surfaces = [
+      ["#set-home-open", "#home-prefs-done", ".home-prefs-name"],
+      ["#set-repositories-open", "#repository-close", "#repository-company option[value]:not([value=''])"],
+      ["#set-search-folders-open", "#rf-folder-done", ".rf-company-name"],
+    ];
+    async function openSettingsPanel(button) {
+      await page.click(".setbtn");
+      await page.click(button);
+    }
+    try {
+      await shellSettled(page);
+      await page.evaluate(() => RichBridge.invoke("set_search_folder_mode", { mode: "all" }));
+      for (const [open, close, rows] of surfaces) {
+        await openSettingsPanel(open);
+        await page.locator(rows).first().waitFor({ state: "attached" });
+        assertEqual((await page.locator(rows).allTextContents()).slice(0, 2),
+          ["Northwind Traders", "Lumen Labs"], "initial order in " + open);
+        await page.click(close);
+      }
+
+      await page.evaluate(() => {
+        const invoke = RichBridge.invoke.bind(RichBridge);
+        RichBridge.invoke = (cmd, args) =>
+          ["home_entity_row", "repository_connections", "search_company_folders", "set_company_order"].includes(cmd)
+            ? new Promise(() => {})
+            : invoke(cmd, args);
+      });
+      const source = await page.locator("#nav-label-northwind").boundingBox();
+      const target = await page.locator("#nav-label-lumen").boundingBox();
+      await page.mouse.move(source.x + 30, source.y + 10);
+      await page.mouse.down();
+      await page.mouse.move(target.x + 30, target.y + target.height - 4, { steps: 6 });
+      await page.mouse.up();
+
+      for (const [open, close, rows] of surfaces) {
+        await openSettingsPanel(open);
+        assertEqual((await page.locator(rows).allTextContents()).slice(0, 2),
+          ["Lumen Labs", "Northwind Traders"], "new order in " + open + " while loading");
+        await page.click(close);
+      }
+    } finally {
+      await page.close();
+    }
+  });
+
   // ---- the seven states of the round, both themes, beside the mockup ---------------------
   const STATES = {
     one: { keep: ONE, drive: async () => {} },

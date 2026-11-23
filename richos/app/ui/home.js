@@ -2401,7 +2401,21 @@ window.RichHome = (function () {
   }
 
   window.addEventListener("richos:company-order-changed", function () {
-    renderEntities(entityRows);
+    if (!prefsEl) {
+      renderEntities(entityRows);
+      return;
+    }
+    var focused = prefsEl.querySelector("input:focus");
+    drawPrefsRows(entityRows);
+    if (!focused) return;
+    var selector = 'input[type="' + focused.type + '"][data-entity="' + CSS.escape(focused.dataset.entity) + '"]';
+    var replacement = prefsEl.querySelector(selector);
+    if (!replacement) return;
+    if (focused.type === "text") {
+      replacement.value = focused.value;
+      replacement.setSelectionRange(focused.selectionStart, focused.selectionEnd);
+    }
+    replacement.focus({ preventScroll: true });
   });
 
   function prefsRow(row, number) {
