@@ -63,6 +63,52 @@ class AppProtocolTests(unittest.TestCase):
         self.assertIn("Inspect the shared fixture", self.call("brief")["text"])
         self.assertIn("Inspect the shared fixture", self.call("brief", seat="stu-thread:thread-a", binding=stu)["text"])
 
+    def test_a_legacy_codex_company_repair_survives_projection_rebuild(self):
+        thread = "thread-a"
+        self.assertTrue(self.checkpoint([{"verb": "commitment", "fields": {
+            "id": "codex-work", "title": "Keep the existing Codex work"}}])["accepted"])
+        seats = {}
+        for seat, session, audience in (
+            ("ceo-thread:thread-a", "rich-session", "ceo"),
+            ("stu-thread:thread-a", "stu-session", "rich"),
+        ):
+            seats[seat] = self.call(
+                "bind", seat=seat, request_id=f"saved:{session}",
+                source_ref="fixture", expected_revision=None,
+                scope={"entity_id": "depot", "thread_id": thread, "session_id": session,
+                       "turn_id": "saved", "audience": audience},
+            )["binding"]
+        untouched = self.bind("depot", "thread-b", "other-session", "original", self.binding["revision"])
+        store = EventStore(self.store)
+        moved = store.append(
+            "thread.legacy_codex_rehomed", entity_id="richos", thread_id=thread,
+            actor_kind="app", actor_id="richos-app-v1", source_ref="richos:legacy-codex-company",
+            idempotency_key=f"legacy-codex-company:{thread}", payload={"source_entity_id": "depot"},
+        )
+        for rebuild in (False, True):
+            if rebuild:
+                store.rebuild_projections()
+            self.assertEqual(self.call("current")["binding"], untouched)
+            for seat, before in seats.items():
+                after = self.call("current", seat=seat)["binding"]
+                self.assertEqual(after, dict(before, entity_id="richos"))
+                self.assertIn(
+                    "Keep the existing Codex work",
+                    self.call("brief", seat=seat, binding=after)["text"],
+                )
+            with sqlite3.connect(self.store / "ecs.sqlite3") as db:
+                self.assertEqual(db.execute(
+                    "SELECT session_id, entity_id FROM ecs_sessions WHERE thread_id=? ORDER BY session_id",
+                    (thread,),
+                ).fetchall(), [("rich-session", "richos"), ("session-a", "richos"), ("stu-session", "richos")])
+                self.assertEqual(db.execute(
+                    "SELECT entity_id FROM ecs_events WHERE event_id=?", (moved.event_id,),
+                ).fetchone(), ("richos",))
+                self.assertEqual(db.execute(
+                    "SELECT DISTINCT entity_id FROM ecs_events WHERE thread_id=? AND sequence < ?",
+                    (thread, moved.sequence),
+                ).fetchall(), [("depot",)])
+
     def test_process_restart_and_duplicate_checkpoint_preserve_one_obligation(self):
         statement = {"verb": "commitment", "fields": {"id": "ship-manual", "title": "Ship the fictional depot manual"}}
         self.assertTrue(self.checkpoint([statement])["accepted"])

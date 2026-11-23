@@ -764,11 +764,26 @@ fn codex_channel_health(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item 
     item.label = source.into();
     item.summary = format!("The last recorded scan deferred automatic routing: {waiting}. Held sources: {held}.");
     let mut text = item.summary.clone();
+    if let Some(repair) = codex_ownership_health_line(&read.text) {
+        text.push('\n');
+        text.push_str(&repair);
+    }
     if let Some(dispatch) = codex_dispatch_health_line(&read.text) {
         text.push('\n');
         text.push_str(&dispatch);
     }
     finish(item, &text, ctx, read.truncated)
+}
+
+fn codex_ownership_health_line(text: &str) -> Option<String> {
+    let record: serde_json::Value = serde_json::from_str(text).ok()?;
+    let repair = record.get("ownership_repair")?;
+    let at = repair["at_ms"].as_u64()?;
+    let outcome = match repair["outcome"].as_str()? {
+        outcome @ ("moved" | "held") => outcome,
+        _ => return None,
+    };
+    Some(format!("Legacy Codex company repair: {outcome} (at {at} ms)."))
 }
 
 fn codex_dispatch_health_line(text: &str) -> Option<String> {
@@ -1145,12 +1160,13 @@ mod tests {
             "at_ms":14,"elapsed_ms":100,"preflight_ms":12,"reading":"available","reset":"none",
             "in_flight_source":"poll","in_flight_reset":"reset",
             "retry_reset":"private retry","quota_failed":true,"exit_code":1,"balance":"private balance"
-        }}"#);
+        },"ownership_repair":{"at_ms":13,"outcome":"moved","thread_id":"private thread"}}"#);
         let result = collect_health();
         assert_eq!(result.status, Status::Collected);
         assert_eq!(result.observed_at, Some(15));
         assert!(result.text.contains("deferred automatic routing: true"));
         assert!(result.text.contains("Held sources: 2"));
+        assert!(result.text.contains("Legacy Codex company repair: moved (at 13 ms)."));
         assert!(result.text.contains("Preflight 12 ms. Elapsed 100 ms."));
         assert!(result.text.contains("Reset none. In-flight reset reset (poll). Retry reset unavailable. Quota failure true. Exit 1."));
         assert!(!result.text.contains("private"));

@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
+pub mod ownership;
+
 pub const TOOL: &str = "codex_channel";
 const AUTOMATIC: &str = "_automatic";
 
@@ -34,17 +36,6 @@ fn component(value: &str) -> Result<(), String> {
 fn digest(value: &Value) -> String {
     use sha2::{Digest, Sha256};
     format!("{:x}", Sha256::digest(value.to_string().as_bytes()))
-}
-
-/// The app-owned receiver publishes this once the company and ledger thread exist.
-pub fn publish_automatic_target(
-    coordination: &Path,
-    binding: &crate::entity::ThreadBinding,
-) -> std::io::Result<()> {
-    crate::review_watch::write_record(&coordination.join("automatic.json"), &json!({
-        "version": 1, "entity_id": binding.entity_id(), "thread_id": binding.thread_id(),
-    }))?;
-    std::fs::File::open(coordination)?.sync_all()
 }
 
 /// `binding` was re-resolved from the ledger for this attempt, never the visible chat.
@@ -94,6 +85,11 @@ pub fn accept(
     if matches!(kind, Some("legacy_import" | "legacy_notice")) {
         return Ok(());
     }
+    if kind == Some("legacy_live")
+        && ownership::unresolved_legacy(coordination, c).map_err(|e| e.to_string())?
+    {
+        return Err("Legacy Codex work is held until its registered company can be verified".into());
+    }
     let through = event["through"]
         .as_u64()
         .ok_or("Missing accepted position")?;
@@ -121,6 +117,11 @@ pub fn accept(
         } else {
             text
         };
+        let receipt_locator = if locator.starts_with(base.join(AUTOMATIC)) {
+            locator
+        } else {
+            ownership::historic_locator(coordination, &locator, c).map_err(|e| e.to_string())?
+        };
         session_tools::observe_channel_from(
             &scope,
             text,
@@ -128,7 +129,7 @@ pub fn accept(
                 connection_id: id.into(),
                 message_id: message_id.into(),
                 payload_digest: digest(record),
-                locator: locator.to_string_lossy().into_owned(),
+                locator: receipt_locator.to_string_lossy().into_owned(),
                 reply_to: record["reply_to"].as_str().map(str::to_string),
             },
             if kind == Some("review_result") { "review-watch" } else { "codex-watch" },
@@ -502,8 +503,12 @@ mod tests {
             });
             // load-bound: hang guard for an OS-lock admission answer; assertions check held results, never measured speed. Our fixture lock is always released before joining.
             let result = rx.recv_timeout(Duration::from_secs(10));
-            drop(writer); // always release our owned lock before asserting/joining
+            // A concurrently forked test can briefly inherit the descriptor. Unlock the
+            // shared file description explicitly before checking the post-release read.
+            let unlocked = unsafe { libc::flock(writer.as_raw_fd(), libc::LOCK_UN) };
+            drop(writer);
             reader.join().unwrap();
+            assert_eq!(unlocked, 0);
             let (accepted, pending) = result.expect("one busy inbox blocked the receiver");
             assert!(accepted.is_err());
             assert!(pending.is_err());
