@@ -516,7 +516,13 @@ async function main() {
     await page.click("#set-btn");
     assert(await appears(page, "#set-menu"), "Settings did not open during a recording");
     await page.mouse.move(560, 330, { steps: 12 });
-    assertEqual([await text(page, "#video-anywhere .w"), await page.evaluate(() => document.querySelector("#video-anywhere").classList.contains("going")), await text(page, "#video-anywhere .rv-time") === await text(page, "#video-anywhere-stop .rv-time")], ["Stop", true, true], "in Settings the button is not the same red Stop with the time");
+    const stopLabels = await page.evaluate(() => {
+      const settingsStop = document.querySelector("#video-anywhere");
+      const settingsTime = settingsStop.querySelector(".rv-time").textContent;
+      const cornerTime = document.querySelector("#video-anywhere-stop .rv-time").textContent;
+      return [settingsStop.querySelector(".w").textContent, settingsStop.classList.contains("going"), settingsTime === cornerTime];
+    });
+    assertEqual(stopLabels, ["Stop", true, true], "in Settings the button is not the same red Stop with the time");
     await painted(page, 12);
     await mark("Settings");
     // ESCAPE DOES NOT STOP A RECORDING HERE: it closes Settings and the recording goes on
