@@ -35,6 +35,19 @@ final class DesktopFolderClick {
         second = nil
     }
 
+    /// Ask WindowServer which window would receive this click, including when
+    /// another app is active or a mouse-transparent overlay covers the Desktop.
+    static func isDesktopWindow(at screenPoint: CGPoint) -> Bool {
+        let number = NSWindow.windowNumber(at: screenPoint, belowWindowWithWindowNumber: 0)
+        guard let id = CGWindowID(exactly: number), id != kCGNullWindowID,
+              let windows = CGWindowListCopyWindowInfo(.optionIncludingWindow, id) as? [[String: Any]],
+              let window = windows.first,
+              let layer = window[kCGWindowLayer as String] as? Int32,
+              layer == CGWindowLevelForKey(.desktopIconWindow),
+              let pid = window[kCGWindowOwnerPID as String] as? pid_t else { return false }
+        return NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == "com.apple.finder"
+    }
+
     func down(_ event: CGEvent, element: AXUIElement?, clicks: Int) {
         let previous = first
         reset()

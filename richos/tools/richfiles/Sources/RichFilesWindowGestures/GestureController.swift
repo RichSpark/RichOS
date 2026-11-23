@@ -238,12 +238,18 @@ final class GestureController {
         switch type {
         case .leftMouseDown:
             pointerRevision &+= 1
+            let desktopClick = selection.contains(.desktopFolder)
+                && DesktopFolderClick.isDesktopWindow(at: event.unflippedLocation)
+            let windowGestures = !selection.intersection([.titleBar, .dock, .tiling]).isEmpty
+            if !desktopClick { desktopFolder.reset() }
+            guard desktopClick || windowGestures else { return }
             // Capture activation and window identity during mouse-down, before
             // native Dock mouse-up can activate, reopen or focus another window.
-            let frontmost = NSWorkspace.shared.frontmostApplication
+            let frontmost = windowGestures ? NSWorkspace.shared.frontmostApplication : nil
             let clicks = Int(event.getIntegerValueField(.mouseEventClickState))
             let element = hit(at: event.location)
-            if selection.contains(.desktopFolder) { desktopFolder.down(event, element: element, clicks: clicks) }
+            if desktopClick { desktopFolder.down(event, element: element, clicks: clicks) }
+            guard windowGestures else { return }
             press = element.flatMap { element in
                 target(element, at: event.location, clicks: clicks, frontmost: frontmost)
                     .map { Press(point: event.location, timestamp: event.timestamp, target: $0) }
