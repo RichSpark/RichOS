@@ -22,6 +22,7 @@
          this product that names a typeface (ceo-decisions.md §22). -->
     <link rel="stylesheet" href="fonts/fonts.css" />
     <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="rich-profile.css" />
     <link rel="stylesheet" href="chat-list.css" />
     <link rel="stylesheet" href="cleaner.css" />
     <link rel="stylesheet" href="search-folder-settings.css" />
@@ -1528,8 +1529,8 @@
                Loaded at boot, this hidden 40px copy changed how WebKit draws the same picture
                at 18px beside every "Rich" in the conversation, on every screen. -->
           <div id="setup-rich-line" class="setup-rich-line" hidden>
-            <img id="setup-rich-avatar" class="setup-rich-avatar" alt="">
-            <p><span class="setup-rich-who">Rich</span><span id="setup-rich-text"></span></p>
+            <button id="setup-rich-avatar-button" class="rich-profile-trigger" type="button" tabindex="-1" aria-label="Rich Hand: open his profile" title="Rich Hand: open his profile"><img id="setup-rich-avatar" class="setup-rich-avatar" alt=""></button>
+            <p><button id="setup-rich-name" class="setup-rich-who rich-profile-trigger" type="button" aria-label="Rich Hand: open his profile" title="Rich Hand: open his profile">Rich</button><span id="setup-rich-text"></span></p>
           </div>
           <!-- ONE ROW PER MISSING PIECE: its name, and what it is for. Not a checklist of
                packages — a sentence each, because "the program I think with" is what the
@@ -1899,6 +1900,7 @@
          which drives it. -->
     <script src="questions.js"></script>
     <script src="rich-files.js"></script>
+    <script src="rich-profile.js"></script>
     <script src="timeline.js"></script>
     <!-- THE UPDATE SURFACE (RICH-TODOs row 12). It builds no markup of its own here: it
          renders into a row of the UNIVERSAL settings menu, which `settings-button.js`

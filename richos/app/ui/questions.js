@@ -132,8 +132,9 @@
     row.dataset.questionOwner=q.id;
     if(!opts || opts.showIdentity()) {
       const meta=node("div",null,"tl-rich-meta");
-      if(opts?.showAvatar()) {const avatar=node("img",null,"tl-avatar");avatar.src="assets/rich-hand.png";avatar.alt="";meta.append(avatar);}
-      meta.append(node("span",q.asker && q.asker!=="Rich" ? q.asker+" · through Rich" : "Rich","tl-who"));row.append(meta);
+      const asker = q.asker && q.asker !== "Rich" ? q.asker : "";
+      meta.append(window.RichProfile.identity(opts?.showAvatar(), asker));
+      row.append(meta);
     }
     row.append(card);
     return row;
