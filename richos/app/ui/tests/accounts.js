@@ -63,11 +63,11 @@ async function bounded(work, ms, message) {
 
 // Each case drives its own page. Limit the number of active renderers while
 // overlapping independent navigation and action waits.
-async function runCases(cases, work) {
+async function runCases(cases, work, concurrency) {
   const results = [];
   let next = 0;
   let failed = false;
-  await Promise.all(Array.from({ length: Math.min(3, cases.length) }, async () => {
+  await Promise.all(Array.from({ length: Math.min(concurrency, cases.length) }, async () => {
     while (!failed && next < cases.length) {
       const index = next++;
       try {
@@ -320,9 +320,9 @@ function planChecks(run, browser) {
       const note = await text(page, `${card} .acc-note`);
       assert(message ? note.includes(message) && note.includes("not confirmed") : note.includes("Checking whether"), "say what is known about the check");
       await release(page);
-    });
+    }, 2);
     return "both accounts, active and idle, before a check and after a failed check, in both themes";
-  });
+  }, { serial: true });
 
   run.check("auth status alone never claims subscription limits are absent", async () => {
     for (const inUse of ["1", "2"]) {
@@ -661,7 +661,7 @@ function planChecks(run, browser) {
     assertEqual(await text(page, "#acc-who-status"), "Email hidden.");
     await release(page);
     return "showing to 7,999 ms, going at 8,000, gone at 8,320; Hide: gone 320 ms later";
-  });
+  }, { serial: true });
 
   run.check("Show email: closing the sheet hides every email, by its close button and by Escape; it always opens with all hidden", async () => {
     const page = await open("dark", two([58, 72], [0, 12]), { emails: EMAILS });
@@ -907,11 +907,11 @@ function planChecks(run, browser) {
   }
 
   run.check("every round 18 state in dark and light meets AA contrast and the type floor, fits, and carries no m-dash or n-dash", async () => {
-    const measured = await runCases(STATES, auditState);
+    const measured = await runCases(STATES, auditState, 2);
     return ["dark", "light"].map(theme =>
       `${theme} worst text per state: ${measured.map(result => `${result.name} ${result[theme]}:1`).join(", ")}`
     ).join("\n          ");
-  }, { serial: true });
+  }, { serial: true, limitMs: SUITE_LIMIT_MS });
 
   run.check("no renderer errors", async () => assertEqual(errors, []), { serial: true });
 }
@@ -920,11 +920,11 @@ async function main() {
   const run = createRun("Claude accounts for everyone (round 18)");
   const deadline = performance.now() + SUITE_LIMIT_MS;
   const record = run.check.bind(run);
-  async function execute({ name, work, serial }) {
+  async function execute({ name, work, limitMs }) {
     let passed = false;
     await record(name, async () => {
       const remaining = deadline - performance.now();
-      const limit = serial ? remaining : Math.min(CHECK_LIMIT_MS, remaining);
+      const limit = Math.min(limitMs, remaining);
       // load-bound: a hang guard; the check still waits for its actual result.
       const detail = await bounded(work, limit, `Accounts check did not finish within ${Math.ceil(limit / 1000)}s`);
       passed = true;
@@ -936,8 +936,12 @@ async function main() {
   const browser = await bounded(() => loadPlaywright().webkit.launch(), CHECK_LIMIT_MS, "WebKit launch did not finish within 45s");
   try {
     const checks = [];
-    planChecks({ check(name, work, { serial = false } = {}) { checks.push({ name, work, serial }); } }, browser);
-    await runCases(checks.filter(check => !check.serial), execute);
+    planChecks({ check(name, work, { serial = false, limitMs = CHECK_LIMIT_MS } = {}) {
+      checks.push({ name, work, serial, limitMs });
+    } }, browser);
+    // A check that drives several pages or pauses its clock owns this phase.
+    // Nested parallel checks otherwise put five live app pages in one WebKit.
+    await runCases(checks.filter(check => !check.serial), execute, 2);
     for (const check of checks.filter(check => check.serial)) await execute(check);
   } catch (error) {
     if (error !== CHECK_FAILED) throw error;
