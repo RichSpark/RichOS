@@ -44,7 +44,7 @@ function idleSignedIn(inUse, idle) {
 
 // Playwright's action timeout does not cover evaluate() or a stalled browser close.
 // Bound those waits on the Node side so the suite can report even if WebKit cannot reply.
-const SUITE_LIMIT_MS = 180_000;
+const SUITE_LIMIT_MS = 240_000;
 const CHECK_LIMIT_MS = 45_000;
 const CLOSE_LIMIT_MS = 3_000;
 const CHECK_FAILED = Symbol("accounts check failed");
@@ -833,22 +833,27 @@ function planChecks(run, browser) {
           }
           const body = document.querySelector("#accounts-sheet:not([hidden]) .acc-body");
           const sideways = body ? body.scrollWidth > body.clientWidth + 1 : false;
-          return { failures, dashes, worst, nodes, sideways };
+          // These controls are settled. Scroll each in WebKit and read its
+          // visibility here so every control does not require two browser replies.
+          const outOfReach = [];
+          const controls = document.querySelectorAll("#accounts-sheet:not([hidden]) button, #accounts-sheet:not([hidden]) input");
+          for (const [i, control] of controls.entries()) {
+            control.scrollIntoViewIfNeeded();
+            const box = control.getBoundingClientRect();
+            const visible = getComputedStyle(control).visibility === "visible" && box.width > 0 && box.height > 0;
+            const inView = box.right > 0 && box.bottom > 0 && box.left < innerWidth && box.top < innerHeight;
+            if (!visible || !inView) outOfReach.push(i);
+          }
+          return { failures, dashes, worst, nodes, sideways, outOfReach };
         }, { ROOTS, SKIPPABLE });
         assertEqual(result.failures, [], `${state}: contrast and type`);
         assertEqual(result.dashes, [], `${theme} ${name}: no m-dash or n-dash`);
         assert(!result.sideways, `${state}: never scrolls sideways`);
         assert(result.nodes > 0, `${theme} ${name}: EMPTY INVENTORY`);
-        // Every control is reachable, by scrolling where the window is small.
-        const controls = page.locator("#accounts-sheet:not([hidden]) button, #accounts-sheet:not([hidden]) input");
-        for (let i = 0, n = await controls.count(); i < n; i++) {
-          const control = controls.nth(i);
-          await control.scrollIntoViewIfNeeded();
-          assert(await control.isVisible(), `${state}: control ${i} is out of reach`);
-        }
+        assertEqual(result.outOfReach, [], `${state}: controls out of reach after scrolling`);
         await release(page);
         return viewport.width === 1440 ? `${name} ${result.worst}:1` : null;
-      }, 12_000, "WebKit did not finish the state audit within 12s"); // load-bound: hang guard for renderer replies
+      }, CHECK_LIMIT_MS, "WebKit did not finish the state audit within 45s"); // load-bound: hang guard for renderer replies
     } catch (error) {
       throw new Error(`${state}: ${error.message}`, { cause: error });
     }
