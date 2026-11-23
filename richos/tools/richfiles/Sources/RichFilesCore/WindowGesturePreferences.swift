@@ -9,6 +9,7 @@ public enum WindowGesturePreferences {
     private static let defaults = UserDefaults(suiteName: "app.richos.richfiles") ?? .standard
     private static let selectionKey = "windowGestures.selection"
     private static let desktopDeleteKey = "desktopDelete.enabled"
+    private static let desktopFolderKey = "desktopFolder.enabled"
     private static let statusKey = "windowGestures.status"
     private static let processKey = "windowGestures.process"
     private static let restartContractKey = "windowGestures.restartContract"
@@ -29,18 +30,27 @@ public enum WindowGesturePreferences {
         case off, running, accessibility, inputMonitoring, inputUnavailable
     }
 
-    public static var selection: Selection {
-        let gestures = Selection(rawValue: defaults.integer(forKey: selectionKey)).subtracting(.desktopDelete)
-        return defaults.object(forKey: desktopDeleteKey) as? Bool == false ? gestures : gestures.union(.desktopDelete)
+    public static var selection: Selection { selection(in: defaults) }
+
+    static func selection(in store: UserDefaults) -> Selection {
+        var gestures = Selection(rawValue: store.integer(forKey: selectionKey)).subtracting(.desktop)
+        if store.object(forKey: desktopDeleteKey) as? Bool != false { gestures.insert(.desktopDelete) }
+        if store.object(forKey: desktopFolderKey) as? Bool != false { gestures.insert(.desktopFolder) }
+        return gestures
     }
 
     public static func setEnabled(_ enabled: Bool, for gesture: Selection) {
-        if gesture == .desktopDelete {
-            defaults.set(enabled, forKey: desktopDeleteKey)
-            return
+        setEnabled(enabled, for: gesture, in: defaults)
+    }
+
+    static func setEnabled(_ enabled: Bool, for gesture: Selection, in store: UserDefaults) {
+        switch gesture {
+        case .desktopDelete: store.set(enabled, forKey: desktopDeleteKey)
+        case .desktopFolder: store.set(enabled, forKey: desktopFolderKey)
+        default:
+            let gestures = Selection(rawValue: store.integer(forKey: selectionKey)).subtracting(.desktop)
+            store.set((enabled ? gestures.union(gesture) : gestures.subtracting(gesture)).rawValue, forKey: selectionKey)
         }
-        let gestures = selection.subtracting(.desktopDelete)
-        defaults.set((enabled ? gestures.union(gesture) : gestures.subtracting(gesture)).rawValue, forKey: selectionKey)
     }
 
     public static func status(process: pid_t) -> Status? {
