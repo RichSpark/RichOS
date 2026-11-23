@@ -775,15 +775,21 @@ fn codex_dispatch_health_line(text: &str) -> Option<String> {
         match value.as_str() {
             Some(state @ ("none" | "unavailable" | "unconfirmed" | "reset" | "alreadyRedeemed"
                 | "nothingToReset" | "noCredit" | "previousAttempt" | "otherProvider"
-                | "accountUnavailable" | "accountChanged")) => state,
+                | "accountUnavailable" | "accountChanged" | "resetInProgress")) => state,
             _ => "unavailable",
         }
     }
     let reset = outcome(&dispatch["reset"]);
+    let in_flight = match dispatch["in_flight_source"].as_str() {
+        Some(source @ ("event" | "poll")) => {
+            format!(" In-flight reset {} ({source}).", outcome(&dispatch["in_flight_reset"]))
+        }
+        _ => String::new(),
+    };
     let retry = outcome(&dispatch["retry_reset"]);
     let exit = dispatch["exit_code"].as_i64()?;
     let at_limit = dispatch["quota_failed"].as_bool()?;
-    Some(format!("Last Codex dispatch at {at} (Unix ms). Preflight {preflight}. Elapsed {elapsed} ms. Usage reading {reading}. Reset {reset}. Retry reset {retry}. Quota failure {at_limit}. Exit {exit}."))
+    Some(format!("Last Codex dispatch at {at} (Unix ms). Preflight {preflight}. Elapsed {elapsed} ms. Usage reading {reading}. Reset {reset}.{in_flight} Retry reset {retry}. Quota failure {at_limit}. Exit {exit}."))
 }
 
 fn codex_channel_health_fields(text: &str) -> Option<(u64, bool, u64)> {
@@ -870,7 +876,7 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64, gestures: bo
                 | "openWithDiscovery"
                 | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata"
                 | "glanceCaptureFrame" | "glanceCaptureOutput" | "glanceCaptureSession" | "glanceScrollCapture" | "glanceCompare" | "glanceOCR" | "glanceSearch" | "glancePin" | "glanceRedactedCopy" | "glanceShare"
-                | "glanceCaptureHelperStart" | "glanceCaptureHelperLogin" | "glanceCaptureShortcutLaunch" | "glanceCaptureMenuLaunch")
+                | "glanceCaptureHelperStart" | "glanceCaptureHelperLogin" | "glanceCaptureHelperMenu" | "glanceCaptureShortcutLaunch" | "glanceCaptureMenuLaunch")
         };
         if id.len() != 36 || !id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
             || build.len() > 40 || !build.bytes().all(|b| b.is_ascii_alphanumeric() || b".-+".contains(&b))
@@ -1104,6 +1110,7 @@ mod tests {
         assert_eq!(collect_health().status, Status::Absent);
         write(&path, r#"{"at_ms":15,"waiting":true,"held":2,"text":"private task","dispatch":{
             "at_ms":14,"elapsed_ms":100,"preflight_ms":12,"reading":"available","reset":"none",
+            "in_flight_source":"poll","in_flight_reset":"reset",
             "retry_reset":"private retry","quota_failed":true,"exit_code":1,"balance":"private balance"
         },"ownership_repair":{"at_ms":13,"outcome":"moved","thread_id":"private thread"}}"#);
         let result = collect_health();
@@ -1113,7 +1120,7 @@ mod tests {
         assert!(result.text.contains("Held sources: 2"));
         assert!(result.text.contains("Legacy Codex company repair: moved (at 13 ms)."));
         assert!(result.text.contains("Preflight 12 ms. Elapsed 100 ms."));
-        assert!(result.text.contains("Reset none. Retry reset unavailable. Quota failure true. Exit 1."));
+        assert!(result.text.contains("Reset none. In-flight reset reset (poll). Retry reset unavailable. Quota failure true. Exit 1."));
         assert!(!result.text.contains("private"));
         write(&path, r#"{"at_ms":15,"waiting":"unknown","held":2}"#);
         assert_eq!(collect_health().status, Status::Unreadable);
@@ -1251,6 +1258,7 @@ mod tests {
             "glanceScrollCapture",
             "glanceCaptureHelperStart",
             "glanceCaptureHelperLogin",
+            "glanceCaptureHelperMenu",
             "glanceCaptureShortcutLaunch",
             "glanceCaptureMenuLaunch",
             "railVideoFrame",
@@ -1313,7 +1321,7 @@ mod tests {
         assert!(timing.text.contains("operation=glanceCompare"));
         assert!(timing.text.contains("operation=richFilesSuiteRestart outcome=interrupted"));
         assert!(timing.text.contains("application=app.richos.richfiles pid=123"));
-        for stage in ["glanceCaptureHelperStart", "glanceCaptureHelperLogin", "glanceCaptureShortcutLaunch", "glanceCaptureMenuLaunch"] {
+        for stage in ["glanceCaptureHelperStart", "glanceCaptureHelperLogin", "glanceCaptureHelperMenu", "glanceCaptureShortcutLaunch", "glanceCaptureMenuLaunch"] {
             assert!(timing.text.contains(&format!("operation={stage}")));
         }
         assert!(timing.text.contains("operation=glanceScrollCapture outcome=issues"));

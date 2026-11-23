@@ -13,7 +13,7 @@ async function open(browser, theme, available = true, delayTools = false, shortc
     localStorage.setItem("richos-mock-config", JSON.stringify({ theme, font_scale: 100, user_name: "Alex Booster" }));
     window.__RICHOS_MOCK_PRESET__ = { richFiles: true, meetingNotes: { available: !delayTools } };
     const state = {
-      shortcut: { available, enabled: shortcutStarting, registered: false,
+      shortcut: { available, enabled: shortcutStarting, registered: false, background: true, menuBar: true, service: "on",
         shortcut: { code: "KeyC", control: true, shift: true, option: false, command: false } },
       workflow: { opensEditor: false, keepsHistory: false },
       viewer: { pictures: false },
@@ -45,6 +45,9 @@ async function open(browser, theme, available = true, delayTools = false, shortc
             case "glance_capture_configure":
               if (args.shortcut.code === "KeyX") throw new Error("That shortcut is unavailable.");
               Object.assign(state.shortcut, args, { registered: args.enabled });
+              return structuredClone(state.shortcut);
+            case "glance_capture_set":
+              state.shortcut[args.setting] = args.enabled;
               return structuredClone(state.shortcut);
             case "glance_workflow_status": return structuredClone(state.workflow);
             case "glance_workflow_configure":
@@ -250,6 +253,19 @@ async function main() {
       await page.locator("#gp-cap kbd").waitFor();
       assertEqual(await page.locator("#gp-cap kbd").textContent(), "⌃⇧7");
 
+      const background = page.getByRole("switch", { name: "Capture when RichOS is quit" });
+      const menuBar = page.getByRole("switch", { name: "Show RichGlance in the menu bar" });
+      assertEqual(await background.getAttribute("aria-checked"), "true");
+      assertEqual(await menuBar.getAttribute("aria-checked"), "true");
+      await menuBar.click();
+      await page.locator("#gp-menu-bar[aria-checked=false]:enabled").waitFor();
+      await background.click();
+      await page.locator("#gp-background[aria-checked=false]:enabled").waitFor();
+      assert(await menuBar.isDisabled(), "background capture is required for the menu bar");
+      await background.click();
+      await page.locator("#gp-background[aria-checked=true]:enabled").waitFor();
+      assertEqual(await menuBar.getAttribute("aria-checked"), "false", "turning background capture on preserves the menu bar choice");
+
       await page.click("#gp-after-edit");
       await page.locator("#gp-after-edit[aria-pressed=true]:enabled").waitFor();
       await page.click("#gp-after-copy");
@@ -269,6 +285,9 @@ async function main() {
       await page.click("#gp-richfiles");
       const calls = await page.evaluate(() => window.glanceCalls);
       assertEqual(calls.filter(call => call.command === "glance_capture_open").length, 1);
+      assertEqual(calls.filter(call => call.command === "glance_capture_set").map(call => call.args), [
+        { setting: "menuBar", enabled: false }, { setting: "background", enabled: false }, { setting: "background", enabled: true },
+      ]);
       assertEqual(calls.filter(call => call.command === "glance_workflow_configure").map(call => call.args), [
         { opensEditor: true, keepsHistory: null }, { opensEditor: false, keepsHistory: null },
         { opensEditor: null, keepsHistory: true }, { opensEditor: null, keepsHistory: false },

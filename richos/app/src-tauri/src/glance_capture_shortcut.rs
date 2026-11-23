@@ -25,13 +25,22 @@ struct Preference {
 }
 
 #[derive(Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ShortcutStatus {
     available: bool,
     enabled: bool,
     registered: bool,
     shortcut: Shortcut,
     background: bool,
+    menu_bar: bool,
     service: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CaptureSetting {
+    Background,
+    MenuBar,
 }
 
 #[richos_command::command]
@@ -52,6 +61,18 @@ pub async fn glance_capture_configure(enabled: bool, shortcut: Shortcut) -> Resu
     {
         drop((enabled, shortcut));
         Err("The RichGlance shortcut is available on macOS.".into())
+    }
+}
+
+#[richos_command::command]
+pub async fn glance_capture_set(setting: CaptureSetting, enabled: bool) -> Result<ShortcutStatus, String> {
+    #[cfg(target_os = "macos")]
+    return tauri::async_runtime::spawn_blocking(move || mac::set_capture_setting(setting, enabled))
+        .await.map_err(|error| error.to_string())?;
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (setting, enabled);
+        Err("RichGlance settings are available on macOS.".into())
     }
 }
 
@@ -210,7 +231,7 @@ pub fn restore(app: tauri::AppHandle) {
 
 #[cfg(target_os = "macos")]
 mod mac {
-    use super::{Preference, ShortcutStatus};
+    use super::{CaptureSetting, Preference, ShortcutStatus};
     use objc2::{class, msg_send, runtime::{AnyObject, Bool}};
     use ring::rand::{SecureRandom, SystemRandom};
     use std::fs::{self, DirBuilder, OpenOptions};
@@ -285,6 +306,15 @@ mod mac {
         let app = application().ok_or("The RichGlance app could not be found in this installation.")?;
         let settings = serde_json::to_string(&preference).map_err(|error| error.to_string())?;
         command(&app, &["configure", &settings])
+    }
+
+    pub(super) fn set_capture_setting(setting: CaptureSetting, enabled: bool) -> Result<ShortcutStatus, String> {
+        let app = application().ok_or("The RichGlance app could not be found in this installation.")?;
+        let name = match setting {
+            CaptureSetting::Background => "background",
+            CaptureSetting::MenuBar => "menu-bar",
+        };
+        command(&app, &[name, if enabled { "true" } else { "false" }])
     }
 
     fn command(app: &Path, arguments: &[&str]) -> Result<ShortcutStatus, String> {
@@ -364,6 +394,7 @@ mod bridge_tests {
         }"#).unwrap();
         assert_eq!(status.shortcut, Shortcut::default());
         assert!(status.background);
+        assert!(status.menu_bar);
         assert!(!status.registered);
         assert_eq!(status.service.as_deref(), Some("approval"));
     }

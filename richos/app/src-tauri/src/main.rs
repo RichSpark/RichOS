@@ -4523,6 +4523,7 @@ fn main() {
             richfiles_integration::richfiles_settings,
             richfiles_integration::output_git_available,
             glance_capture_shortcut::glance_capture_status, glance_capture_shortcut::glance_capture_configure,
+            glance_capture_shortcut::glance_capture_set,
             glance_capture_shortcut::glance_capture_open,
             glance_capture_shortcut::glance_workflow_status, glance_capture_shortcut::glance_workflow_configure,
             richfiles_integration::output_git_open, richfiles_integration::output_git_place, richfiles_integration::richfiles_git_chat,
