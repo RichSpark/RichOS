@@ -135,12 +135,11 @@ function inkRows(png) {
 // name that is not the component's.
 const PAGE = `(() => {
   window.__r105 = {
-    titles() {
+    titles(root) {
       const found = [];
-      document.querySelectorAll(".app-title").forEach((t) => found.push({ kind: "component", t,
+      root.querySelectorAll(".app-title").forEach((t) => found.push({ kind: "component", t,
         icon: t.querySelector(":scope > .app-title-icon"), name: t.querySelector(":scope > .app-title-name") }));
-      const isIcon = (n) => n.matches('img[src*="app-icons/"]') || n.matches(".rp-mark") || n.matches("[data-icon]");
-      document.querySelectorAll('img[src*="app-icons/"], .rp-mark, [data-icon]').forEach((icon) => {
+      root.querySelectorAll('img[src*="app-icons/"], .rp-mark, [data-icon]').forEach((icon) => {
         if (icon.closest(".app-title")) return;
         if (icon.matches(".rp-mark img") || (icon.parentElement && icon.parentElement.matches(".rp-mark"))) return;
         const box = icon.parentElement;
@@ -224,18 +223,19 @@ const PAGE = `(() => {
   };
 })();`;
 
-async function measureAll(page) {
+async function measureAll(page, scope) {
   await page.evaluate(PAGE);
-  const count = await page.evaluate(async () => {
+  const count = await page.evaluate(async (scope) => {
     await document.fonts.ready;
     const probe = window.__r105;
-    probe.found = probe.titles();
+    const root = scope ? document.querySelector(scope) : document;
+    probe.found = root ? probe.titles(root) : [];
     const images = probe.found.flatMap(({ icon }) =>
       icon.matches("img") ? [icon] : [...icon.querySelectorAll("img")]);
     // A broken image still has to fail the pixel measurement for its own header.
     await Promise.allSettled(images.map((img) => img.decode()));
     return probe.found.length;
-  });
+  }, scope);
   const out = [];
   await page.evaluate(() => window.__r105.ground(true));
   await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
@@ -291,7 +291,8 @@ const APP_SURFACES = [
   { name: "RichPass page", file: "index.html", show: "#richpass-page" },
   { name: "RichScribe sheet", file: "index.html", panel: "#dictation-sheet", open: "window.RichDictation && window.RichDictation.open()" },
   { name: "RichCleaner settings sheet", file: "index.html", panel: "#cleaner-settings", open: "window.RichCleaner && window.RichCleaner.open()" },
-  { name: "RichCleaner window", file: "cleaner.html", panel: ".rf-win", bridge: CLEANER_BRIDGE },
+  // The library also shows the app icon beside empty-state copy below the title bar.
+  { name: "RichCleaner window", file: "cleaner.html", panel: ".rf-win", scope: ".rf-win-bar", bridge: CLEANER_BRIDGE },
   { name: "RichGlance settings sheet", file: "index.html", panel: "#richglance-capture-settings", bridge: GLANCE_BRIDGE,
     open: async (page) => { await page.click("#set-btn"); await page.click("#set-richglance-capture-open"); } },
 ];
@@ -384,7 +385,7 @@ async function main() {
       // The app's surfaces open slowly, so here the smallest, the default and the largest size.
       for (const theme of themes) for (const scale of [80, 100, 150]) for (const s of APP_SURFACES) {
         const page = await openAppSurface(browser, s, theme, scale);
-        const m = await measureAll(page);
+        const m = await measureAll(page, s.scope);
         await run.check(s.name + ", " + theme + " " + scale + "%: its header uses the component and is centered", async () => {
           const outside = m.titles.filter((t) => t.kind !== "component");
           const mine = m.titles.filter((t) => t.kind === "component");
