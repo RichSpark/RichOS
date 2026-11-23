@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io;
 use std::mem::{size_of, MaybeUninit};
+use std::sync::OnceLock;
 
 const PROC_UID_ONLY: u32 = 4; // sys/proc_info.h
 const RICH_SCRIBE_ARG: &[u8] = b"--richos-dictation";
@@ -19,6 +20,7 @@ struct Identity {
 enum Role {
     Suite(Kind),
     Provider(Kind),
+    WebKit,
     Other,
 }
 
@@ -178,10 +180,9 @@ fn role_for<'a>(exe: &[u8], argument: impl FnOnce() -> Option<&'a [u8]>) -> Role
     match name {
         b"richos-tauri" => match argument() {
             Some(RICH_SCRIBE_ARG) => Role::Suite(Kind::RichScribe),
-            // The status server and other stdio modes share this executable.
-            Some(arg) if !arg.ends_with(b"-mcp") && arg != b"--system-resources" => {
-                Role::Suite(Kind::RichOs)
-            }
+            // The main app starts without arguments or with Launch Services' process serial.
+            // Any other mode is a helper, including tool-call hooks and updater processes.
+            Some(arg) if arg.is_empty() || arg.starts_with(b"-psn_") => Role::Suite(Kind::RichOs),
             _ => Role::Other,
         },
         b"RichFiles" => Role::Suite(Kind::RichFiles),
@@ -192,6 +193,14 @@ fn role_for<'a>(exe: &[u8], argument: impl FnOnce() -> Option<&'a [u8]>) -> Role
             Some(arg) if arg != b"--support-adapter" => Role::Suite(Kind::RichDoctor),
             _ => Role::Other,
         },
+        b"com.apple.WebKit.WebContent"
+        | b"com.apple.WebKit.Networking"
+        | b"com.apple.WebKit.GPU"
+            if exe.starts_with(b"/System/")
+                && contains(exe, b"/System/Library/Frameworks/WebKit.framework/") =>
+        {
+            Role::WebKit
+        }
         b"claude" => Role::Provider(Kind::ClaudeCode),
         b"codex" | b"codex-aarch64-apple-darwin" | b"codex-x86_64-apple-darwin" => {
             Role::Provider(Kind::Codex)
@@ -212,30 +221,53 @@ fn role_for<'a>(exe: &[u8], argument: impl FnOnce() -> Option<&'a [u8]>) -> Role
     }
 }
 
+/// WebKit's XPC services have launchd as their parent. macOS separately tracks
+/// the application responsible for each service. Resolve the optional system
+/// symbol at runtime so the host processes remain measurable if it is absent.
+fn responsible_pid(pid: i32) -> Option<i32> {
+    type Resolve = unsafe extern "C" fn(libc::pid_t) -> libc::pid_t;
+    static RESOLVE: OnceLock<Option<Resolve>> = OnceLock::new();
+    let resolve = (*RESOLVE.get_or_init(|| {
+        let address = unsafe {
+            libc::dlsym(
+                libc::RTLD_DEFAULT,
+                c"responsibility_get_pid_responsible_for_pid".as_ptr(),
+            )
+        };
+        // libSystem's responsibility API takes one pid_t and returns a pid_t.
+        (!address.is_null())
+            .then(|| unsafe { std::mem::transmute::<*mut std::ffi::c_void, Resolve>(address) })
+    }))?;
+    let owner = unsafe { resolve(pid) };
+    (owner > 1 && owner != pid).then_some(owner)
+}
+
+fn parent_of<'a>(process: &Process, inventory: &'a BTreeMap<i32, Process>) -> Option<&'a Process> {
+    let parent = inventory.get(&process.parent)?;
+    let age = |p: &Process| (p.identity.start_sec, p.identity.start_usec);
+    // A newer process with the same PID cannot be the recorded parent.
+    (age(parent) <= age(process) && parent.identity.pid != process.identity.pid).then_some(parent)
+}
+
 fn kind_for(process: &Process, inventory: &BTreeMap<i32, Process>) -> Option<Kind> {
-    if let Role::Suite(kind) = process.role {
-        return Some(kind);
-    }
-    // The nearest provider owns a descendant, but a RichOS ancestor is required. Check that
-    // every edge points to a process that could have existed when its child started.
-    let mut provider = None;
-    let mut child = process;
-    for _ in 0..inventory.len() {
-        match child.role {
-            Role::Suite(Kind::RichOs) => return provider,
-            Role::Provider(kind) => {
-                provider.get_or_insert(kind);
+    match process.role {
+        Role::Suite(kind) => Some(kind),
+        Role::WebKit => match parent_of(process, inventory)?.role {
+            Role::Suite(kind) => Some(kind),
+            _ => None,
+        },
+        Role::Provider(kind) => {
+            let mut child = process;
+            for _ in 0..inventory.len() {
+                child = parent_of(child, inventory)?;
+                if child.role == Role::Suite(Kind::RichOs) {
+                    return Some(kind);
+                }
             }
-            _ => {}
+            None
         }
-        let parent = inventory.get(&child.parent)?;
-        let age = |p: &Process| (p.identity.start_sec, p.identity.start_usec);
-        if age(parent) > age(child) || parent.identity.pid == child.identity.pid {
-            return None;
-        }
-        child = parent;
+        Role::Other => None,
     }
-    None
 }
 
 fn footprint(identity: Identity, uid: libc::uid_t) -> Option<i64> {
@@ -307,6 +339,11 @@ pub(super) fn capture() -> io::Result<Capture> {
             let role = executable(pid, &mut path)
                 .map(|exe| role_for(exe, || first_arg(pid, &mut args)))
                 .unwrap_or(Role::Other);
+            let parent = if role == Role::WebKit {
+                responsible_pid(pid).unwrap_or(parent)
+            } else {
+                parent
+            };
             Some((
                 pid,
                 Process {
@@ -416,20 +453,109 @@ mod tests {
             sampled.push(identity.pid);
             Some(i64::from(identity.pid))
         });
-        assert_eq!(sampled, vec![10, 11, 13, 14, 15, 16, 23]);
-        assert_eq!(capture.readings[Kind::ClaudeCode as usize].bytes, Some(27));
-        assert_eq!(capture.readings[Kind::ClaudeCode as usize].count, 2);
-        assert_eq!(capture.readings[Kind::Codex as usize].bytes, Some(31));
+        assert_eq!(sampled, vec![10, 11, 13, 15, 23]);
+        assert_eq!(capture.readings[Kind::ClaudeCode as usize].bytes, Some(13));
+        assert_eq!(capture.readings[Kind::ClaudeCode as usize].count, 1);
+        assert_eq!(capture.readings[Kind::Codex as usize].bytes, Some(15));
         assert_eq!(capture.readings[Kind::RichScribe as usize].bytes, Some(11));
 
         // A new generation with the same PID breaks the group continuity.
-        inventory.get_mut(&14).unwrap().identity.start_usec += 1;
-        let next = aggregate(&inventory, |identity| (identity.pid != 16).then_some(1));
+        inventory.get_mut(&13).unwrap().identity.start_usec += 1;
+        let next = aggregate(&inventory, |identity| (identity.pid != 15).then_some(1));
         assert_ne!(
             capture.readings[Kind::ClaudeCode as usize].identity,
             next.readings[Kind::ClaudeCode as usize].identity
         );
         assert_eq!(next.readings[Kind::Codex as usize].bytes, None);
         assert_eq!(next.unreadable, 1);
+    }
+
+    #[test]
+    fn short_lived_richos_modes_do_not_break_the_gui_lifetime() {
+        let gui = process(10, 1, role_for(b"richos-tauri", || Some(b"")));
+        let mut inventory = BTreeMap::from([(10, gui)]);
+        let idle = aggregate(&inventory, |_| Some(100)).readings[Kind::RichOs as usize];
+        for (pid, arg) in [
+            (11, b"--claude-quota-gate".as_slice()),
+            (12, b"--git-name-wait".as_slice()),
+            (13, b"--richos-connect-guard".as_slice()),
+            (14, b"--richos-quota-v1".as_slice()),
+            (15, b"--status-mcp".as_slice()),
+        ] {
+            inventory.insert(
+                pid,
+                process(pid, 10, role_for(b"richos-tauri", || Some(arg))),
+            );
+        }
+        let busy = aggregate(&inventory, |_| Some(100)).readings[Kind::RichOs as usize];
+        assert_eq!(
+            (busy.bytes, busy.count, busy.identity),
+            (idle.bytes, 1, idle.identity)
+        );
+    }
+
+    #[test]
+    fn only_suite_owned_system_webkit_services_count() {
+        const CONTENT: &[u8] = b"/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent";
+        const GPU: &[u8] = b"/System/Volumes/Preboot/Cryptexes/OS/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.GPU.xpc/Contents/MacOS/com.apple.WebKit.GPU";
+        // The second argument is the effective parent. For these XPC services macOS
+        // identifies the owning app separately from launchd, their actual parent.
+        let processes = [
+            process(10, 1, Role::Suite(Kind::RichOs)),
+            process(11, 1, Role::Suite(Kind::RichDoctor)),
+            process(12, 1, Role::Other),
+            process(13, 10, role_for(CONTENT, || None)),
+            process(14, 10, role_for(GPU, || None)),
+            process(15, 11, role_for(CONTENT, || None)),
+            process(16, 12, role_for(CONTENT, || None)),
+            process(
+                17,
+                10,
+                role_for(b"/Users/test/com.apple.WebKit.WebContent", || None),
+            ),
+            process(18, 20, role_for(CONTENT, || None)), // owner PID now belongs to a newer process
+            process(20, 1, Role::Suite(Kind::RichScribe)),
+        ];
+        let inventory = processes.into_iter().map(|p| (p.identity.pid, p)).collect();
+        let capture = aggregate(&inventory, |id| Some(i64::from(id.pid)));
+        for (kind, bytes, count) in [
+            (Kind::RichOs, 37, 3),
+            (Kind::RichDoctor, 26, 2),
+            (Kind::RichScribe, 20, 1),
+        ] {
+            let reading = capture.readings[kind as usize];
+            assert_eq!(
+                (reading.bytes, reading.count),
+                (Some(bytes), count),
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_commands_do_not_inflate_the_provider_or_reset_its_lifetime() {
+        let mut inventory = BTreeMap::from([
+            (10, process(10, 1, Role::Suite(Kind::RichOs))),
+            (11, process(11, 10, Role::Other)), // supervisor
+            (12, process(12, 11, Role::Provider(Kind::ClaudeCode))),
+            (13, process(13, 11, Role::Provider(Kind::Codex))),
+        ]);
+        let idle = aggregate(&inventory, |_| Some(100));
+        inventory.extend([
+            (14, process(14, 12, Role::Other)), // Bash performing a tool call
+            (15, process(15, 14, Role::Other)), // cargo
+            (16, process(16, 13, Role::Other)), // test runner
+            (17, process(17, 1, Role::Provider(Kind::Codex))), // unrelated instance
+        ]);
+        let busy = aggregate(&inventory, |_| Some(100));
+        for kind in [Kind::ClaudeCode, Kind::Codex] {
+            let a = idle.readings[kind as usize];
+            let b = busy.readings[kind as usize];
+            assert_eq!(
+                (b.bytes, b.count, b.identity),
+                (a.bytes, 1, a.identity),
+                "{kind:?}"
+            );
+        }
     }
 }

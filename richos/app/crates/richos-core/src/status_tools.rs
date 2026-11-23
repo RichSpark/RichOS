@@ -116,7 +116,7 @@ pub fn tools() -> Value {
          "inputSchema":{"type":"object","properties":{},"additionalProperties":false},
          "annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},
         {"name":crate::suite_memory::TOOL,
-         "description":"Read RichDoctor's per-app physical memory in bytes, with a sample timestamp, summaries for the last 48 hours and 90 days and suspected sustained growth. Use for questions about RichOS suite memory and trends. Claude Code and Codex each include their RichOS-owned process tree. Check status, age and coverage. A growth flag is a signal to investigate.",
+         "description":"Read RichDoctor's per-app physical memory in bytes, with a sample timestamp, summaries for the last 48 hours and 90 days and suspected sustained growth. Use for questions about RichOS suite memory and trends. App figures include their own WebKit processes. Claude Code and Codex each total the provider processes launched by RichOS. Check status, age and coverage. A growth flag is a signal to investigate.",
          "inputSchema":{"type":"object","properties":{},"additionalProperties":false},
          "annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},
         {"name":LOOK_TOOL_NAME,

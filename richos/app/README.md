@@ -2213,8 +2213,9 @@ temporarily use about another 2 MiB. The sampler runs in process and records
 neither command lines nor application content.
 
 Rich uses `mcp__richos_status__suite_memory` for the latest per-app reading and
-both history windows. Claude Code and Codex each include their RichOS-owned
-descendants. A possible leak requires four hours of samples with the same process
+both history windows. Suite app figures include their own WebKit processes.
+Claude Code and Codex each total the matching provider processes launched by
+RichOS. A possible leak requires four hours of samples with the same process
 membership and increasing hourly means. The increase must reach 32 MiB and 10%
 of the first hourly mean. Sleep and process restarts interrupt the observation.
 RichDoctor includes the latest capture outcome and capture time in configuration
