@@ -459,6 +459,11 @@ function gitPane() {
       next = () => greenFrame;
       await T.until("updated Git pixels at the new placement", () => !red(pixel(left, y)) && green(pixel(right, y)));
 
+      const beforeMiss = requests;
+      next = () => new ArrayBuffer(0);
+      await T.until("two requests with no native picture", () => requests >= beforeMiss + 2);
+      if (!green(pixel(right, y))) throw new Error("a missed native frame erased the visible Git pane");
+
       pending = null;
       next = null;
       await T.until("a pending native Git frame", () => pending);
@@ -635,13 +640,13 @@ async function main() {
     return;
   }
 
-  await run.check("the native Git pane appears in place, updates and moves, then leaves no stale pixels", async () => {
+  await run.check("the native Git pane appears in place, updates, survives a missed picture and clears after close", async () => {
     const ran = await runPage(APP, gitPane(), 95);
     try {
       assert(ran.code === 0 && ran.done, "the page did not finish: " + JSON.stringify(ran.said.slice(-4)));
       assert(!ran.done.error, ran.done.error);
       assertEqual(ran.done.ended, "stopped", "the recording did not stop cleanly");
-      return "two live pictures at their respective placements, clean redraw after close";
+      return "two live pictures at their placements, the last good picture held through a miss and no stale pixels after close";
     } finally {
       fs.rmSync(ran.dir, { recursive: true, force: true });
     }

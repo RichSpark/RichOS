@@ -754,9 +754,9 @@ window.RichVideoAnywhere = (function () {
     R.gitAsked = R.now;
     try {
       const frame = await readWindowFrame("output_git_recording_frame", { recording: R.number }, true);
-      if (rec === R && visit === gitVisit()) R.gitImage = frame;
+      if (frame && rec === R && visit === gitVisit()) R.gitImage = frame;
     } catch (_) {
-      if (rec === R && visit === gitVisit()) R.gitImage = null;
+      // Keep the last picture through a missed sample. A new or hidden pane clears it above.
     } finally {
       gitRequest = false;
     }
