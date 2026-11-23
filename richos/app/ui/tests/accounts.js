@@ -46,7 +46,8 @@ function idleSignedIn(inUse, idle) {
 // Bound those waits on the Node side so the suite can report even if WebKit cannot reply.
 const SUITE_LIMIT_MS = 240_000;
 const CHECK_LIMIT_MS = 45_000;
-const CLOSE_LIMIT_MS = 3_000;
+const PASS_CLOSE_LIMIT_MS = 30_000;
+const FAIL_CLOSE_LIMIT_MS = 3_000;
 const CHECK_FAILED = Symbol("accounts check failed");
 
 async function bounded(work, ms, message) {
@@ -934,6 +935,7 @@ async function main() {
   }
 
   const browser = await bounded(() => loadPlaywright().webkit.launch(), CHECK_LIMIT_MS, "WebKit launch did not finish within 45s");
+  let completed = false;
   try {
     const checks = [];
     planChecks({ check(name, work, { serial = false, limitMs = CHECK_LIMIT_MS } = {}) {
@@ -943,13 +945,21 @@ async function main() {
     // Nested parallel checks otherwise put five live app pages in one WebKit.
     await runCases(checks.filter(check => !check.serial), execute, 2);
     for (const check of checks.filter(check => check.serial)) await execute(check);
+    completed = true;
   } catch (error) {
     if (error !== CHECK_FAILED) throw error;
   } finally {
     const failures = run.report();
-    // The harness's owned browser reaper can clean up if a closed or stalled
-    // browser never answers. The report is already written before that path.
-    await bounded(() => browser.close(), CLOSE_LIMIT_MS, "WebKit did not close within 3s");
+    const passed = completed && failures === 0;
+    const closeLimit = passed ? PASS_CLOSE_LIMIT_MS : FAIL_CLOSE_LIMIT_MS;
+    try {
+      await bounded(() => browser.close(), closeLimit, `WebKit did not close within ${closeLimit / 1000}s`);
+    } catch (error) {
+      if (!passed) throw error;
+      // The passing report is already written. Exiting lets the harness's
+      // reaper quietly stop the owned browser if graceful shutdown failed.
+      process.exit(0);
+    }
     if (failures) process.exit(1);
   }
 }
