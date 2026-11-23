@@ -236,6 +236,8 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
 
     override func cursorUpdate(with event: NSEvent) {
         let location = convert(event.locationInWindow, from: nil)
+        // The native text view chooses the I-beam inside the active callout.
+        if textEntry?.frame.contains(location) == true { return }
         if selectedMark?.tool.hasSideGrabbers == true, case .edge(let side) = handle(at: location) {
             (side.isMultiple(of: 2) ? NSCursor.resizeUpDown : NSCursor.resizeLeftRight).set()
         } else {
