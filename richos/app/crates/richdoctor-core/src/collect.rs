@@ -227,6 +227,7 @@ pub fn collect(category: Category, scope: &Scope, ctx: &Context, used: u64) -> V
             richfiles_timing(scope, ctx, &mut budget, false),
             update_timing(scope, ctx, &mut budget),
             richfiles_timing(scope, ctx, &mut budget, true),
+            suite_memory_health(scope, ctx),
             codex_channel_health(scope, ctx, &mut budget),
         ],
         Category::Richscribe => vec![richscribe(scope, ctx, &mut budget)],
@@ -720,6 +721,30 @@ fn configuration(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
     finish(item, &lines.join("\n"), ctx, false)
 }
 
+fn suite_memory_health(scope: &Scope, ctx: &Context) -> Item {
+    let state_root = scope.data_root().join("engine-state");
+    memory_health_item(richos_core::suite_memory::health(&state_root), ctx)
+}
+
+fn memory_health_item(health: richos_core::suite_memory::Health, ctx: &Context) -> Item {
+    let source = "Suite memory sampler";
+    let category = Category::Configuration;
+    let Some(sampled_at_ms) = health.sampled_at_ms.and_then(|at| u64::try_from(at).ok()) else {
+        return unread(category, source, if health.status == "unreadable" { Status::Unreadable } else { Status::Absent });
+    };
+    let mut item = Item::new(category, source).expect("random source");
+    item.observed_at = Some(sampled_at_ms);
+    item.coverage = Coverage::Current;
+    item.summary = format!("Most recent suite memory capture: {}.", health.status);
+    let text = format!(
+        "{}
+same_user_processes={} matched_processes={} unreadable_processes={} capture_us={}",
+        item.summary, health.same_user_processes, health.matched_processes,
+        health.unreadable_processes, health.capture_us
+    );
+    finish(item, &text, ctx, false)
+}
+
 fn codex_channel_health(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
     let source = "Codex connection watcher";
     let category = Category::Configuration;
@@ -1078,6 +1103,28 @@ fn claude_availability(scope: &Scope) -> Item {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn suite_memory_support_collects_capture_health() {
+        let h = home();
+        let scope = scope(&h.0, Window::around(T));
+        let empty = collect(Category::Configuration, &scope, &Context::default(), 0)
+            .into_iter().find(|item| item.source == "Suite memory sampler").unwrap();
+        assert_eq!(empty.status, Status::Absent);
+        let health = richos_core::suite_memory::Health {
+            status: "partial",
+            sampled_at_ms: Some(T as i64),
+            same_user_processes: 15,
+            matched_processes: 6,
+            unreadable_processes: 1,
+            capture_us: 1440,
+        };
+        let item = memory_health_item(health, &Context::default());
+        assert_eq!(item.status, Status::Collected);
+        assert_eq!(item.observed_at, Some(T));
+        assert!(item.text.contains("capture: partial"));
+        assert!(item.text.contains("matched_processes=6 unreadable_processes=1 capture_us=1440"));
+    }
 
     #[test]
     fn codex_health_uses_only_the_watcher_fields() {

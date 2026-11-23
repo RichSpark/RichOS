@@ -251,6 +251,7 @@ richos/app/
                               late command notifications never manufacture job completion,
                               a user reply or another model prompt. Separate handoffs
                               use the same independent Stu session.
+    tests/suite_memory_tool.rs exposes the read-only RichDoctor memory tool in the status server.
     tests/job_execution_owner_tests.rs preserves Stu's reports and inbox receipts
                               across ordinary Quit and restart.
     src/skills.rs             THE SKILLS RichOS gives its inner Rich — the on-demand half of
@@ -2201,6 +2202,23 @@ engine-state directory>`. `--resources-mcp` serves only the read tool over stdio
 The bounded `system_resources_probe` core example exercises this same sampler and
 reports measured CPU, memory and cached-read cost.
 
+
+### RichOS suite memory history
+
+RichDoctor records macOS physical memory footprint once a minute while its menu
+bar process is running. The per-user SQLite history under `engine-state` keeps
+minute samples for 48 hours and hourly min, mean and max values for 90 days.
+SQLite reuses old pages and caps the main file at 2 MiB. A rollback journal can
+temporarily use about another 2 MiB. The sampler runs in process and records
+neither command lines nor application content.
+
+Rich uses `mcp__richos_status__suite_memory` for the latest per-app reading and
+both history windows. Claude Code and Codex each include their RichOS-owned
+descendants. A possible leak requires four hours of samples with the same process
+membership and increasing hourly means. The increase must reach 32 MiB and 10%
+of the first hourly mean. Sleep and process restarts interrupt the observation.
+RichDoctor includes the latest capture outcome and capture time in configuration
+diagnostics.
 
 ## SwearMeter
 
