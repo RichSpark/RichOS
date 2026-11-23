@@ -485,6 +485,8 @@ else:
         tip = subprocess.check_output(git + ["commit-tree", tree, "-p", base, "-m", "Tip"], text=True).strip()
         pair = self.connect(self.b)
         self.assertEqual(Path(pair).parent.parent.name, "company-b")
+        c.send(pair, "other-company-ready", "READY TO LAND: codex/other-company\nRepository: other")
+        review_watch.channel_reply(pair, "other-company-ready", "review-held", "The app held this READY.")
         c.send(pair, "company-review", f"READY TO LAND: codex/company-ready\nRepository: richos\nCommit: {tip}")
 
         world = review_watch.World(str(Path(c.__file__).parents[2]), str(config))
@@ -505,6 +507,40 @@ else:
                 self.assertEqual(items[0].channel, {"locator": pair, "message_id": "company-review"})
                 self.assertIn("Exact user task", Path(items[0].words[0]).read_text())
                 self.assertEqual(len(state["channel_pending"]), 1)
+                holds = [row for row in c.read(pair, "to-rich")["records"]
+                         if row.get("reply_to") == "other-company-ready"]
+                self.assertEqual(len(holds), 1)
+                self.assertEqual(holds[0]["text"], "The app held this READY.")
+
+    def test_company_ready_has_one_review_owner_across_hosts(self):
+        import review_watch
+        pair = self.connect(self.a)
+        first_id = "company-ready"
+        c.send(pair, first_id, "READY TO LAND: codex/company-ready")
+        repo = str(self.root / "richos")
+        item = review_watch.Item("branch:" + repo + ":codex/company-ready", "codex", repo, "1" * 40,
+                                 "0" * 40, "ended", branch="codex/company-ready", source="codex")
+        item.channel = {"locator": pair, "message_id": first_id}
+        watch = object.__new__(review_watch.Watcher)
+        terminal = {"REVIEW_WATCH_STATE_DIR": str(self.root / "terminal-review")}
+        app = {"REVIEW_WATCH_STATE_DIR": str(self.root / "app-review")}
+
+        with mock.patch.dict(os.environ, terminal):
+            lock, _ = watch.take_lock(item, "handover", 10, 1)
+            Path(lock).unlink()  # The terminal ends its first attempt and later starts again.
+        self.move_pair(pair, self.b["entity_id"])
+        with mock.patch.dict(os.environ, app):
+            self.assertIsNone(watch.take_lock(item, "handover", 20, 1))
+        with mock.patch.dict(os.environ, terminal):
+            self.assertIsNotNone(watch.take_lock(item, "handover", 30, 2))
+
+        c.send(pair, "previously-reviewed", "READY TO LAND: codex/company-ready")
+        review_watch.channel_reply(pair, "previously-reviewed", "previous-verdict",
+                                   review_watch.CHANNEL_VERDICT_PREFIX + "A completed review")
+        item.tip = "2" * 40
+        item.channel["message_id"] = "previously-reviewed"
+        with mock.patch.dict(os.environ, app):
+            self.assertIsNone(watch.take_lock(item, "handover", 40, 1))
 
     def test_terminal_records_delivery_if_a_company_pair_moves_during_output(self):
         pair = self.connect(self.a)

@@ -1351,6 +1351,8 @@ class Watcher(object):
 
     # -- locks -------------------------------------------------------------------
     def take_lock(self, item, trigger, now, attempt):
+        if getattr(item, "channel", None) and not owns_channel_review(item):
+            return None
         path = lock_path(item.repo, item.tip)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         try:
@@ -1673,6 +1675,36 @@ class Watcher(object):
 # what is told
 # ---------------------------------------------------------------------------
 
+CHANNEL_VERDICT_PREFIX = "Automatic independent review observation:\n"
+
+
+def owns_channel_review(item):
+    """The first eligible review watcher owns this company's review across restarts."""
+    try:
+        with channels.locked(channels.root() / "coordinator.lock"):
+            path, endpoint = channels.connection(item.channel["locator"])
+            if endpoint["entity_id"] == channels.TERMINAL:
+                return True
+            key = hashlib.sha256(json.dumps([item.work, item.tip]).encode()).hexdigest()
+            claim = path / ("review-owner-" + key + ".json")
+            owner = os.path.realpath(state_root())
+            try:
+                return channels.load(claim)["owner"] == owner
+            except FileNotFoundError:
+                pass
+            # An older watcher may already have published a verdict without a claim.
+            if any(row.get("kind") == "review_result"
+                   and row.get("reply_to") == item.channel["message_id"]
+                   and row["text"].startswith(CHANNEL_VERDICT_PREFIX)
+                   for _, _, row in channels.records(path / "to-codex.jsonl")):
+                return False
+            channels.save(claim, {"owner": owner})
+            return True
+    except (OSError, ValueError, KeyError) as exc:
+        channels.diagnostic(item.channel["locator"], exc)
+        return False
+
+
 def channel_reply(locator, reply_to, identity, text):
     """Same durable operation on each side; replay reconciles a split write.
 
@@ -1683,8 +1715,17 @@ def channel_reply(locator, reply_to, identity, text):
     path, _ = channels.connection(locator)
     message_id = "review-" + hashlib.sha256((identity + ":" + reply_to).encode()).hexdigest()
     record = dict(version=1, message_id=message_id, kind="review_result", text=text, reply_to=reply_to)
-    for direction in ("to-codex", "to-rich"):
-        channels.append(path / (direction + ".jsonl"), record)
+    try:
+        channels.append(path / "to-codex.jsonl", record)
+    except channels.MessageConflict as conflict:
+        existing = conflict.existing
+        if (identity != "review-held" or existing.get("kind") != "review_result"
+                or existing.get("reply_to") != reply_to):
+            raise
+        # Another watcher reported a hold. Reuse its notice to repair any
+        # interrupted write to the other journal instead of holding the cursor.
+        record = existing
+    channels.append(path / "to-rich.jsonl", record)
 
 
 def publish_channel_results(rows, owners):
@@ -1697,7 +1738,7 @@ def publish_channel_results(rows, owners):
                 continue
             try:
                 channel_reply(channel["locator"], channel["message_id"], str(row.get("id")),
-                              "Automatic independent review observation:\n" + "\n".join(render_verdict(row, {})))
+                              CHANNEL_VERDICT_PREFIX + "\n".join(render_verdict(row, {})))
                 for notice_key, block in convergence_notices(row, rows, "codex"):
                     channel_reply(channel["locator"], channel["message_id"], notice_key, "\n".join(block))
             except (OSError, ValueError, KeyError) as exc:

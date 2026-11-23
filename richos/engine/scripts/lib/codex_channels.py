@@ -779,6 +779,12 @@ def validate(record, locator=None):
         raise ValueError("Encoded message exceeds the native inbox frame limit")
 
 
+class MessageConflict(ValueError):
+    def __init__(self, existing):
+        super().__init__("Message ID already exists with different contents")
+        self.existing = existing
+
+
 def append(path, record):
     validate(record, Path(path).parent)
     encoded = (json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n").encode()
@@ -800,7 +806,7 @@ def append(path, record):
             for _, through, old in records(path, writer_locked=True):
                 if old["message_id"] == record["message_id"]:
                     if old != record:
-                        raise ValueError("Message ID already exists with different contents")
+                        raise MessageConflict(old)
                     os.fsync(fd)
                     return dict(saved=True, already_saved=True, message_id=old["message_id"], through=through)
             f.seek(0, os.SEEK_END)

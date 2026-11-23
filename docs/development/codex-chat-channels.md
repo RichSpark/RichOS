@@ -60,6 +60,10 @@ its advisory cursor. Replaying a cursor is idempotent against inbox history.
 Both review watchers use the same framed READY reader and deliver review results
 on the originating pair. The terminal review watcher uses the same connections
 as the terminal notification watcher and checks its configured repositories.
+The first eligible watcher to schedule a company review claims it in the
+connection. The same watcher can retry it after a restart, while the other
+watcher leaves that review to its owner. Both watchers reuse an existing
+hold notice for the same READY and continue reading the connection.
 
 An upgrade preserves the old Markdown files and saved spool. The conventional
 `rich-codex` and `rich-codex-questions` channels belong to the company that
