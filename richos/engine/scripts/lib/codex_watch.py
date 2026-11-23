@@ -240,6 +240,7 @@ def _terminal_tick(project, sid, out):
         source = locator / "to-rich.jsonl"
         pos = Path(state_root()) / "terminal" / (endpoint["connection_id"] + ".json")
         try:
+            source_identity = codex_channels.identity(source)
             try:
                 saved = codex_channels.load(pos)
             except (FileNotFoundError, ValueError):
@@ -249,7 +250,7 @@ def _terminal_tick(project, sid, out):
                     out.write(f"CODEX-WATCH: Reply on {locator} (message ID {record['message_id']})\n{record['text']}\n")
                     out.flush()
                     printed += 1
-                codex_channels.save(pos, dict(source_identity=codex_channels.identity(source), through=end))
+                codex_channels.save(pos, dict(source_identity=source_identity, through=end))
         except (OSError, ValueError) as error:
             codex_channels.diagnostic(source, error)
     return printed

@@ -506,6 +506,20 @@ else:
                 self.assertIn("Exact user task", Path(items[0].words[0]).read_text())
                 self.assertEqual(len(state["channel_pending"]), 1)
 
+    def test_terminal_records_delivery_if_a_company_pair_moves_during_output(self):
+        pair = self.connect(self.a)
+        c.send(pair, "ready-during-move", "READY TO LAND: codex/move-during-output")
+        config = str(self.root / "project" / "orchestration.config")
+        output = io.StringIO()
+        with mock.patch.dict(os.environ, {"CODEX_WATCH_STATE_DIR": str(self.root / "watch"),
+                                         "CODEX_WATCH_CHANNELS": str(self.root / "unused-to-rich.md")}):
+            with mock.patch.object(output, "flush", side_effect=lambda: self.move_pair(pair, self.b["entity_id"])):
+                self.assertEqual(watcher.tick(watcher.session_dir("original"), config=config,
+                                              sid="original", out=output), 1)
+            self.assertIn("READY TO LAND: codex/move-during-output", output.getvalue())
+            self.assertEqual(watcher.tick(watcher.session_dir("replacement"), config=config,
+                                          sid="replacement", out=io.StringIO()), 0)
+
     def test_terminal_shell_uses_lead_project_from_work_folder(self):
         scripts = Path(c.__file__).resolve().parents[1]
         project = self.root / "lead project"
