@@ -366,7 +366,20 @@ fn read_inbox(path:&Path)->std::io::Result<std::fs::File> {
     Ok(file)
 }
 
-fn locked_inbox(scope:&StatusToolScope,role:&str,nonblocking:bool)->Result<std::fs::File,String> {
+struct InboxLock(std::fs::File);
+
+impl Drop for InboxLock {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            // A child between fork and exec can still hold a copy of our descriptor.
+            let _unlocked = unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
+        }
+    }
+}
+
+fn locked_inbox(scope:&StatusToolScope,role:&str,nonblocking:bool)->Result<InboxLock,String> {
     let path=inbox(scope,role)?;
     if !path.exists() && path.with_extension("cursor").exists() {return Err("Saved peer inbox is unavailable; restore its original history".into())}
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e|e.to_string())?;
@@ -376,11 +389,10 @@ fn locked_inbox(scope:&StatusToolScope,role:&str,nonblocking:bool)->Result<std::
     if !file.metadata().map_err(|e|e.to_string())?.is_file(){return Err("Peer inbox is not an ordinary file".into())}
     #[cfg(unix)]
     {use std::os::fd::AsRawFd;
-        // Locks are released by closing this handle on success or any error.
         // lock-busy: bridge intake/first-read reconciliation holds and retries at the existing receiver cadence; other writers serialize normally.
         if unsafe {libc::flock(file.as_raw_fd(),libc::LOCK_EX|if nonblocking {libc::LOCK_NB} else {0})}!=0 {return Err(std::io::Error::last_os_error().to_string())}
     }
-    Ok(file)
+    Ok(InboxLock(file))
 }
 
 pub(crate) fn work_reference(scope:&StatusToolScope,message:&Message)->Result<Option<WorkReference>,String> {
@@ -429,7 +441,8 @@ pub(crate) fn record_pending_handoff(scope:&StatusToolScope,message:&mut Message
 
 fn append_record(scope:&StatusToolScope,role:&str,message:&mut Message,unique:bool,
     recording:Option<(Option<&Path>,&dyn crate::assignment_tools::ObligationOpener)>)->Result<(u64,bool),String> {
-    let mut file=locked_inbox(scope,role,message.bridge.is_some())?;
+    let lock=locked_inbox(scope,role,message.bridge.is_some())?;
+    let mut file=&lock.0;
     let mut record=serde_json::to_vec(message).map_err(|e|e.to_string())?;record.push(b'\n');
     if record.len()>256*1024 {return Err("Encoded message exceeds the input frame limit".into())}
     let length=file.metadata().map_err(|e|e.to_string())?.len();
@@ -906,6 +919,33 @@ mod tests {
         assert_eq!(message.text,"Already durably saved ordinary peer input");
         assert_eq!(through,length);
         assert!(!wrote_cursor,"reading a new inbox must not create migration state");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_childs_inherited_descriptor_does_not_keep_a_finished_inbox_lock() {
+        let root = std::env::temp_dir().join(format!("richos-inherited-inbox-{}", uuid::Uuid::new_v4()));
+        let scope = StatusToolScope {
+            version: 1,
+            state_root: root.clone(),
+            entity_id: "company".into(),
+            thread_id: "thread".into(),
+        };
+        let lock = locked_inbox(&scope, "stu", false).unwrap();
+        // A duplicate shares the open file description, just like a child before exec.
+        let inherited = lock.0.try_clone().unwrap();
+        drop(lock);
+
+        let result = observe_channel(&scope, "New input", BridgeReference {
+            connection_id: "pair".into(),
+            message_id: "message".into(),
+            payload_digest: "digest".into(),
+            locator: "locator".into(),
+            reply_to: None,
+        });
+        drop(inherited);
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(!result.unwrap().1);
     }
 
     #[test]
