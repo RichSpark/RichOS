@@ -295,6 +295,7 @@ module.exports = [
     "fixture": null,
     "why": "The sidebar shows the save refusal and restores the saved order. Dragging a company row in that sidebar retries the move."
   },
+  {"s":":scope > [data-company]","c":"NOT-RENDERED","why":"The DOM selector that finds company rows before reordering New Chat and the company picker."},
   // Native notification API states.
   {"s": "Invalid notification registration", "c": "UNREACHABLE", "why": "Defensive duplicate validation inside the native notification desk. The authenticated route rejects malformed registrations before calling it and the native adapter supplies fixed bundle/environment values."},
   {"s": "Native notifications are unavailable", "c": "UNREACHABLE", "why": "Default bridge refusal. Production overrides it and routes refuse unsupported native-push capability before calling the default."},
