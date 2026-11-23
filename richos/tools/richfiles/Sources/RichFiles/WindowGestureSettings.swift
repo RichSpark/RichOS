@@ -131,7 +131,7 @@ struct WindowGestureSettings: View {
         if desktopShortcut {
             Toggle("Double-click desktop folders to open them in RichFiles", isOn: toggle(.desktopFolder))
                 .disabled(updating)
-            Toggle("Press Delete to move selected desktop items to Trash", isOn: toggle(.desktopDelete))
+            Toggle("Press Forward Delete (Del) to move selected desktop items to Trash", isOn: toggle(.desktopDelete))
                 .disabled(updating)
         } else {
             Toggle("Double-click a title bar to maximize or restore", isOn: toggle(.titleBar))
