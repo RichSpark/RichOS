@@ -4574,6 +4574,7 @@ fn main() {
             set_sidebar_width,
             set_sidebar_collapsed,
             set_entity_collapsed,
+            set_company_order,
             set_thread_pinned,
             set_thread_archived,
             chat_list::set_chat_list_state,
@@ -8015,6 +8016,12 @@ fn set_entity_collapsed(state: State<AppState>, entity_id: String, collapsed: bo
 }
 
 #[richos_command::command]
+fn set_company_order(state: State<AppState>, order: Vec<String>) -> Result<(), String> {
+    let spine = state.reader.snapshot();
+    state.nav.lock().unwrap().set_company_order(order, spine.entity_registry()).map_err(|e| e.to_string())
+}
+
+#[richos_command::command]
 fn set_thread_pinned(state: State<AppState>, thread_id: String, pinned: bool) -> Result<(), String> {
     state.nav.lock().unwrap().set_thread_pinned(&thread_id, pinned).map_err(|e| e.to_string())
 }
@@ -9226,6 +9233,33 @@ mod navigation_tests {
             Entity::new("richos", "RichOS", &["/fixture/ab/richos"]).unwrap(),
         ])
         .unwrap()
+    }
+
+    #[test]
+    fn company_order_round_trips_and_refused_changes_keep_the_saved_order() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("navigation.json");
+        std::fs::write(&path, r#"{"collapsed_entities":["deeply"],"pinned_threads":["test-chat"]}"#).unwrap();
+        let registry = nav_test_registry();
+        let order = vec!["richos".to_string(), "deeply".to_string(), "femcboost".to_string()];
+        let mut store = nav::NavStore::open(&path);
+        assert!(store.state().company_order.is_empty(), "older files use registry order");
+        store.set_company_order(order.clone(), &registry).unwrap();
+        assert!(crate::chat_list::recent_diagnostics().unwrap().contains("company order · saved"));
+
+        let mut reopened = nav::NavStore::open(&path);
+        assert_eq!(reopened.state().company_order, order);
+        assert_eq!(reopened.state().collapsed_entities, ["deeply"]);
+        assert_eq!(reopened.state().pinned_threads, ["test-chat"]);
+        for invalid in [["richos", "richos"], ["richos", "unbound"]] {
+            assert!(reopened.set_company_order(invalid.map(str::to_string).to_vec(), &registry).is_err());
+        }
+        // Make the temporary write target unusable and verify both memory and disk roll back.
+        std::fs::create_dir(path.with_extension("json.tmp")).unwrap();
+        let reversed = order.iter().rev().cloned().collect();
+        assert!(reopened.set_company_order(reversed, &registry).is_err());
+        assert_eq!(reopened.state().company_order, order);
+        assert_eq!(nav::NavStore::open(&path).state().company_order, order);
     }
 
     #[test]

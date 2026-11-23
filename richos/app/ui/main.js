@@ -794,6 +794,7 @@ function buildCompanyShell(entity, count) {
   // is untouched until a thread is opened or a new one is started.
   labelEl.addEventListener("click", () => showEntityView(id, "overview"));
   labelEl.setAttribute("aria-label", name + " overview");
+  labelEl.setAttribute("aria-keyshortcuts", "Alt+ArrowUp Alt+ArrowDown");
   head.appendChild(labelEl);
   section.setAttribute("aria-labelledby", labelEl.id);
 
@@ -937,6 +938,176 @@ function chatWait(row) {
   }
 }
 
+// Company ordering is a sidebar preference. The rest of the app uses registry order.
+let pendingCompanyOrder = null;
+let companyOrderWrites = Promise.resolve();
+
+function orderedCompanyGroups() {
+  const order = pendingCompanyOrder ?? navPrefs?.company_order ?? [];
+  if (!order.length) return navTree.groups;
+  const rank = new Map(order.map((id, index) => [id, index]));
+  const position = (group) => rank.get(group.entity.id) ?? order.length;
+  return [...navTree.groups].sort((a, b) => position(a) - position(b));
+}
+
+function moveCompany(id, index) {
+  const order = orderedCompanyGroups().map((group) => group.entity.id);
+  const from = order.indexOf(id);
+  if (from < 0 || index < 0 || index >= order.length || index === from) return false;
+  order.splice(from, 1);
+  order.splice(index, 0, id);
+  pendingCompanyOrder = order;
+  renderRail();
+  companyOrderWrites = companyOrderWrites.then(async () => {
+    const saved = await saveNavChange("set_company_order", { order });
+    if (saved) navPrefs.company_order = order;
+    if (pendingCompanyOrder === order) {
+      pendingCompanyOrder = null;
+      if (!saved) renderRail();
+    }
+  });
+  return true;
+}
+
+const COMPANY_DRAG_THRESHOLD = 6;
+const COMPANY_SCROLL_EDGE = 28;
+let companyDrag = null;
+let suppressCompanyClick = false;
+
+function companyFromLabel(target) {
+  return target instanceof Element
+    ? target.closest(".nav-group--entity .nav-group-label")?.closest(".nav-group--entity")
+    : null;
+}
+
+function markCompanyDrop(drag, marker, side) {
+  if (drag.marker === marker && drag.side === side) return;
+  if (drag.marker) drag.marker.classList.remove(drag.side);
+  if (marker) marker.classList.add(side);
+  drag.marker = marker;
+  drag.side = side;
+}
+
+function updateCompanyDrop(drag) {
+  const bounds = railNavEl.getBoundingClientRect();
+  const inside = drag.x >= bounds.left && drag.x < bounds.right &&
+    drag.y >= bounds.top && drag.y < bounds.bottom;
+  drag.slot = -1;
+  if (inside) {
+    const next = drag.others.findIndex((group) => {
+      const head = group.firstElementChild.getBoundingClientRect();
+      return drag.y < head.top + head.height / 2;
+    });
+    drag.slot = next < 0 ? drag.others.length : next;
+    if (drag.slot !== drag.from) {
+      const marker = next < 0 ? drag.others.at(-1) : drag.others[next];
+      markCompanyDrop(drag, marker, next < 0 ? "company-drop-after" : "company-drop-before");
+    } else {
+      markCompanyDrop(drag, null);
+    }
+  } else {
+    markCompanyDrop(drag, null);
+  }
+  return inside ? bounds : null;
+}
+
+function scrollCompanyDrag(drag, bounds) {
+  if (!bounds) return;
+  const top = railNavEl.scrollTop;
+  const max = railNavEl.scrollHeight - railNavEl.clientHeight;
+  const delta = drag.y - bounds.top < COMPANY_SCROLL_EDGE ? -8
+    : bounds.bottom - drag.y < COMPANY_SCROLL_EDGE ? 8 : 0;
+  if ((delta < 0 && top > 0) || (delta > 0 && top < max)) {
+    drag.frame = requestAnimationFrame(() => {
+      railNavEl.scrollTop += delta;
+      scrollCompanyDrag(drag, updateCompanyDrop(drag));
+    });
+  }
+}
+
+function finishCompanyDrag(event, drop = false) {
+  const drag = companyDrag;
+  if (!drag || (event?.pointerId != null && event.pointerId !== drag.pointerId)) return;
+  if (drag.active && drop) {
+    drag.x = event.clientX;
+    drag.y = event.clientY;
+    updateCompanyDrop(drag);
+  }
+  companyDrag = null;
+  if (!drag.active) return;
+  cancelAnimationFrame(drag.frame);
+  markCompanyDrop(drag, null);
+  railNavEl.classList.remove("is-company-dragging");
+  if (railNavEl.hasPointerCapture(drag.pointerId)) railNavEl.releasePointerCapture(drag.pointerId);
+  if (drop && drag.slot >= 0 && drag.slot !== drag.from) {
+    // Anchor the drop to the companies shown during the gesture, even if one arrived mid-drag.
+    const before = drag.others[drag.slot];
+    const anchor = before ?? drag.others.at(-1);
+    const index = orderedCompanyGroups().filter((group) => group.entity.id !== drag.id)
+      .findIndex((group) => group.entity.id === anchor.dataset.entity);
+    if (index >= 0 && moveCompany(drag.id, index + (before ? 0 : 1))) return;
+  }
+  if (drag.railStale) renderRail();
+}
+
+window.addEventListener("pointerdown", () => { suppressCompanyClick = false; }, true);
+railNavEl.addEventListener("pointerdown", (event) => {
+  const section = companyFromLabel(event.target);
+  if (!section || !navPrefs || companyDrag || !event.isPrimary || event.button !== 0) return;
+  const companies = [...railNavEl.querySelectorAll(".nav-group--entity")];
+  if (companies.length < 2) return;
+  companyDrag = {
+    id: section.dataset.entity, pointerId: event.pointerId,
+    x0: event.clientX, y0: event.clientY, frame: 0,
+    from: companies.indexOf(section), others: companies.filter((group) => group !== section),
+  };
+});
+window.addEventListener("pointermove", (event) => {
+  const drag = companyDrag;
+  if (!drag || drag.pointerId !== event.pointerId) return;
+  if (!(event.buttons & 1)) { finishCompanyDrag(event); return; }
+  if (!drag.active) {
+    if (Math.hypot(event.clientX - drag.x0, event.clientY - drag.y0) < COMPANY_DRAG_THRESHOLD) return;
+    drag.active = true;
+    suppressCompanyClick = true;
+    railNavEl.setPointerCapture(event.pointerId);
+    railNavEl.classList.add("is-company-dragging");
+    hideRailTip();
+  }
+  drag.x = event.clientX;
+  drag.y = event.clientY;
+  cancelAnimationFrame(drag.frame);
+  scrollCompanyDrag(drag, updateCompanyDrop(drag));
+});
+window.addEventListener("pointerup", (event) => finishCompanyDrag(event, true));
+window.addEventListener("pointercancel", finishCompanyDrag);
+window.addEventListener("blur", finishCompanyDrag);
+railNavEl.addEventListener("lostpointercapture", finishCompanyDrag);
+window.addEventListener("click", (event) => {
+  if (!suppressCompanyClick || !event.detail) return;
+  suppressCompanyClick = false;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}, true);
+window.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || !companyDrag?.active) return;
+  finishCompanyDrag();
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}, true);
+railNavEl.addEventListener("keydown", (event) => {
+  if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey ||
+      (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
+  const section = companyFromLabel(event.target);
+  if (!section || !navPrefs || companyDrag?.active) return;
+  event.preventDefault();
+  const id = section.dataset.entity;
+  const index = orderedCompanyGroups().findIndex((group) => group.entity.id === id);
+  if (moveCompany(id, index + (event.key === "ArrowUp" ? -1 : 1))) {
+    document.getElementById("nav-label-" + id)?.scrollIntoView({ block: "nearest" });
+  }
+});
+
 function renderRail() {
   // A rename open in the rail is not torn down under his typing by a turn event's rebuild; the
   // rebuild runs the moment the rename closes (`finishRename`).
@@ -944,6 +1115,11 @@ function renderRail() {
     railStaleWhileRenaming = true;
     return;
   }
+  if (companyDrag?.active) {
+    companyDrag.railStale = true;
+    return;
+  }
+  const focusedCompany = companyFromLabel(document.activeElement);
   railNavEl.innerHTML = "";
 
   const rows = allRows();
@@ -957,7 +1133,7 @@ function renderRail() {
   // Every registered entity gets a row, INCLUDING one with zero threads — §3.1's
   // structure sketch shows `Prospects` as a bare row, and §21's "Empty entity" state only
   // exists if an empty entity is reachable.
-  for (const group of navTree.groups) railNavEl.appendChild(buildEntityGroup(group));
+  for (const group of orderedCompanyGroups()) railNavEl.appendChild(buildEntityGroup(group));
 
   const unbound = navTree.unbound.filter((t) => !t.archived && !t.chat?.later_until);
   if (unbound.length) railNavEl.appendChild(buildUnboundGroup(unbound));
@@ -967,6 +1143,9 @@ function renderRail() {
   if (later.length) railNavEl.appendChild(buildChatShelf("later", "Later", later, "laterList"));
   const archived = rows.filter((t) => t.archived);
   if (archived.length) railNavEl.appendChild(buildArchivedGroup(archived));
+  if (focusedCompany) {
+    document.getElementById("nav-label-" + focusedCompany.dataset.entity)?.focus({ preventScroll: true });
+  }
   keepRailTip();
 }
 
@@ -6579,7 +6758,7 @@ document.addEventListener("contextmenu", (e) => {
   if (!(e.target instanceof Element && e.target.closest(".nav-thread-row"))) closeThreadMenu();
 });
 
-// A pin, archive or rename that could not be saved is SAID, in the rail where he made it
+// A pin, archive, rename or company move that could not be saved is SAID in the rail
 // (nav.rs `persist` refuses over an unreadable navigation file). A success clears the note.
 // Returns whether the change was saved.
 async function saveNavChange(cmd, args) {
@@ -11213,9 +11392,9 @@ function moveListFocus(e, selector) {
   e.preventDefault();
 }
 
-railNavEl.addEventListener("keydown", (e) =>
-  moveListFocus(e, ".nav-group-label.is-selectable, .nav-thread")
-);
+railNavEl.addEventListener("keydown", (e) => {
+  if (!e.defaultPrevented) moveListFocus(e, ".nav-group-label.is-selectable, .nav-thread");
+});
 
 document.addEventListener("keydown", (e) => {
   const mod = e.metaKey || e.ctrlKey;
@@ -11751,6 +11930,7 @@ async function init() {
       output_width: 400,
       sidebar_collapsed: false,
       collapsed_entities: [],
+      company_order: [],
       pinned_threads: [],
       archived_threads: [],
       renamed_threads: {},
