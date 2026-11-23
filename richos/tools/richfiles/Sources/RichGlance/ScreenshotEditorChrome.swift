@@ -79,13 +79,15 @@ final class ScreenshotButton: NSButton {
     var isSelected = false {
         didSet {
             needsDisplay = true
-            if style == .tool || style == .segment {
+            if style == .tool || style == .segment || style == .swatch {
                 setAccessibilityValue(isSelected ? "Selected" : "")
             }
         }
     }
     var style: Style = .outline
     var swatch: NSColor?
+    var sampleWidth: CGFloat?
+    var onHover: ((Bool) -> Void)?
     var onPress: (() -> Void)?
     var onArrow: ((Int) -> Void)?
     private var hover = false
@@ -126,8 +128,8 @@ final class ScreenshotButton: NSButton {
         tracking = area
     }
 
-    override func mouseEntered(with event: NSEvent) { hover = true; needsDisplay = true }
-    override func mouseExited(with event: NSEvent) { hover = false; needsDisplay = true }
+    override func mouseEntered(with event: NSEvent) { hover = true; onHover?(true); needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hover = false; onHover?(false); needsDisplay = true }
 
     override func keyDown(with event: NSEvent) {
         if let onArrow, [123, 124].contains(event.keyCode) {
@@ -182,6 +184,18 @@ final class ScreenshotButton: NSButton {
         ]
         let label = NSAttributedString(string: iconOnly ? "" : title, attributes: attributes)
         let key = keyHint.map { NSAttributedString(string: $0, attributes: attributes) }
+        if let sampleWidth {
+            ink.setFill()
+            let sample = NSRect(x: 12, y: bounds.midY - sampleWidth / 2, width: 98, height: sampleWidth)
+            let radius = sampleWidth >= 4 ? sampleWidth / 2 : 0
+            NSBezierPath(roundedRect: sample, xRadius: radius, yRadius: radius).fill()
+            label.draw(at: CGPoint(x: 124, y: bounds.midY - label.size().height / 2))
+            if selected {
+                draw(screenshotSymbol("checkmark", color: ink),
+                     in: CGRect(x: bounds.maxX - 29, y: bounds.midY - 8, width: 16, height: 16))
+            }
+            return
+        }
         let glyph = symbol.flatMap { screenshotSymbol($0, color: ink, size: style == .tool ? 22 : 17) }
         if style == .tool {
             let glyphSize = min(22, bounds.height - 20)
