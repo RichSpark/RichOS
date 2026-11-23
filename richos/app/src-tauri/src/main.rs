@@ -511,26 +511,35 @@ fn codex_sink(app: AppHandle) -> richos_core::codex_watch::Sink {
         let view=state.reader.snapshot();
         let state_root=state.data_dir.join("engine-state");
         if event["type"] == "automatic" {
+            use richos_core::codex_bridge::ownership;
             let coordination = richos_core::codex_bridge::root();
-            if coordination.join("automatic.json").try_exists().map_err(|e| e.to_string())? {
+            let request = if let Some(locator) = event["locator"].as_str() {
+                let Some(request) = ownership::AutomaticRequest::read(&coordination, Path::new(locator))
+                    .map_err(|e| e.to_string())? else { return Ok(()) };
+                Some(request)
+            } else if event["legacy"] == true {
+                None
+            } else {
+                // A previous verified engine sends a destination request with no provenance.
                 return Ok(());
-            }
-            let configured = state.entity.lock().unwrap().clone();
-            let company = configured.or_else(|| match view.entity_registry().entities() {
-                [only] => Some(only.id.clone()),
-                _ => None,
-            }).ok_or("independent Codex work is saved until a company is available")?;
+            };
+            let company = match &request {
+                Some(request) => request.company(view.entity_registry()),
+                None => ownership::legacy_company(view.entity_registry()),
+            }.ok_or("Codex work is saved until its project has a registered company")?;
             // Keep servicing already addressed channels while a turn owns the spine.
             let mut spine = state.spine.try_lock().map_err(|_| "the conversation ledger is busy")?;
             let (binding, created) = spine.codex_conversation(&company).map_err(|e| e.to_string())?;
             drop(spine);
+            match request {
+                Some(request) => request.bind(&binding),
+                None => ownership::publish_legacy_target(&coordination, &binding),
+            }.map_err(|e| e.to_string())?;
             if created {
                 drop(app.emit("rich://chat-list-changed", ()));
                 tell_the_phone_the_threads(&app);
             }
-            richos_core::codex_bridge::publish_automatic_target(&coordination, &binding)
-                .map_err(|e| e.to_string())?;
-            eprintln!("[richos] Codex watch: automatic destination ready");
+            eprintln!("[richos] Codex watch: project destination ready");
             return Ok(());
         }
         let thread=event["connection"]["thread_id"].as_str().ok_or("no channel conversation")?;
@@ -3356,6 +3365,20 @@ fn main() {
                         }
                     });
                 }
+                let registry_path = richos_core::entity::entity_registry_path(&data_dir);
+                let mut registry_load = EntityRegistry::load(&registry_path);
+                let coordination = richos_core::codex_bridge::root();
+                use richos_core::codex_bridge::ownership;
+                match ownership::repair_legacy_company(&data_dir, &coordination, &registry_load.registry) {
+                    Ok(true) => eprintln!("[richos] Codex ownership repair: thread and delivery state moved"),
+                    Ok(false) => {}
+                    Err(error) => {
+                        eprintln!("[richos] Codex ownership repair held: {error}");
+                        if ownership::legacy_repair_pending(&data_dir, &coordination) {
+                            return Err(error.into());
+                        }
+                    }
+                }
                 let ledger_path = data_dir.join("conversation-ledger.jsonl");
                 let checkpoint_path = data_dir.join("swearmeter-cache");
                 let cards_path = data_dir.join("engine-state/questions/store.json");
@@ -3453,8 +3476,6 @@ fn main() {
                 // It is his own file now. Absent is the ordinary first-run state and yields an
                 // EMPTY registry, which resolves nothing, refuses every root, and makes the app
                 // ASK — the same shape `entity_choice`'s `chosen: None` already had.
-                let registry_path = richos_core::entity::entity_registry_path(&data_dir);
-                let mut registry_load = EntityRegistry::load(&registry_path);
                 for note in &registry_load.notes {
                     eprintln!("[richos] {note}");
                 }

@@ -44,9 +44,50 @@ class Channels(unittest.TestCase):
     def connect(self, scope=None, locator=None):
         return c.connect("Exact user task", "fixture transcript", locator, scope)["locator"]
 
+    def bind_queued_pair(self, locator, scope):
+        path = Path(locator) / "connection.json"
+        c.save(path, dict(c.load(path), binding={key: scope[key] for key in ("entity_id", "thread_id")}))
+
+    def test_independent_work_never_inherits_the_old_automatic_company(self):
+        c.save(c.root() / "automatic.json", self.a)
+        with contextlib.chdir(self.root):
+            path = Path(self.connect())
+        self.assertEqual(path.parent.parent.name, "_automatic")
+        record = c.load(path / "connection.json")
+        self.assertEqual(record["project_dir"], str(self.root.resolve()))
+        self.assertEqual(c.scan(self.a["state_root"]), ([], []))
+
+    def test_cutover_never_associates_with_the_old_automatic_company(self):
+        folder = c.root() / "rich-codex"
+        folder.mkdir(parents=True)
+        (folder / "to-rich.md").write_text("Legacy task\n")
+        c.save(c.root() / "automatic.json", self.a)
+        with mock.patch.object(watcher, "channels", return_value=[str(folder / "to-rich.md")]):
+            watcher.prepare_app_connections(self.a["state_root"])
+        self.assertIsNone(c.legacy_owner(folder))
+
+    def test_old_locator_reopens_the_moved_pair_in_its_registered_scope(self):
+        old = Path(self.connect(self.a))
+        new = c.endpoint(self.b["entity_id"], self.a["thread_id"], old.name)
+        c.mkdir(new.parent)
+        old.rename(new)
+        path = new / "connection.json"
+        c.save(path, dict(c.load(path), entity_id=self.b["entity_id"],
+                          previous_entity_id=self.a["entity_id"]))
+        c.save(c.root() / "legacy-company-move.json",
+               {"version": 1, "from": self.a["entity_id"], "to": self.b["entity_id"],
+                "thread_id": self.a["thread_id"], "complete": True})
+        owner = dict(self.b, thread_id=self.a["thread_id"])
+        c.send(old, "new-reply", "Through the original locator", scope=owner)
+        self.assertEqual(c.read(old)["records"][-1]["message_id"], "new-reply")
+        with self.assertRaisesRegex(ValueError, "belongs to another"):
+            c.read(old, scope=self.a)
+
     def test_pairing_default_and_three_independent_reply_paths(self):
         c.save(c.root() / "automatic.json", self.a)
         x, y = self.connect(), self.connect()
+        self.bind_queued_pair(x, self.a)
+        self.bind_queued_pair(y, self.a)
         z = self.connect(self.b)
         for p in (x, y, z):
             c.send(p, "first", "independent input")
@@ -65,16 +106,17 @@ class Channels(unittest.TestCase):
         first = self.connect()
         c.send(first, "hello", "First automatic message")
         self.assertEqual(c.scan(self.a["state_root"]), ([], []))
-        c.save(c.root() / "automatic.json", self.a)
-        c.bind_automatic(self.a)
+        self.assertEqual(list(c.automatic_requests()), [dict(type="automatic", locator=first)])
+        self.bind_queued_pair(first, self.a)
         second = self.connect()
+        self.bind_queued_pair(second, self.b)
         self.assertNotEqual(first, second)
         self.assertEqual(c.connection(first)[1]["thread_id"], "chat-a")
-        self.assertEqual(c.connection(second)[1]["thread_id"], "chat-a")
+        self.assertEqual(c.connection(second)[1]["thread_id"], "chat-b")
         events, errors = c.scan(self.a["state_root"])
         self.assertFalse(errors)
-        self.assertEqual(events[0]["locator"], first)
-        self.assertEqual(events[0]["connection"]["thread_id"], "chat-a")
+        self.assertEqual({event["locator"]: event["connection"]["thread_id"] for event in events},
+                         {first: "chat-a", second: "chat-b"})
         c.send(first, "ack", "First only", scope=self.a)
         self.assertEqual(c.read(second)["records"], [])
 
@@ -433,12 +475,12 @@ else:
         self.assertIn(after, prompts[1])
 
     def test_automatic_association_keeps_legacy_replies_live(self):
-        old = self.root / "legacy-live"
-        old.mkdir()
+        old = c.root() / "rich-codex"
+        old.mkdir(parents=True)
         raw = old / "to-rich.md"
         raw.touch()
         state = Path(self.a["state_root"])
-        c.save(c.root() / "automatic.json", self.a)
+        c.save(c.root() / "legacy-target.json", self.a)
         with mock.patch.dict(os.environ, {"CODEX_WATCH_CHANNELS": str(raw),
                                          "CODEX_WATCH_STATE_DIR": str(self.root / "terminal-watch")}):
             terminal = io.StringIO()
@@ -755,7 +797,6 @@ c.send(locator, ident, 'recover original request')
         self.assertEqual(monitor_output(), "", "history alone should not request a destination")
         self.assertEqual(c.load(watch / "app-host/live-offsets.json")[str(raw)]["offset"], raw.stat().st_size)
         health = state / "codex-watch/health.json"
-        c.save(c.root() / "automatic.json", self.a)
         c.associate_legacy(self.a, [old])
         _, endpoint = c.legacy_owner(old)
         receipt = state / "codex-watch/accepted" / (endpoint["connection_id"] + ".json")
@@ -767,10 +808,12 @@ c.send(locator, ident, 'recover original request')
         self.assertEqual(outgoing.read_text().count("## RICHOS CHANNEL MIGRATION"), 1)
         self.assertEqual(set(c.load(health)), {"at_ms", "waiting", "held"})
         self.assertFalse(c.load(health)["waiting"])
+        c.save(health.with_name("ownership-health.json"), dict(at_ms=12, outcome="moved", private="fixture"))
         with raw.open("a") as f:
             f.write("## New entry\nNew Codex message\n")
         emitted = [json.loads(line) for line in monitor_output().splitlines()]
         self.assertEqual([row["type"] for row in emitted], ["legacy_append"])
+        self.assertEqual(c.load(health)["ownership_repair"], dict(at_ms=12, outcome="moved"))
         self.assertIn("New Codex message", emitted[0]["text"])
         self.assertNotIn("Old archived message", emitted[0]["text"])
         # The native watcher stores the live append before the next scan.

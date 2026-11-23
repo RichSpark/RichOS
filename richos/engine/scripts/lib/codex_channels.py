@@ -153,7 +153,14 @@ def connection(locator, scope=None):
     path = Path(locator).absolute()
     if path.name == "connection.json":
         path = path.parent
-    record = load(path / "connection.json")
+    try:
+        record = load(path / "connection.json")
+    except FileNotFoundError:
+        previous_entity = path.parent.parent.name
+        path = moved_locator(path)
+        record = load(path / "connection.json")
+        if record.get("previous_entity_id") != previous_entity:
+            raise ValueError("Connection does not match its original locator")
     if type(record.get("version")) is not int or record["version"] != VERSION:
         raise ValueError("Unsupported connection version")
     if record.get("legacy_folder") is not None:
@@ -177,6 +184,18 @@ def connection(locator, scope=None):
     if scope and (record["entity_id"], record["thread_id"]) != (scope["entity_id"], scope["thread_id"]):
         raise ValueError("Connection belongs to another company or conversation")
     return path, record
+
+
+def moved_locator(path):
+    # Existing handoffs and inbox receipts keep the locators they were issued with.
+    try:
+        move = load(root() / "legacy-company-move.json")
+        old = endpoint(move["from"], move["thread_id"], path.name)
+        if move.get("version") == VERSION and path == old:
+            return endpoint(move["to"], move["thread_id"], path.name)
+    except (FileNotFoundError, KeyError, ValueError):
+        pass
+    return path
 
 
 def registered(entity="*", thread="*", ident="*"):
@@ -251,29 +270,23 @@ def handoff(path):
             % (path, helper))
 
 
-def automatic_target():
+def legacy_target():
     try:
-        target = load(root() / "automatic.json")
+        target = load(root() / "legacy-target.json")
     except FileNotFoundError:
         return None
     if type(target.get("version")) is not int or target["version"] != VERSION:
-        raise ValueError("Invalid automatic Codex destination version")
+        raise ValueError("Invalid legacy Codex destination version")
     if component(target.get("entity_id")) in (AUTOMATIC, TERMINAL):
-        raise ValueError("Invalid automatic Codex company")
+        raise ValueError("Invalid legacy Codex company")
     component(target.get("thread_id"))
     return target
 
 
-def bind_automatic(target):
-    # Only the app receiver calls this. Its receiver lock fences other hosts.
+def automatic_requests():
     for path, record in registered(AUTOMATIC, "codex"):
         if record["entity_id"] == AUTOMATIC:
-            save(path / "connection.json", dict(record, binding={
-                "entity_id": target["entity_id"], "thread_id": target["thread_id"]}))
-
-
-def automatic_waiting():
-    return any(record["entity_id"] == AUTOMATIC for _, record in registered(AUTOMATIC, "codex"))
+            yield dict(type="automatic", locator=str(path))
 
 
 def terminal_scope(project, session=""):
@@ -311,6 +324,13 @@ def terminal_connections(session):
         yield from registered(TERMINAL, component(session))
 
 
+def work_directory():
+    try:
+        return dict(project_dir=os.getcwd())
+    except OSError:
+        return {}
+
+
 def connect(text, provenance, locator=None, scope=None, terminal_session=None):
     if not text.strip() or not provenance.strip():
         raise ValueError("Supply the original task text and its provenance")
@@ -323,7 +343,7 @@ def connect(text, provenance, locator=None, scope=None, terminal_session=None):
     elif terminal_session is not None:
         target = dict(entity_id=TERMINAL, thread_id=component(terminal_session))
     else:
-        target = automatic_target() or dict(entity_id=AUTOMATIC, thread_id="codex")
+        target = dict(entity_id=AUTOMATIC, thread_id="codex", **work_directory())
     ident = uuid.uuid4().hex
     p = endpoint(target["entity_id"], target["thread_id"], ident)
     mkdir(p)
@@ -334,6 +354,8 @@ def connect(text, provenance, locator=None, scope=None, terminal_session=None):
             f.flush()
             os.fsync(f.fileno())
     record = dict(version=VERSION, entity_id=target["entity_id"], thread_id=target["thread_id"], connection_id=ident)
+    if target["entity_id"] == AUTOMATIC and "project_dir" in target:
+        record["project_dir"] = target["project_dir"]
     direction = "to-codex" if scope or terminal_session is not None else "to-rich"
     append(p / (direction + ".jsonl"), dict(version=VERSION, message_id="task-context", kind="task_context",
            text=text, provenance=provenance))
