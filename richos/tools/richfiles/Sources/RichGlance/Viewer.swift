@@ -74,7 +74,7 @@ final class Viewer {
             request.record(.glanceViewerEdit, .unavailable)
             return
         }
-        let document = ScreenshotDocument(original: image, scale: 1, kind: .image, id: imageID,
+        let document = ScreenshotDocument(original: image, scale: canvas.imageScale, kind: .image, id: imageID,
                                           name: file.deletingPathExtension().lastPathComponent, sourceFile: file)
         openEditor(document)
         // The editor may present its existing leave sheet before installing the image.
