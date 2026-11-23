@@ -549,6 +549,7 @@ pub fn main(context: tauri::Context<tauri::Wry>, args: &[String]) -> i32 {
     ));
     log::line(&runtime_note);
 
+    let ownership_data_dir = data_dir.clone();
     let builder = tauri::Builder::default()
         .manage(UiTx(Mutex::new(ui_tx.clone())))
         .invoke_handler(tauri::generate_handler![
@@ -566,8 +567,9 @@ pub fn main(context: tauri::Context<tauri::Wry>, args: &[String]) -> i32 {
                 log::line(&why);
             }
             let handle = app.handle().clone();
-            if let Err(why) = bar::build(&handle, kind) {
-                log::line(&why);
+            match bar::build(&handle, kind) {
+                Ok(()) => bar::start_webkit_ownership(handle.clone(), ownership_data_dir.clone()),
+                Err(why) => log::line(&why),
             }
             if let Some(menu) = app.get_webview_window(MENU) {
                 // The menu closes when it loses the keyboard: a click anywhere else.

@@ -136,6 +136,8 @@ fn run(store: Store, quiet: bool) {
             engine.expire();
             engine.interrupted_sends_not_sent();
             engine.start_outbox();
+            #[cfg(target_os = "macos")]
+            start_memory_sampler(&home());
             if !quiet {
                 open_window(&handle, None);
             }
@@ -154,6 +156,43 @@ fn run(store: Store, quiet: bool) {
         }
         _ => {}
     });
+}
+
+/// Start the minute sampler for the life of the menu bar process.
+#[cfg(target_os = "macos")]
+fn start_memory_sampler(home: &std::path::Path) {
+    use richos_core::suite_memory::Recorder;
+    use std::time::{Duration, Instant};
+
+    let state = home.join("Library/Application Support")
+        .join(richdoctor_core::RICHOS_IDENTIFIER)
+        .join("engine-state");
+    let spawn = std::thread::Builder::new().name("suite-memory".into()).spawn(move || {
+        let mut recorder = None;
+        let mut last_error = None;
+        loop {
+            let started = Instant::now();
+            let result = match recorder.as_mut() {
+                Some(recorder) => Recorder::tick(recorder),
+                None => Recorder::open(&state).and_then(|mut opened| {
+                    let result = opened.tick();
+                    recorder = Some(opened);
+                    result
+                }),
+            };
+            let error = result.err();
+            if error != last_error {
+                if let Some(message) = &error {
+                    eprintln!("[richdoctor] suite memory: {message}");
+                }
+                last_error = error;
+            }
+            std::thread::sleep(Duration::from_secs(60).saturating_sub(started.elapsed()));
+        }
+    });
+    if let Err(error) = spawn {
+        eprintln!("[richdoctor] could not start suite memory sampler: {error}");
+    }
 }
 
 /// Show the help window (making it if needed), optionally on a screen ("saved").
