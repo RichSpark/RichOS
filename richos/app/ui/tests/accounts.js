@@ -64,11 +64,20 @@ async function bounded(work, ms, message) {
 // Each case drives its own page. Limit the number of active renderers while
 // overlapping independent navigation and action waits.
 async function runCases(cases, work) {
-  const batchSize = 3;
   const results = [];
-  for (let i = 0; i < cases.length; i += batchSize) {
-    results.push(...await Promise.all(cases.slice(i, i + batchSize).map(work)));
-  }
+  let next = 0;
+  let failed = false;
+  await Promise.all(Array.from({ length: Math.min(3, cases.length) }, async () => {
+    while (!failed && next < cases.length) {
+      const index = next++;
+      try {
+        results[index] = await work(cases[index]);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
+    }
+  }));
   return results;
 }
 
@@ -769,7 +778,13 @@ function planChecks(run, browser) {
     ["menu-moving", two([64, 99], [6, 4], { inUse: "1", working: { "1": ["team"], "2": ["rich"] }, moving: { from: "1", to: "2", blocked: false } }), async p => { await menu(p); await p.waitForFunction(() => document.querySelector("#set-accounts-state.is-attention")); }],
     ["blocked", two([64, 99], [6, 4], { inUse: "1", working: { "1": ["team"] }, moving: { from: "1", to: "2", blocked: true } }), sheet],
     ["menu-blocked", two([64, 99], [6, 4], { inUse: "1", working: { "1": ["team"] }, moving: { from: "1", to: "2", blocked: true } }), async p => { await menu(p); await p.waitForFunction(() => document.querySelector("#set-accounts-state.is-attention")); }],
-    ["choice-saved", two([58, 72], [0, 12]), async p => { await sheet(p); await p.click("#acc-five-pause"); await p.waitForSelector(".acc-saved"); }],
+    ["choice-saved", two([58, 72], [0, 12]), async p => {
+      await sheet(p);
+      // Keep the real 1.8s confirmation on screen across the three measurements.
+      await p.clock.pauseAt(await p.evaluate(() => Date.now() + 1000));
+      await p.click("#acc-five-pause");
+      await p.waitForSelector(".acc-saved");
+    }, { clock: true }],
     ["menu-switched", two([64, 99], [6, 4], { inUse: "2", lastSwitch: { from: "1", to: "2", at: now - 3 * 60000, why: "weekly", used: 99 } }), async p => { await menu(p); await p.waitForFunction(() => document.querySelector("#set-accounts-state.is-attention")); }],
     ["chat-nudge", one(86, 47), async p => { await onThread(p); await say(p, "nudge", "Your Claude account has used **86%** of this week's limit.");
       await p.waitForSelector('[data-note-act="add"]'); }],
@@ -784,92 +799,119 @@ function planChecks(run, browser) {
   const ROOTS = "#accounts-sheet:not([hidden]) .acc-panel, #set-accounts-open, .acc-note-slot";
   // Declared skippable (style.css's own note): the 14px "Settings" breadcrumb over the 32px title.
   const SKIPPABLE = ".acc-eyebrow";
-  async function auditState(theme, [name, fixture, drive, opts], viewport) {
-    const state = `${theme} ${name} ${viewport.width}`;
+  const regular = { width: 1440, height: 900 };
+  const minimum = { width: 1024, height: 700 };
+
+  async function measureState(page, name, theme, { width, height }) {
+    if (name === "choice-saved") assert(await page.locator(".acc-saved").isVisible(), "the confirmation is still present");
+    const state = `${theme} ${name} ${width}`;
+    const result = await page.evaluate(async ({ ROOTS, SKIPPABLE }) => {
+      await document.fonts.ready;
+      // Inspect the normal CSS at its settled endpoint. Waiting for every
+      // wall-clock animation on every fixture repeats the same entrances.
+      for (const animation of document.getAnimations()) {
+        if (animation.effect && animation.playState !== "finished" && Number.isFinite(animation.effect.getComputedTiming().endTime)) {
+          animation.finish();
+        }
+      }
+      const C = window.__contrastMath, failures = [], dashes = [];
+      let worst = 99, nodes = 0;
+      const ground = el => { let bg = { r: 0, g: 0, b: 0, a: 0 }; const chain = []; for (let p = el; p; p = p.parentElement) chain.unshift(p);
+        for (const p of chain) bg = C.compositeOver(C.parseCssColor(getComputedStyle(p).backgroundColor), bg); return bg; };
+      for (const root of document.querySelectorAll(ROOTS)) {
+        if (!root.getClientRects().length) continue;
+        if (/[–—]/.test(root.innerText)) dashes.push(root.innerText.match(/.{0,30}[–—].{0,30}/)[0]);
+        for (const e of [root, ...root.querySelectorAll("*")]) {
+          if (!e.getClientRects().length || e.closest("[hidden]")) continue;
+          const own = [...e.childNodes].some(n => n.nodeType === Node.TEXT_NODE && n.textContent.trim());
+          if (!own && e.tagName !== "INPUT") continue;
+          const style = getComputedStyle(e), bg = ground(e), fg = C.compositeOver(C.parseCssColor(style.color), bg);
+          const size = parseFloat(style.fontSize), large = size >= 24 || size >= 18.66 && parseInt(style.fontWeight) >= 700;
+          const ratio = C.round2(C.contrastRatio(fg, bg)); nodes++;
+          worst = Math.min(worst, ratio);
+          if (ratio < (large ? 3 : 4.5)) failures.push({ text: (e.value || e.textContent).trim().slice(0, 50), ratio });
+          if (size < 16 && !e.closest(SKIPPABLE)) failures.push({ text: e.textContent.trim().slice(0, 50), size });
+        }
+        // Non-text indicators, 3:1 against the ground they sit on: the in-use spine and border,
+        // the meters' fill, the radio ring, the mini bar, a pill's ring.
+        // A bar's fill is read against the card or row it sits on, not against its own track.
+        for (const sel of [".acc-card.is-inuse .acc-spine", ".acc-meter-bar b", ".acc-radio", ".acc-mini i", ".acc-pill i", ".acc-btn:not(.acc-btn-quiet):not(.acc-btn-primary)"]) {
+          for (const e of root.querySelectorAll(sel)) {
+            if (!e.getClientRects().length) continue;
+            const cs = getComputedStyle(e);
+            const paint = cs.backgroundColor !== "rgba(0, 0, 0, 0)" ? cs.backgroundColor : cs.borderTopColor;
+            const on = e.matches(".acc-meter-bar b, .acc-mini i") ? e.parentElement.parentElement : e.parentElement;
+            const bg = ground(on), ratio = C.round2(C.contrastRatio(C.compositeOver(C.parseCssColor(paint), bg), bg));
+            if (ratio < 3) failures.push({ indicator: sel, ratio });
+          }
+        }
+      }
+      const body = document.querySelector("#accounts-sheet:not([hidden]) .acc-body");
+      const sideways = body ? body.scrollWidth > body.clientWidth + 1 : false;
+      // These controls are settled. Scroll each in WebKit and read its
+      // visibility here so every control does not require two browser replies.
+      const outOfReach = [];
+      const scroll = [window.scrollX, window.scrollY, body?.scrollLeft, body?.scrollTop];
+      const controls = document.querySelectorAll("#accounts-sheet:not([hidden]) button, #accounts-sheet:not([hidden]) input");
+      for (const [i, control] of controls.entries()) {
+        control.scrollIntoViewIfNeeded();
+        const box = control.getBoundingClientRect();
+        const visible = getComputedStyle(control).visibility === "visible" && box.width > 0 && box.height > 0;
+        const inView = box.right > 0 && box.bottom > 0 && box.left < innerWidth && box.top < innerHeight;
+        if (!visible || !inView) outOfReach.push(i);
+      }
+      window.scrollTo(scroll[0], scroll[1]);
+      if (body) body.scrollTo(scroll[2], scroll[3]);
+      return { failures, dashes, worst, nodes, sideways, outOfReach,
+        theme: document.documentElement.dataset.theme, width: innerWidth, height: innerHeight };
+    }, { ROOTS, SKIPPABLE });
+    assertEqual([result.theme, result.width, result.height], [theme, width, height], `${state}: rendered theme and viewport`);
+    assertEqual(result.failures, [], `${state}: contrast and type`);
+    assertEqual(result.dashes, [], `${state}: no m-dash or n-dash`);
+    assert(!result.sideways, `${state}: never scrolls sideways`);
+    assert(result.nodes > 0, `${state}: EMPTY INVENTORY`);
+    assertEqual(result.outOfReach, [], `${state}: controls out of reach after scrolling`);
+    return result.worst;
+  }
+
+  async function auditState([name, fixture, drive, opts]) {
+    let surface = "dark at 1440px";
     try {
       return await bounded(async () => {
-        const page = await open(theme, fixture, { ...opts, viewport });
+        // Drive this exact account state once. The app's theme and viewport
+        // can change with the sheet or conversation still open.
+        const page = await open("dark", fixture, { ...opts, viewport: regular });
         await drive(page);
-        const result = await page.evaluate(async ({ ROOTS, SKIPPABLE }) => {
-          await document.fonts.ready;
-          // Inspect the normal CSS at its settled endpoint. Waiting for every
-          // wall-clock animation on every fixture repeats the same entrances.
-          for (const animation of document.getAnimations()) {
-            if (animation.effect && animation.playState !== "finished" && Number.isFinite(animation.effect.getComputedTiming().endTime)) {
-              animation.finish();
-            }
-          }
-          const C = window.__contrastMath, failures = [], dashes = [];
-          let worst = 99, nodes = 0;
-          const ground = el => { let bg = { r: 0, g: 0, b: 0, a: 0 }; const chain = []; for (let p = el; p; p = p.parentElement) chain.unshift(p);
-            for (const p of chain) bg = C.compositeOver(C.parseCssColor(getComputedStyle(p).backgroundColor), bg); return bg; };
-          for (const root of document.querySelectorAll(ROOTS)) {
-            if (!root.getClientRects().length) continue;
-            if (/[–—]/.test(root.innerText)) dashes.push(root.innerText.match(/.{0,30}[–—].{0,30}/)[0]);
-            for (const e of [root, ...root.querySelectorAll("*")]) {
-              if (!e.getClientRects().length || e.closest("[hidden]")) continue;
-              const own = [...e.childNodes].some(n => n.nodeType === Node.TEXT_NODE && n.textContent.trim());
-              if (!own && e.tagName !== "INPUT") continue;
-              const style = getComputedStyle(e), bg = ground(e), fg = C.compositeOver(C.parseCssColor(style.color), bg);
-              const size = parseFloat(style.fontSize), large = size >= 24 || size >= 18.66 && parseInt(style.fontWeight) >= 700;
-              const ratio = C.round2(C.contrastRatio(fg, bg)); nodes++;
-              worst = Math.min(worst, ratio);
-              if (ratio < (large ? 3 : 4.5)) failures.push({ text: (e.value || e.textContent).trim().slice(0, 50), ratio });
-              if (size < 16 && !e.closest(SKIPPABLE)) failures.push({ text: e.textContent.trim().slice(0, 50), size });
-            }
-            // Non-text indicators, 3:1 against the ground they sit on: the in-use spine and border,
-            // the meters' fill, the radio ring, the mini bar, a pill's ring.
-            // A bar's fill is read against the card or row it sits on, not against its own track.
-            for (const sel of [".acc-card.is-inuse .acc-spine", ".acc-meter-bar b", ".acc-radio", ".acc-mini i", ".acc-pill i", ".acc-btn:not(.acc-btn-quiet):not(.acc-btn-primary)"]) {
-              for (const e of root.querySelectorAll(sel)) {
-                if (!e.getClientRects().length) continue;
-                const cs = getComputedStyle(e);
-                const paint = cs.backgroundColor !== "rgba(0, 0, 0, 0)" ? cs.backgroundColor : cs.borderTopColor;
-                const on = e.matches(".acc-meter-bar b, .acc-mini i") ? e.parentElement.parentElement : e.parentElement;
-                const bg = ground(on), ratio = C.round2(C.contrastRatio(C.compositeOver(C.parseCssColor(paint), bg), bg));
-                if (ratio < 3) failures.push({ indicator: sel, ratio });
-              }
-            }
-          }
-          const body = document.querySelector("#accounts-sheet:not([hidden]) .acc-body");
-          const sideways = body ? body.scrollWidth > body.clientWidth + 1 : false;
-          // These controls are settled. Scroll each in WebKit and read its
-          // visibility here so every control does not require two browser replies.
-          const outOfReach = [];
-          const controls = document.querySelectorAll("#accounts-sheet:not([hidden]) button, #accounts-sheet:not([hidden]) input");
-          for (const [i, control] of controls.entries()) {
-            control.scrollIntoViewIfNeeded();
-            const box = control.getBoundingClientRect();
-            const visible = getComputedStyle(control).visibility === "visible" && box.width > 0 && box.height > 0;
-            const inView = box.right > 0 && box.bottom > 0 && box.left < innerWidth && box.top < innerHeight;
-            if (!visible || !inView) outOfReach.push(i);
-          }
-          return { failures, dashes, worst, nodes, sideways, outOfReach };
-        }, { ROOTS, SKIPPABLE });
-        assertEqual(result.failures, [], `${state}: contrast and type`);
-        assertEqual(result.dashes, [], `${theme} ${name}: no m-dash or n-dash`);
-        assert(!result.sideways, `${state}: never scrolls sideways`);
-        assert(result.nodes > 0, `${theme} ${name}: EMPTY INVENTORY`);
-        assertEqual(result.outOfReach, [], `${state}: controls out of reach after scrolling`);
+        const dark = await measureState(page, name, "dark", regular);
+
+        const applyTheme = theme => page.evaluate(theme => {
+          window.RichTheme.setTheme(theme);
+          // As in open(), include Settings while Home's dark clamp is active.
+          document.documentElement.setAttribute("data-theme", theme);
+        }, theme);
+        surface = "light at 1440px";
+        await applyTheme("light");
+        const light = await measureState(page, name, "light", regular);
+
+        surface = "dark at 1024px";
+        await applyTheme("dark");
+        await page.setViewportSize(minimum);
+        await measureState(page, name, "dark", minimum);
+        await page.setViewportSize(regular);
         await release(page);
-        return viewport.width === 1440 ? `${name} ${result.worst}:1` : null;
+        return { name, dark, light };
       }, CHECK_LIMIT_MS, "WebKit did not finish the state audit within 45s"); // load-bound: hang guard for renderer replies
     } catch (error) {
-      throw new Error(`${state}: ${error.message}`, { cause: error });
+      throw new Error(`${name}, ${surface}: ${error.message}`, { cause: error });
     }
   }
 
-  for (const theme of ["dark", "light"]) {
-    run.check(theme + ": every round 18 state meets AA contrast and the type floor, fits, and carries no m-dash or n-dash", async () => {
-      // Contrast in both themes at 1440 by 900 and fit at the minimum window
-      // once. The layout is shared by both themes.
-      const viewports = [{ width: 1440, height: 900 }];
-      if (theme === "dark") viewports.push({ width: 1024, height: 700 });
-      const cases = STATES.flatMap(state => viewports.map(viewport => [state, viewport]));
-      const measured = await runCases(cases, ([state, viewport]) => auditState(theme, state, viewport));
-      return "worst text per state: " + measured.filter(Boolean).join(", ");
-    }, { serial: true });
-  }
+  run.check("every round 18 state in dark and light meets AA contrast and the type floor, fits, and carries no m-dash or n-dash", async () => {
+    const measured = await runCases(STATES, auditState);
+    return ["dark", "light"].map(theme =>
+      `${theme} worst text per state: ${measured.map(result => `${result.name} ${result[theme]}:1`).join(", ")}`
+    ).join("\n          ");
+  }, { serial: true });
 
   run.check("no renderer errors", async () => assertEqual(errors, []), { serial: true });
 }
