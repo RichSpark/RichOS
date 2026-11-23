@@ -2,12 +2,12 @@ import AppKit
 import Carbon.HIToolbox
 
 public enum DesktopTrashShortcut {
-    /// Return Finder's Move to Trash key only for its focused native Desktop selection.
-    public static func replacement(for event: CGEvent, hasDesktopSelection: () -> Bool) -> CGEvent? {
+    /// Return Finder's Move to Trash key only for its focused native Desktop icon view.
+    public static func replacement(for event: CGEvent, desktopHasFocus: () -> Bool) -> CGEvent? {
         let modifiers: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift]
         guard event.type == .keyDown, event.getIntegerValueField(.keyboardEventKeycode) == kVK_ForwardDelete,
               event.flags.intersection(modifiers).isEmpty,
-              event.getIntegerValueField(.keyboardEventAutorepeat) == 0, hasDesktopSelection() else { return nil }
+              event.getIntegerValueField(.keyboardEventAutorepeat) == 0, desktopHasFocus() else { return nil }
 
         // An explicit Unicode payload turns the event into text input. Even
         // replacing U+F728 with U+007F leaves Finder ignoring the menu shortcut.

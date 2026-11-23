@@ -409,8 +409,10 @@ final class GestureController {
             // Exclude Finder windows, Quick Look and inline filename editing.
             guard let window = finder.element(kAXFocusedWindowAttribute), window.role == kAXScrollAreaRole,
                   let focused = finder.element(kAXFocusedUIElementAttribute), focused.role == kAXGroupRole,
-                  focused.element(kAXParentAttribute) == window,
-                  let selected: [AXUIElement] = focused.value(kAXSelectedChildrenAttribute), !selected.isEmpty else { return false }
+                  focused.element(kAXParentAttribute) == window else { return false }
+            // Finder processes the click before the key. AXSelectedChildren can
+            // still be empty here when Del immediately follows the first click.
+            // Let the native command use Finder's selection at delivery.
             return NSWorkspace.shared.frontmostApplication == app
         }
         if replacement != nil { record(.desktopDeleteShortcut, .complete, started: started) }
