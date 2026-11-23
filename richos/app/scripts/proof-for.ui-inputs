@@ -135,6 +135,7 @@ accounts.js             @shell richos/app/ui/accounts.js richos/app/ui/settings-
 resources.js            @shell richos/app/ui/resources.js richos/app/ui/mock.js
 chat-list.js            @shell richos/app/ui/chat-list.js richos/app/ui/chat-list.css richos/app/ui/settings-button.js richos/app/src-tauri/src/chat_list.rs richos/app/src-tauri/src/chat_notifications.rs
 nav-rail.js             @shell richos/app/ui/richfiles-page.js richos/app/ui/richpass-page.js richos/app/ui/richpass.js richos/app/ui/nav-rail.js richos/app/ui/resources.js richos/app/ui/dictation.js richos/app/ui/bug-report.js richos/app/ui/settings-button.js richos/app/ui/home.js richos/app/ui/cleaner-settings.js richos/app/ui/mock.js
+app-title-alignment.js  @shell richos/app/ui/theme-boot.js richos/app/ui/nav-rail.js richos/app/ui/richfiles-page.js richos/app/ui/richpass-page.js richos/app/ui/meeting-notes.js richos/app/ui/dictation.js richos/app/ui/cleaner-settings.js richos/app/ui/glance-capture-settings.js richos/app/ui/settings-button.js richos/app/ui/mock.js richos/app/ui/cleaner.html richos/app/ui/cleaner.js richos/app/ui/cleaner.css richos/app/ui/fonts/ richos/app/ui/assets/app-icons/
 dictation.js            @shell richos/app/ui/dictation.js richos/app/ui/settings-button.js richos/app/ui/mock.js
 bug-report.js           @shell richos/app/ui/bug-report.js richos/app/ui/settings-button.js richos/app/ui/timeline.js richos/app/ui/mock.js @allui
 meeting-notes.js        @shell richos/app/ui/meeting-notes.js richos/app/ui/settings-button.js richos/app/ui/mock.js
