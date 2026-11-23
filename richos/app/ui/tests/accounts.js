@@ -6,6 +6,7 @@
 // (where there is no row, no sheet and no buttons under Rich's lines), then every state of the
 // round in both themes for contrast, type size and fit, computed in WebKit.
 const path = require("path");
+const { pathToFileURL } = require("node:url");
 const contrast = require("./lib/contrast");
 const { loadPlaywright, createRun, assert, assertEqual, UI_DIR, leaveHome } = require("./lib/harness");
 
@@ -41,28 +42,97 @@ function idleSignedIn(inUse, idle) {
   return quota;
 }
 
-async function main() {
-  const run = createRun("Claude accounts for everyone (round 18)");
-  const browser = await loadPlaywright().webkit.launch();
+// Playwright's action timeout does not cover evaluate() or a stalled browser close.
+// Bound those waits on the Node side so the suite can report even if WebKit cannot reply.
+const SUITE_LIMIT_MS = 240_000;
+const CHECK_LIMIT_MS = 45_000;
+const CLOSE_LIMIT_MS = 3_000;
+const CHECK_FAILED = Symbol("accounts check failed");
+
+async function bounded(work, ms, message) {
+  let timer;
+  try {
+    return await Promise.race([
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), Math.max(0, ms)); }),
+      Promise.resolve().then(work),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Each case drives its own page. Limit the number of active renderers while
+// overlapping independent navigation and action waits.
+async function runCases(cases, work, concurrency) {
+  const results = [];
+  let next = 0;
+  let failed = false;
+  await Promise.all(Array.from({ length: Math.min(concurrency, cases.length) }, async () => {
+    while (!failed && next < cases.length) {
+      const index = next++;
+      try {
+        results[index] = await work(cases[index]);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
+    }
+  }));
+  return results;
+}
+
+function planChecks(run, browser) {
   const errors = [];
+  const idleByViewport = new Map();
+  const pagePools = new WeakMap();
+  let fixtureId = 0;
+
   async function open(theme, quota, opts = {}) {
-    const page = await browser.newPage({ viewport: opts.viewport || { width: 1440, height: 900 }, locale: "en-US" });
-    // `opts.clock`: the page runs on Playwright's clock from its first script; it keeps pace with
-    // real time until a check pauses it (as tests/home.js does).
-    if (opts.clock) await page.clock.install();
-    page.setDefaultTimeout(30000); // load-bound: a hang guard only; every wait below waits for a fact
-    page.on("pageerror", e => errors.push(String(e)));
-    await page.addInitScript(({ theme, quota, signIn, policy, emails, moveWaits }) => {
-      localStorage.setItem("richos-theme", theme);
-      localStorage.setItem("richos-mock-config", JSON.stringify({ theme, font_scale: 100 }));
-      localStorage.setItem("richos-mock-quota-policy", JSON.stringify(policy || { enabled: false, pausePercent: 93 }));
-      window.__RICHOS_MOCK_PRESET__ = { quota, signIn, emails, moveWaits };
-    }, { theme, quota, signIn: opts.signIn || [], policy: opts.policy, emails: opts.emails || {}, moveWaits: opts.moveWaits || null });
-    await page.goto("file://" + path.join(UI_DIR, "index.html"));
+    const viewport = opts.viewport || { width: 1440, height: 900 };
+    const key = `${viewport.width}x${viewport.height}`;
+    if (!idleByViewport.has(key)) idleByViewport.set(key, []);
+    const pool = idleByViewport.get(key);
+    let page = opts.clock ? null : pool.pop();
+    if (!page) {
+      page = await browser.newPage({ viewport, locale: "en-US" });
+      // Keep the virtual clock confined to its own page and browser context.
+      if (opts.clock) await page.clock.install();
+      else pagePools.set(page, pool);
+      page.setDefaultTimeout(30000); // load-bound: a hang guard only; every wait below waits for a fact
+      page.on("pageerror", error => errors.push(String(error)));
+      await page.addInitScript(() => {
+        const fixture = new URLSearchParams(location.search).get("accountsFixture");
+        if (!fixture) return;
+        const { theme, quota, signIn, policy, emails, moveWaits } = JSON.parse(fixture);
+        // Each navigation starts a new document and mock bridge. Clear this
+        // context's storage as well so an earlier fixture cannot seed this one.
+        localStorage.clear();
+        sessionStorage.clear();
+        // The real reload path still opens Home and skips the startup splash,
+        // which would hide Settings while it plays.
+        window.__RICHOS_LAUNCH__ = Object.freeze({ kind: "reload" });
+        localStorage.setItem("richos-theme", theme);
+        localStorage.setItem("richos-mock-config", JSON.stringify({ theme, font_scale: 100 }));
+        localStorage.setItem("richos-mock-quota-policy", JSON.stringify(policy || { enabled: false, pausePercent: 93 }));
+        window.__RICHOS_MOCK_PRESET__ = { quota, signIn, emails, moveWaits };
+      });
+      await page.addInitScript({ content: contrast.pageScript() });
+    }
+    const url = pathToFileURL(path.join(UI_DIR, "index.html"));
+    url.searchParams.set("accountsFixture", JSON.stringify({
+      theme, quota, signIn: opts.signIn || [], policy: opts.policy, emails: opts.emails || {}, moveWaits: opts.moveWaits || null,
+    }));
+    url.searchParams.set("fixtureId", String(++fixtureId));
+    await page.goto(url.href, { waitUntil: "domcontentloaded" });
     await page.waitForSelector("#set-btn");
-    await page.evaluate(() => window.RichSplash.yieldNow("accounts-test"));
     await page.evaluate(t => document.documentElement.setAttribute("data-theme", t), theme);
     return page;
+  }
+
+  async function release(page) {
+    const pool = pagePools.get(page);
+    if (pool) pool.push(page);
+    else await page.close();
   }
   const menu = async page => { await page.click("#set-btn"); await page.waitForSelector("#set-accounts-open"); };
   async function sheet(page) {
@@ -82,7 +152,7 @@ async function main() {
   const clock = t => new Date(Math.round(t / 60000) * 60000).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 
   // ---- 1. the row, for everyone ----------------------------------------------------------
-  await run.check("the row: Claude accounts is in Settings with Technical view off, in the place of the old account row, with its plain line", async () => {
+  run.check("the row: Claude accounts is in Settings with Technical view off, in the place of the old account row, with its plain line", async () => {
     let page = await open("dark", one(41));
     await menu(page);
     assert(await page.locator("#set-accounts-open").isVisible(), "the row is there with Technical view off");
@@ -96,16 +166,16 @@ async function main() {
     assert(await page.locator("#set-accounts-open .acc-mini").isVisible(), "the week's mini bar");
     const order = await page.locator("#set-menu button.bugbtn").evaluateAll(b => b.map(x => x.id));
     assert(order.indexOf("set-accounts-open") < order.indexOf("set-repositories-open"), "above the folders row, as drawn: " + order);
-    await page.close();
+    await release(page);
     page = await open("dark", one(86));
     await menu(page);
     await page.waitForFunction(() => document.getElementById("set-accounts-state").textContent === "86% of this week used");
     assert(await page.locator("#set-accounts-state.is-attention").isVisible(), "near the week's end it is said in gold");
-    await page.close();
+    await release(page);
     page = await open("light", two([20, 72], [0, 12]));
     await menu(page);
     await page.waitForFunction(() => document.getElementById("set-accounts-state").textContent === "Using Home");
-    await page.close();
+    await release(page);
     const at = now - 10 * 60000;
     page = await open("light", two([64, 99], [6, 4], { inUse: "2", lastSwitch: { from: "1", to: "2", at, why: "weekly", used: 99 } }));
     await menu(page);
@@ -115,12 +185,12 @@ async function main() {
       const t = document.querySelector("#set-accounts-state .acc-nowrap");
       return t ? [t.textContent, getComputedStyle(t).whiteSpace] : null;
     }), [clock(at), "nowrap"], "the switch time is kept on one line");
-    await page.close();
+    await release(page);
     return "no line with one account / 86% of this week used / Using Home / Using Work, switched " + clock(at);
   });
 
   // ---- 2. the cards ------------------------------------------------------------------------
-  await run.check("the cards: one account with the place a second would go; two in the order Rich uses them, with plain meters", async () => {
+  run.check("the cards: one account with the place a second would go; two in the order Rich uses them, with plain meters", async () => {
     let page = await open("dark", one(86, 47));
     await sheet(page);
     assertEqual(await text(page, "#acc-title"), "Claude accounts");
@@ -131,7 +201,7 @@ async function main() {
     assert((await text(page, '.acc-meter[data-k="week"] .acc-meter-when')).startsWith("Fresh again "), "Fresh again <when>");
     assert(await page.locator(".acc-slot").isVisible(), "the empty place a second card would go");
     assertEqual(await text(page, ".acc-how-title"), "When your account fills up");
-    await page.close();
+    await release(page);
     page = await open("dark", two([58, 72], [0, 12]));
     await sheet(page);
     assertEqual(await texts(page, ".acc-name"), ["Home", "Work"]);
@@ -141,13 +211,13 @@ async function main() {
     assertEqual(await page.locator('.acc-card[data-id="1"] .acc-acts button').allInnerTexts(), [], "the one in use has nothing to press, and Account 1 is never removed here");
     assertEqual((await page.locator('.acc-card[data-id="2"] .acc-acts button').allInnerTexts()).map(t => t.trim()), ["Use this one now", "Remove"]);
     assertEqual(await text(page, ".acc-how-title"), "How Rich uses your accounts");
-    await page.close();
+    await release(page);
     return "one: Your Claude account + the slot; two: Home In use now, Work Next, the handover line";
   });
 
   // THE CEO, 2026-10-31: "If no 5-hour-limit data, then don't show/don't handle it." Red on main,
   // where a reading with no five-hour window drew an empty "5-hour limit" meter, "Not reported yet".
-  await run.check("no five-hour window: the card shows the weekly meter only, alone or beside an account that still has one", async () => {
+  run.check("no five-hour window: the card shows the weekly meter only, alone or beside an account that still has one", async () => {
     let page = await open("dark", oneWeekly(86)); // 86%: the Settings row has its line, which sheet() waits for
     await sheet(page);
     assertEqual(await texts(page, ".acc-meter .acc-meter-label"), ["Weekly limit"]);
@@ -155,7 +225,7 @@ async function main() {
     assertEqual(await page.locator('.acc-meter[data-k="five"]').count(), 0, "no 5-hour meter");
     assert(!/5-hour|five-hour|Not reported yet/i.test(await text(page, "#accounts-sheet .acc-col")), "nothing five-hour on the card");
     assertEqual(await text(page, "#acc-lede"), "Rich and the team do their work on your Claude account. Claude limits how much each account can do in a week.");
-    await page.close();
+    await release(page);
     const mixed = two([30, 40], [0, 12]);
     mixed.accounts[1].windows = weekOnly(12, now + 3 * DAY);
     page = await open("light", mixed);
@@ -163,7 +233,7 @@ async function main() {
     assertEqual(await texts(page, '.acc-card[data-id="1"] .acc-meter-label'), ["Weekly limit", "5-hour limit"], "Home keeps both");
     assertEqual(await texts(page, '.acc-card[data-id="2"] .acc-meter-label'), ["Weekly limit"], "Work: the week only");
     assert(await page.locator("#acc-five-h").isVisible(), "Home still has a 5-hour limit, so its choice stays");
-    await page.close();
+    await release(page);
     const neither = two([30, 40], [0, 12]);
     neither.accounts.forEach((a, i) => { a.windows = weekOnly([40, 12][i], now + (2 + i) * DAY); });
     neither.windows = neither.accounts[0].windows;
@@ -171,14 +241,14 @@ async function main() {
     await sheet(page);
     assertEqual(await page.locator("#acc-five-h").count(), 0, "no account has a 5-hour limit: no 5-hour choice");
     assert(!/5-hour|five-hour/i.test(await text(page, "#accounts-sheet .acc-panel")), "nothing five-hour on the sheet");
-    await page.close();
+    await release(page);
     return "one weekly-only account: Weekly limit 86% alone, the lede says a week; Home with both meters and the 5-hour choice beside Work with the week only; neither: no 5-hour choice";
   });
 
   // A new user's first run (2026-10-21): "In use now" over "No reading yet. If this account is not
   // signed in on this Mac, sign in here." on a Mac where nobody had signed in. Red on main, where
   // the card ignores the sign-in verdict.
-  await run.check("signed out: the card says Not signed in with Sign in, the row says it in gold, and nothing says No reading yet", async () => {
+  run.check("signed out: the card says Not signed in with Sign in, the row says it in gold, and nothing says No reading yet", async () => {
     let page = await open("dark", signedOut);
     await menu(page);
     await page.waitForFunction(() => document.getElementById("set-accounts-state").textContent === "Not signed in on this Mac");
@@ -191,14 +261,14 @@ async function main() {
     assert(!(await text(page, "#accounts-sheet")).includes("No reading yet"), "never No reading yet");
     // An account known to be signed out has no limits to report: no meters saying "Not reported yet".
     assertEqual(await page.locator("#accounts-sheet .acc-card .acc-meter").count(), 0, "no meters on a signed-out card");
-    await page.close();
+    await release(page);
     // Before the first check has answered, the card says the check is under way.
     page = await open("dark", { state: "unavailable", checkedAt: null, retryAt: null, windows: [], message: null });
     await menu(page);
     await page.click("#set-accounts-open");
     await page.waitForSelector("#accounts-sheet:not([hidden]) .acc-card");
     assertEqual(await text(page, ".acc-note"), "Checking whether this account is signed in on this Mac.");
-    await page.close();
+    await release(page);
     return "signed out: Not signed in + Sign in on the card, gold row line; unchecked: the check is under way";
   });
 
@@ -206,7 +276,7 @@ async function main() {
   // An account Claude Code says is signed in, but that reports no usage limits, is never
   // offered "Sign in" and never shown empty meters. Red before: signedIn was lost (null), the
   // card offered Sign in and drew two "Not reported yet" meters.
-  await run.check("signed in without limits: the card says so, with no Sign in and no empty meters", async () => {
+  run.check("signed in without limits: the card says so, with no Sign in and no empty meters", async () => {
     const page = await open("dark", { state: "unavailable", checkedAt: null, retryAt: null, windows: [], signedIn: true,
       message: SIGNED_IN_NO_LIMITS });
     await menu(page);
@@ -216,7 +286,7 @@ async function main() {
     assertEqual(await text(page, ".acc-note"), SIGNED_IN_NO_LIMITS);
     assertEqual(await page.locator('#accounts-sheet [data-act="sign-one"], #accounts-sheet [data-act="sign"]').count(), 0, "no Sign in for a signed-in account");
     assertEqual(await page.locator("#accounts-sheet .acc-card .acc-meter").count(), 0, "no empty meters");
-    await page.close();
+    await release(page);
     // Handover review rv-20261021T234558Z-10df0b1f-03b0, finding 2: the same verdict on a card
     // that is NOT in use, Work and then Home (Account 1, which has its own Sign in). Red before:
     // the card said "Not signed in", offered Sign in and drew two empty meters.
@@ -229,32 +299,32 @@ async function main() {
       assertEqual(await text(other, `${card} .acc-note`), SIGNED_IN_NO_LIMITS, `account ${idle} not in use: its note`);
       assertEqual(await other.locator(`${card} [data-act="sign-one"], ${card} [data-act="sign"]`).count(), 0, `account ${idle} not in use: no Sign in`);
       assertEqual(await other.locator(`${card} .acc-meter`).count(), 0, `account ${idle} not in use: no empty meters`);
-      await other.close();
+      await release(other);
     }
     return "In use now, the signed-in sentence, no Sign in, no meters; not in use: Signed in, the same sentence, no Sign in, no meters";
   });
 
-  await run.check("an unknown sign-in is never labelled signed out, on either account or theme", async () => {
-    for (const theme of ["light", "dark"]) {
-      for (const [inUse, unknown] of [["1", "2"], ["2", "1"], ["1", "1"], ["2", "2"]]) {
-        for (const message of [null, "Claude Code did not answer just now."]) {
-          const quota = two([10, 20], [10, 20], { inUse });
-          Object.assign(quota.accounts.find(a => a.id === unknown), { windows: [], checkedAt: null, signedIn: null, message });
-          const page = await open(theme, quota);
-          await sheet(page);
-          const card = `#accounts-sheet .acc-card[data-id="${unknown}"]`;
-          assert(!(await text(page, card)).includes("Not signed in"), "unknown is not signed out");
-          assertEqual(await page.locator(`${card} .acc-meter`).count(), 0, "no empty meters for an unknown account");
-          const note = await text(page, `${card} .acc-note`);
-          assert(message ? note.includes(message) && note.includes("not confirmed") : note.includes("Checking whether"), "say what is known about the check");
-          await page.close();
-        }
-      }
-    }
+  run.check("an unknown sign-in is never labelled signed out, on either account or theme", async () => {
+    const accounts = [["1", "2"], ["2", "1"], ["1", "1"], ["2", "2"]];
+    const messages = [null, "Claude Code did not answer just now."];
+    const cases = ["light", "dark"].flatMap(theme =>
+      accounts.flatMap(([inUse, unknown]) => messages.map(message => ({ theme, inUse, unknown, message }))));
+    await runCases(cases, async ({ theme, inUse, unknown, message }) => {
+      const quota = two([10, 20], [10, 20], { inUse });
+      Object.assign(quota.accounts.find(a => a.id === unknown), { windows: [], checkedAt: null, signedIn: null, message });
+      const page = await open(theme, quota);
+      await sheet(page);
+      const card = `#accounts-sheet .acc-card[data-id="${unknown}"]`;
+      assert(!(await text(page, card)).includes("Not signed in"), "unknown is not signed out");
+      assertEqual(await page.locator(`${card} .acc-meter`).count(), 0, "no empty meters for an unknown account");
+      const note = await text(page, `${card} .acc-note`);
+      assert(message ? note.includes(message) && note.includes("not confirmed") : note.includes("Checking whether"), "say what is known about the check");
+      await release(page);
+    }, 2);
     return "both accounts, active and idle, before a check and after a failed check, in both themes";
-  });
+  }, { serial: true });
 
-  await run.check("auth status alone never claims subscription limits are absent", async () => {
+  run.check("auth status alone never claims subscription limits are absent", async () => {
     for (const inUse of ["1", "2"]) {
       const quota = two([10, 20], [10, 20], { inUse });
       for (const a of quota.accounts) Object.assign(a, { windows: [], checkedAt: null, signedIn: true, message: null });
@@ -263,11 +333,11 @@ async function main() {
       assertEqual(await texts(page, ".acc-note"), ["This account is signed in on this Mac.", "This account is signed in on this Mac."]);
       assertEqual(await page.locator(".acc-meter").count(), 0);
       assertEqual(await page.locator('#accounts-sheet [data-act="sign-one"], #accounts-sheet [data-act="sign"]').count(), 0);
-      await page.close();
+      await release(page);
     }
   });
 
-  await run.check("Use this one now: the cards trade places, Recent changes says so, Undo puts it back; a near-full account says when Rich switches again", async () => {
+  run.check("Use this one now: the cards trade places, Recent changes says so, Undo puts it back; a near-full account says when Rich switches again", async () => {
     let page = await open("dark", two([58, 72], [0, 12]));
     await sheet(page);
     await page.click('[aria-label="Use Work now"]');
@@ -277,13 +347,13 @@ async function main() {
     assertEqual((await texts(page, ".acc-log li"))[0].replace(/^\S+ \S+ /, ""), "You chose Work.");
     await page.click('.acc-feedback [data-act="undo"]');
     await page.waitForFunction(() => document.querySelector(".acc-card").dataset.id === "1");
-    await page.close();
+    await release(page);
     page = await open("dark", two([58, 72], [10, 93]));
     await sheet(page);
     await page.click('[aria-label="Use Work now"]');
     await page.waitForSelector(".acc-feedback");
     assertEqual(await text(page, ".acc-feedback"), "Rich now uses Work. Work has already used 93% of its week, so Rich will switch again when it reaches 99%. Undo");
-    await page.close();
+    await release(page);
     return "Work first, then Home; the 93% account says the 99% switch";
   });
 
@@ -293,7 +363,7 @@ async function main() {
   // CEO's 2026-10-29: "It never shows a switch that didn't happen". The line follows the move: a
   // blocked move says it cannot move yet, a move under way says Switching, and "Rich now uses Work."
   // comes only once the work runs on Work. In both themes.
-  await run.check("Use this one now with work still on the account in use: Can't move yet, or Switching, and Rich now uses Work only once the work has moved", async () => {
+  run.check("Use this one now with work still on the account in use: Can't move yet, or Switching, and Rich now uses Work only once the work has moved", async () => {
     const said = [];
     for (const theme of ["light", "dark"]) {
       let page = await open(theme, two([58, 72], [0, 12], { working: { "1": ["team"] } }), { moveWaits: "blocked" });
@@ -303,7 +373,7 @@ async function main() {
       assertEqual(await text(page, ".acc-feedback"), "Can't move yet: work is still running on Home. Undo", theme + ": a blocked move");
       assertEqual(await texts(page, ".acc-name"), ["Home", "Work"], theme + ": the work still runs on Home");
       said.push(theme + ": " + await text(page, ".acc-feedback"));
-      await page.close();
+      await release(page);
       page = await open(theme, two([58, 72], [0, 12], { working: { "1": ["team"] } }), { moveWaits: "pending" });
       await sheet(page);
       await page.click('[aria-label="Use Work now"]');
@@ -314,13 +384,13 @@ async function main() {
       await page.waitForFunction(() => document.querySelector(".acc-card").dataset.id === "2");
       assertEqual(await text(page, ".acc-feedback"), "Rich now uses Work. Home is next. Undo", theme + ": once the work has moved");
       said.push(theme + ": Switching to Work, then Rich now uses Work");
-      await page.close();
+      await release(page);
     }
     return said.join(" / ");
   });
 
   // ---- 3. adding a second account in two steps ----------------------------------------------
-  await run.check("adding a second account in two steps: name both, then the browser sign-in; the new card arrives ready", async () => {
+  run.check("adding a second account in two steps: name both, then the browser sign-in; the new card arrives ready", async () => {
     const page = await open("dark", one(86, 47));
     await sheet(page);
     await page.click(".acc-slot");
@@ -346,11 +416,11 @@ async function main() {
     assertEqual(await text(page, ".acc-feedback"), "Work is ready. Rich switches to it when Home is nearly full.");
     assertEqual(await texts(page, ".acc-name"), ["Home", "Work"]);
     assert((await texts(page, ".acc-log li")).some(t => t.endsWith("You added Work.")), "Recent changes");
-    await page.close();
+    await release(page);
     return "named Home and Work, signed in, Work ready";
   });
 
-  await run.check("the same account signed in again gets its own plain screen and Try again; Cancel leaves nothing behind", async () => {
+  run.check("the same account signed in again gets its own plain screen and Try again; Cancel leaves nothing behind", async () => {
     let page = await open("light", one(86, 47), { signIn: ["same-account", "connected"] });
     await sheet(page);
     await page.click(".acc-slot");
@@ -368,7 +438,7 @@ async function main() {
     await page.click("#acc-try-again");
     await page.waitForSelector(".acc-feedback");
     assertEqual(await text(page, ".acc-feedback"), "Work is ready. Rich switches to it when Home is nearly full.");
-    await page.close();
+    await release(page);
     page = await open("light", one(86, 47), { signIn: ["same-account"] });
     await sheet(page);
     await page.click(".acc-slot");
@@ -380,12 +450,12 @@ async function main() {
     await page.waitForFunction(() => window.__accountCalls.some(c => c.cmd === "claude_account_discard"));
     await page.waitForSelector(".acc-slot");
     assertEqual(await page.locator(".acc-card").count(), 1, "back to one account");
-    await page.close();
+    await release(page);
     return "same-account screen, Try again to ready; Cancel discards";
   });
 
   // ---- 4. why it switched, in three places ------------------------------------------------
-  await run.check("why it switched, in three places: Rich's line with See your accounts, the banner with when and why, Recent changes", async () => {
+  run.check("why it switched, in three places: Rich's line with See your accounts, the banner with when and why, Recent changes", async () => {
     const page = await open("dark", two([20, 96], [6, 4]));
     await onThread(page);
     await page.evaluate(() => window.__RICHOS_MOCK__.simulateAccountSwitch("1", "2", "weekly", 99));
@@ -403,7 +473,7 @@ async function main() {
     assertEqual(await texts(page, ".acc-pill"), ["In use now", "Next"]);
     await page.click('.acc-banner [data-act="banner-ok"]');
     await page.waitForFunction(() => !document.querySelector(".acc-banner"));
-    await page.close();
+    await release(page);
     return "line + See your accounts, banner, Recent changes";
   });
 
@@ -416,7 +486,7 @@ async function main() {
   // switch goes to is `moving.to` and says "Switching to this one" until the move really happens;
   // a move that cannot happen yet says so. On main the account switched to was listed first and the
   // row said "Switching to" it whatever was still running on the other.
-  await run.check("a switch under way: the account still in use stays first and marked; the one switched to says so; a blocked move says it cannot move yet", async () => {
+  run.check("a switch under way: the account still in use stays first and marked; the one switched to says so; a blocked move says it cannot move yet", async () => {
     const underWay = blocked => two([64, 99], [6, 4], { inUse: "1", working: { "1": ["team"], "2": ["rich"] },
       moving: { from: "1", to: "2", blocked } });
     let page = await open("dark", underWay(false));
@@ -429,7 +499,7 @@ async function main() {
     assertEqual(await text(page, '.acc-card[data-id="2"] .acc-note'), "Rich is working on this one now. The team moves here once it finishes the step it is on.");
     assertEqual(await text(page, '.acc-card[data-id="1"] .acc-note'), "The team is finishing the step it is on here, then moves to Work.");
     assertEqual(await page.locator(".acc-handover").count(), 0, "no Then line while the move is under way");
-    await page.close();
+    await release(page);
     // Stu's session cannot move yet (Renewal::Waits): it says so, in plain words, on the row and the card.
     page = await open("dark", underWay(true));
     await menu(page);
@@ -438,12 +508,12 @@ async function main() {
     await page.waitForSelector("#accounts-sheet:not([hidden]) .acc-card");
     assertEqual(await texts(page, ".acc-name"), ["Home", "Work"]);
     assertEqual(await text(page, '.acc-card[data-id="1"] .acc-note'), "Can't move yet: work is still running on Home. The team is finishing the step it is on here, then moves to Work.");
-    await page.close();
+    await release(page);
     page = await open("dark", two([64, 99], [6, 4], { inUse: "1", working: { "1": ["rich"], "2": ["team"] }, moving: { from: "1", to: "2", blocked: false } }));
     await sheet(page);
     assertEqual(await text(page, '.acc-card[data-id="1"] .acc-note'), "Rich moves to Work with his next reply.");
     assertEqual(await text(page, '.acc-card[data-id="2"] .acc-note'), "The team is working on this one now. Rich moves here with his next reply.");
-    await page.close();
+    await release(page);
     // Once everything runs on Work, Work is the one marked in use, first, and simply In use now.
     page = await open("dark", two([64, 99], [6, 4], { inUse: "2", working: { "2": ["rich", "team"] } }));
     await menu(page);
@@ -452,12 +522,12 @@ async function main() {
     await page.waitForSelector("#accounts-sheet:not([hidden]) .acc-card");
     assertEqual(await texts(page, ".acc-name"), ["Work", "Home"]);
     assertEqual((await texts(page, ".acc-pill"))[0], "In use now");
-    await page.close();
+    await release(page);
     return "Home first and Still in use / Switching to Work; Can't move yet; then Work In use now";
   });
 
   // ---- 5. Rich's one-time suggestion -------------------------------------------------------
-  await run.check("Rich's suggestion at 86%: Add a second account and Not now under his line; Not now says where to find it", async () => {
+  run.check("Rich's suggestion at 86%: Add a second account and Not now under his line; Not now says where to find it", async () => {
     const page = await open("dark", one(86, 47));
     await onThread(page);
     await say(page, "nudge", "Your Claude account has used **86%** of this week's limit.");
@@ -473,11 +543,11 @@ async function main() {
     await page.click('[data-note-act="not-now"]');
     await page.waitForSelector(".acc-after");
     assertEqual(await text(page, ".acc-after"), "Okay. You can add one any time in Settings, under Claude accounts.");
-    await page.close();
+    await release(page);
     return "Add opens step 1; Not now answers";
   });
 
-  await run.check("both near the weekly limit: the banner says what happens when both run out, with Add another account", async () => {
+  run.check("both near the weekly limit: the banner says what happens when both run out, with Add another account", async () => {
     const page = await open("dark", two([71, 96], [18, 93]));
     await sheet(page);
     await page.waitForSelector(".acc-banner");
@@ -489,11 +559,11 @@ async function main() {
     await page.waitForSelector("#acc-add");
     assertEqual(await text(page, ".acc-add-title"), "Add another Claude account");
     assertEqual(await texts(page, ".acc-field"), ["The new account"]);
-    await page.close();
+    await release(page);
     return "banner and Add another account";
   });
 
-  await run.check("the 5-hour choice is saved, and choosing turns the automatic pause or switch on", async () => {
+  run.check("the 5-hour choice is saved, and choosing turns the automatic pause or switch on", async () => {
     const page = await open("dark", two([58, 72], [0, 12]));
     await sheet(page);
     assertEqual(await page.locator('#accounts-sheet [role="radio"][aria-checked="true"]').count(), 0, "nothing is chosen while the automatic pause is off");
@@ -503,11 +573,11 @@ async function main() {
     const v = await page.evaluate(() => window.RichBridge.invoke("claude_quota", {}));
     assertEqual([v.policy.enabled, v.atThreshold], [true, "switch"]);
     assertEqual(await text(page, "#acc-five-switch .acc-opt-t"), "Switch to Work");
-    await page.close();
+    await release(page);
     return "Switch to Work saved; the policy is on";
   });
 
-  await run.check("Remove asks once, then says it is removed", async () => {
+  run.check("Remove asks once, then says it is removed", async () => {
     const page = await open("dark", two([58, 72], [0, 12]));
     await sheet(page);
     await page.click('[aria-label="Remove Work"]');
@@ -516,7 +586,7 @@ async function main() {
     await page.waitForSelector(".acc-feedback");
     assertEqual(await text(page, ".acc-feedback"), "Work is removed from RichOS. You can add it back any time.");
     assertEqual(await texts(page, ".acc-name"), ["Home"]);
-    await page.close();
+    await release(page);
     return "removed";
   });
 
@@ -531,7 +601,7 @@ async function main() {
   const anyEmail = page => Promise.all(Object.values(EMAILS).map(e => onPage(page, e))).then(a => a.some(Boolean));
   const showing = (page, id) => page.locator(`.acc-card[data-id="${id}"] .acc-who-addr`);
 
-  await run.check("Show email: hidden by default, one click shows Signed in as the account's own email with the ring and Hide, each card on its own", async () => {
+  run.check("Show email: hidden by default, one click shows Signed in as the account's own email with the ring and Hide, each card on its own", async () => {
     const page = await open("dark", two([58, 72], [0, 12]), { emails: EMAILS });
     await sheet(page);
     assertEqual((await texts(page, ".acc-reveal")), ["Show email", "Show email"], "one Show email per card");
@@ -550,11 +620,11 @@ async function main() {
     await showing(page, "2").waitFor();
     assertEqual(await text(page, '.acc-card[data-id="2"] .acc-who-addr'), EMAILS["2"], "Work's own email, not Home's");
     assert(await showing(page, "1").isVisible(), "both at once, to compare");
-    await page.close();
+    await release(page);
     return "Home then Work, each its own email";
   });
 
-  await run.check("Show email: it hides again by itself after 8 seconds, and at once on Hide, with Show email back", async () => {
+  run.check("Show email: it hides again by itself after 8 seconds, and at once on Hide, with Show email back", async () => {
     // On the page's own clock (Playwright's), paused once the sheet is open, so each boundary is
     // the app's own timer and never this host's load: 8,000 ms showing, then the 320 ms wipe.
     const page = await open("light", two([58, 72], [0, 12]), { emails: EMAILS, clock: true });
@@ -589,11 +659,11 @@ async function main() {
     assertEqual(await line("2"), ["hidden", false], "gone 320 ms after Hide, not 8 seconds");
     assertEqual(await page.evaluate(() => document.activeElement.id), "acc-email-2", "focus is back on Work's Show email");
     assertEqual(await text(page, "#acc-who-status"), "Email hidden.");
-    await page.close();
+    await release(page);
     return "showing to 7,999 ms, going at 8,000, gone at 8,320; Hide: gone 320 ms later";
-  });
+  }, { serial: true });
 
-  await run.check("Show email: closing the sheet hides every email, by its close button and by Escape; it always opens with all hidden", async () => {
+  run.check("Show email: closing the sheet hides every email, by its close button and by Escape; it always opens with all hidden", async () => {
     const page = await open("dark", two([58, 72], [0, 12]), { emails: EMAILS });
     for (const how of ["close button", "Escape"]) {
       await sheet(page);
@@ -607,18 +677,18 @@ async function main() {
     }
     await sheet(page);
     assertEqual(await texts(page, ".acc-who"), ["Show email", "Show email"], "reopened: all hidden");
-    await page.close();
+    await release(page);
     return "closed by × and by Escape; reopened hidden";
   });
 
-  await run.check("Show email updates the card's sign-in verdict immediately", async () => {
+  run.check("Show email updates the card's sign-in verdict immediately", async () => {
     let page = await open("dark", signedOut, { emails: { "1": "reader@fixture.invalid" } });
     await sheet(page);
     await page.click('[data-act="email-show"]');
     await page.waitForSelector(".acc-who-addr");
     assertEqual(await text(page, ".acc-note"), "This account is signed in on this Mac.");
     assertEqual(await page.locator('[data-act="sign-one"]').count(), 0);
-    await page.close();
+    await release(page);
     page = await open("dark", two([20, 30], [10, 20]), { emails: { "2": null } });
     await sheet(page);
     await page.click('.acc-card[data-id="2"] [data-act="email-show"]');
@@ -626,10 +696,10 @@ async function main() {
     assertEqual(await text(page, '.acc-card[data-id="2"] .acc-pill'), "Not signed in");
     assertEqual(await page.locator('.acc-card[data-id="2"] .acc-meter').count(), 0);
     assert(await page.locator('.acc-card[data-id="2"] [data-act="sign"]').isVisible());
-    await page.close();
+    await release(page);
   });
 
-  await run.check("Show email: when an account's email cannot be read, the line says so plainly and guesses nothing", async () => {
+  run.check("Show email: when an account's email cannot be read, the line says so plainly and guesses nothing", async () => {
     // Home: an answer that names no address; Work: Claude Code says it is not signed in.
     const page = await open("dark", two([58, 72], [0, 12]), { emails: { "2": null } });
     await sheet(page);
@@ -639,17 +709,16 @@ async function main() {
     assertEqual(await text(page, '.acc-card[data-id="1"] .acc-who'), "Claude Code did not say which email this account uses. Hide");
     assertEqual(await text(page, '.acc-card[data-id="2"] .acc-who'), "This account is not signed in on this Mac. Hide");
     assertEqual(await page.locator(".acc-who-addr").count(), 0, "no address shown");
-    await page.close();
+    await release(page);
     return "not read / not signed in";
   });
 
   // Every Show email state, both themes: text at AA and the 16px floor, the ring's gold arc at
   // 3:1 against the card it sits on, measured at once (the line hides itself at 8 seconds).
   for (const theme of ["dark", "light"]) {
-    await run.check(theme + ": Show email, the email, the could-not-read lines, Hide and the ring meet AA contrast and the type floor", async () => {
+    run.check(theme + ": Show email, the email, the could-not-read lines, Hide and the ring meet AA contrast and the type floor", async () => {
       const page = await open(theme, two([58, 72], [0, 12]), { emails: { "1": EMAILS["1"], "2": null } });
       await sheet(page);
-      await page.addScriptTag({ content: contrast.pageScript() });
       const measure = () => page.evaluate(() => {
         const C = window.__contrastMath, out = [];
         const ground = el => { let bg = { r: 0, g: 0, b: 0, a: 0 }; const chain = []; for (let p = el; p; p = p.parentElement) chain.unshift(p);
@@ -680,7 +749,7 @@ async function main() {
       for (const want of ["Show email", "Signed in as", EMAILS["1"], "Hide", "This account is not signed in on this Mac.", "ring"]) {
         assert(all.some(m => m.text === want), `${theme}: ${want} was measured`);
       }
-      await page.close();
+      await release(page);
       return all.map(m => `${m.text} ${m.ratio}:1`).filter((v, i, a) => a.indexOf(v) === i).join(", ");
     });
   }
@@ -709,7 +778,13 @@ async function main() {
     ["menu-moving", two([64, 99], [6, 4], { inUse: "1", working: { "1": ["team"], "2": ["rich"] }, moving: { from: "1", to: "2", blocked: false } }), async p => { await menu(p); await p.waitForFunction(() => document.querySelector("#set-accounts-state.is-attention")); }],
     ["blocked", two([64, 99], [6, 4], { inUse: "1", working: { "1": ["team"] }, moving: { from: "1", to: "2", blocked: true } }), sheet],
     ["menu-blocked", two([64, 99], [6, 4], { inUse: "1", working: { "1": ["team"] }, moving: { from: "1", to: "2", blocked: true } }), async p => { await menu(p); await p.waitForFunction(() => document.querySelector("#set-accounts-state.is-attention")); }],
-    ["choice-saved", two([58, 72], [0, 12]), async p => { await sheet(p); await p.click("#acc-five-pause"); await p.waitForSelector(".acc-saved"); }],
+    ["choice-saved", two([58, 72], [0, 12]), async p => {
+      await sheet(p);
+      // Keep the real 1.8s confirmation on screen across the three measurements.
+      await p.clock.pauseAt(await p.evaluate(() => Date.now() + 1000));
+      await p.click("#acc-five-pause");
+      await p.waitForSelector(".acc-saved");
+    }, { clock: true }],
     ["menu-switched", two([64, 99], [6, 4], { inUse: "2", lastSwitch: { from: "1", to: "2", at: now - 3 * 60000, why: "weekly", used: 99 } }), async p => { await menu(p); await p.waitForFunction(() => document.querySelector("#set-accounts-state.is-attention")); }],
     ["chat-nudge", one(86, 47), async p => { await onThread(p); await say(p, "nudge", "Your Claude account has used **86%** of this week's limit.");
       await p.waitForSelector('[data-note-act="add"]'); }],
@@ -724,74 +799,158 @@ async function main() {
   const ROOTS = "#accounts-sheet:not([hidden]) .acc-panel, #set-accounts-open, .acc-note-slot";
   // Declared skippable (style.css's own note): the 14px "Settings" breadcrumb over the 32px title.
   const SKIPPABLE = ".acc-eyebrow";
-  for (const theme of ["dark", "light"]) {
-    await run.check(theme + ": every round 18 state meets AA contrast and the type floor, fits, and carries no m-dash or n-dash", async () => {
-      const measured = [];
-      for (const [name, fixture, drive, opts] of STATES) {
-        // Contrast in both themes at 1440 by 900; the fit at the app's minimum window, 1024 by 700, once
-        // (the layout is the same in both themes).
-        for (const viewport of theme === "dark" ? [{ width: 1440, height: 900 }, { width: 1024, height: 700 }] : [{ width: 1440, height: 900 }]) {
-          const page = await open(theme, fixture, { ...(opts || {}), viewport });
-          await drive(page);
-          await page.evaluate(() => Promise.all(document.getAnimations().filter(a => a.effect && a.effect.getTiming().iterations !== Infinity).map(a => a.finished.catch(() => null))));
-          await page.addScriptTag({ content: contrast.pageScript() });
-          const result = await page.evaluate(({ ROOTS, SKIPPABLE }) => {
-            const C = window.__contrastMath, failures = [], dashes = [];
-            let worst = 99, nodes = 0;
-            const ground = el => { let bg = { r: 0, g: 0, b: 0, a: 0 }; const chain = []; for (let p = el; p; p = p.parentElement) chain.unshift(p);
-              for (const p of chain) bg = C.compositeOver(C.parseCssColor(getComputedStyle(p).backgroundColor), bg); return bg; };
-            for (const root of document.querySelectorAll(ROOTS)) {
-              if (!root.getClientRects().length) continue;
-              if (/[–—]/.test(root.innerText)) dashes.push(root.innerText.match(/.{0,30}[–—].{0,30}/)[0]);
-              for (const e of [root, ...root.querySelectorAll("*")]) {
-                if (!e.getClientRects().length || e.closest("[hidden]")) continue;
-                const own = [...e.childNodes].some(n => n.nodeType === Node.TEXT_NODE && n.textContent.trim());
-                if (!own && e.tagName !== "INPUT") continue;
-                const style = getComputedStyle(e), bg = ground(e), fg = C.compositeOver(C.parseCssColor(style.color), bg);
-                const size = parseFloat(style.fontSize), large = size >= 24 || size >= 18.66 && parseInt(style.fontWeight) >= 700;
-                const ratio = C.round2(C.contrastRatio(fg, bg)); nodes++;
-                worst = Math.min(worst, ratio);
-                if (ratio < (large ? 3 : 4.5)) failures.push({ text: (e.value || e.textContent).trim().slice(0, 50), ratio });
-                if (size < 16 && !e.closest(SKIPPABLE)) failures.push({ text: e.textContent.trim().slice(0, 50), size });
-              }
-              // Non-text indicators, 3:1 against the ground they sit on: the in-use spine and border,
-              // the meters' fill, the radio ring, the mini bar, a pill's ring.
-              // A bar's fill is read against the card or row it sits on, not against its own track.
-              for (const sel of [".acc-card.is-inuse .acc-spine", ".acc-meter-bar b", ".acc-radio", ".acc-mini i", ".acc-pill i", ".acc-btn:not(.acc-btn-quiet):not(.acc-btn-primary)"]) {
-                for (const e of root.querySelectorAll(sel)) {
-                  if (!e.getClientRects().length) continue;
-                  const cs = getComputedStyle(e);
-                  const paint = cs.backgroundColor !== "rgba(0, 0, 0, 0)" ? cs.backgroundColor : cs.borderTopColor;
-                  const on = e.matches(".acc-meter-bar b, .acc-mini i") ? e.parentElement.parentElement : e.parentElement;
-                  const bg = ground(on), ratio = C.round2(C.contrastRatio(C.compositeOver(C.parseCssColor(paint), bg), bg));
-                  if (ratio < 3) failures.push({ indicator: sel, ratio });
-                }
-              }
-            }
-            const body = document.querySelector("#accounts-sheet:not([hidden]) .acc-body");
-            const sideways = body ? body.scrollWidth > body.clientWidth + 1 : false;
-            return { failures, dashes, worst, nodes, sideways };
-          }, { ROOTS, SKIPPABLE });
-          assertEqual(result.failures, [], `${theme} ${name} ${viewport.width}: contrast and type`);
-          assertEqual(result.dashes, [], `${theme} ${name}: no m-dash or n-dash`);
-          assert(!result.sideways, `${theme} ${name} ${viewport.width}: never scrolls sideways`);
-          assert(result.nodes > 0, `${theme} ${name}: EMPTY INVENTORY`);
-          if (viewport.width === 1440) measured.push(`${name} ${result.worst}:1`);
-          // Every control is reachable, by scrolling where the window is small.
-          const controls = page.locator("#accounts-sheet:not([hidden]) button, #accounts-sheet:not([hidden]) input");
-          for (let i = 0, n = await controls.count(); i < n; i++) {
-            const control = controls.nth(i);
-            await control.scrollIntoViewIfNeeded(); assert(await control.isVisible(), `${theme} ${name} ${viewport.width}: control ${i} is out of reach`);
-          }
-          await page.close();
+  const regular = { width: 1440, height: 900 };
+  const minimum = { width: 1024, height: 700 };
+
+  async function measureState(page, name, theme, { width, height }) {
+    if (name === "choice-saved") assert(await page.locator(".acc-saved").isVisible(), "the confirmation is still present");
+    const state = `${theme} ${name} ${width}`;
+    const result = await page.evaluate(async ({ ROOTS, SKIPPABLE }) => {
+      await document.fonts.ready;
+      // Inspect the normal CSS at its settled endpoint. Waiting for every
+      // wall-clock animation on every fixture repeats the same entrances.
+      for (const animation of document.getAnimations()) {
+        if (animation.effect && animation.playState !== "finished" && Number.isFinite(animation.effect.getComputedTiming().endTime)) {
+          animation.finish();
         }
       }
-      return "worst text per state: " + measured.join(", ");
-    });
+      const C = window.__contrastMath, failures = [], dashes = [];
+      let worst = 99, nodes = 0;
+      const ground = el => { let bg = { r: 0, g: 0, b: 0, a: 0 }; const chain = []; for (let p = el; p; p = p.parentElement) chain.unshift(p);
+        for (const p of chain) bg = C.compositeOver(C.parseCssColor(getComputedStyle(p).backgroundColor), bg); return bg; };
+      for (const root of document.querySelectorAll(ROOTS)) {
+        if (!root.getClientRects().length) continue;
+        if (/[–—]/.test(root.innerText)) dashes.push(root.innerText.match(/.{0,30}[–—].{0,30}/)[0]);
+        for (const e of [root, ...root.querySelectorAll("*")]) {
+          if (!e.getClientRects().length || e.closest("[hidden]")) continue;
+          const own = [...e.childNodes].some(n => n.nodeType === Node.TEXT_NODE && n.textContent.trim());
+          if (!own && e.tagName !== "INPUT") continue;
+          const style = getComputedStyle(e), bg = ground(e), fg = C.compositeOver(C.parseCssColor(style.color), bg);
+          const size = parseFloat(style.fontSize), large = size >= 24 || size >= 18.66 && parseInt(style.fontWeight) >= 700;
+          const ratio = C.round2(C.contrastRatio(fg, bg)); nodes++;
+          worst = Math.min(worst, ratio);
+          if (ratio < (large ? 3 : 4.5)) failures.push({ text: (e.value || e.textContent).trim().slice(0, 50), ratio });
+          if (size < 16 && !e.closest(SKIPPABLE)) failures.push({ text: e.textContent.trim().slice(0, 50), size });
+        }
+        // Non-text indicators, 3:1 against the ground they sit on: the in-use spine and border,
+        // the meters' fill, the radio ring, the mini bar, a pill's ring.
+        // A bar's fill is read against the card or row it sits on, not against its own track.
+        for (const sel of [".acc-card.is-inuse .acc-spine", ".acc-meter-bar b", ".acc-radio", ".acc-mini i", ".acc-pill i", ".acc-btn:not(.acc-btn-quiet):not(.acc-btn-primary)"]) {
+          for (const e of root.querySelectorAll(sel)) {
+            if (!e.getClientRects().length) continue;
+            const cs = getComputedStyle(e);
+            const paint = cs.backgroundColor !== "rgba(0, 0, 0, 0)" ? cs.backgroundColor : cs.borderTopColor;
+            const on = e.matches(".acc-meter-bar b, .acc-mini i") ? e.parentElement.parentElement : e.parentElement;
+            const bg = ground(on), ratio = C.round2(C.contrastRatio(C.compositeOver(C.parseCssColor(paint), bg), bg));
+            if (ratio < 3) failures.push({ indicator: sel, ratio });
+          }
+        }
+      }
+      const body = document.querySelector("#accounts-sheet:not([hidden]) .acc-body");
+      const sideways = body ? body.scrollWidth > body.clientWidth + 1 : false;
+      // These controls are settled. Scroll each in WebKit and read its
+      // visibility here so every control does not require two browser replies.
+      const outOfReach = [];
+      const scroll = [window.scrollX, window.scrollY, body?.scrollLeft, body?.scrollTop];
+      const controls = document.querySelectorAll("#accounts-sheet:not([hidden]) button, #accounts-sheet:not([hidden]) input");
+      for (const [i, control] of controls.entries()) {
+        control.scrollIntoViewIfNeeded();
+        const box = control.getBoundingClientRect();
+        const visible = getComputedStyle(control).visibility === "visible" && box.width > 0 && box.height > 0;
+        const inView = box.right > 0 && box.bottom > 0 && box.left < innerWidth && box.top < innerHeight;
+        if (!visible || !inView) outOfReach.push(i);
+      }
+      window.scrollTo(scroll[0], scroll[1]);
+      if (body) body.scrollTo(scroll[2], scroll[3]);
+      return { failures, dashes, worst, nodes, sideways, outOfReach,
+        theme: document.documentElement.dataset.theme, width: innerWidth, height: innerHeight };
+    }, { ROOTS, SKIPPABLE });
+    assertEqual([result.theme, result.width, result.height], [theme, width, height], `${state}: rendered theme and viewport`);
+    assertEqual(result.failures, [], `${state}: contrast and type`);
+    assertEqual(result.dashes, [], `${state}: no m-dash or n-dash`);
+    assert(!result.sideways, `${state}: never scrolls sideways`);
+    assert(result.nodes > 0, `${state}: EMPTY INVENTORY`);
+    assertEqual(result.outOfReach, [], `${state}: controls out of reach after scrolling`);
+    return result.worst;
   }
 
-  await run.check("no renderer errors", async () => assertEqual(errors, []));
-  await browser.close();
-  process.exitCode = run.report() ? 1 : 0;
+  async function auditState([name, fixture, drive, opts]) {
+    let surface = "dark at 1440px";
+    try {
+      return await bounded(async () => {
+        // Drive this exact account state once. The app's theme and viewport
+        // can change with the sheet or conversation still open.
+        const page = await open("dark", fixture, { ...opts, viewport: regular });
+        await drive(page);
+        const dark = await measureState(page, name, "dark", regular);
+
+        const applyTheme = theme => page.evaluate(theme => {
+          window.RichTheme.setTheme(theme);
+          // As in open(), include Settings while Home's dark clamp is active.
+          document.documentElement.setAttribute("data-theme", theme);
+        }, theme);
+        surface = "light at 1440px";
+        await applyTheme("light");
+        const light = await measureState(page, name, "light", regular);
+
+        surface = "dark at 1024px";
+        await applyTheme("dark");
+        await page.setViewportSize(minimum);
+        await measureState(page, name, "dark", minimum);
+        await page.setViewportSize(regular);
+        await release(page);
+        return { name, dark, light };
+      }, CHECK_LIMIT_MS, "WebKit did not finish the state audit within 45s"); // load-bound: hang guard for renderer replies
+    } catch (error) {
+      throw new Error(`${name}, ${surface}: ${error.message}`, { cause: error });
+    }
+  }
+
+  run.check("every round 18 state in dark and light meets AA contrast and the type floor, fits, and carries no m-dash or n-dash", async () => {
+    const measured = await runCases(STATES, auditState, 2);
+    return ["dark", "light"].map(theme =>
+      `${theme} worst text per state: ${measured.map(result => `${result.name} ${result[theme]}:1`).join(", ")}`
+    ).join("\n          ");
+  }, { serial: true, limitMs: SUITE_LIMIT_MS });
+
+  run.check("no renderer errors", async () => assertEqual(errors, []), { serial: true });
 }
-main().catch(e => { console.error(e); process.exitCode = 1; });
+
+async function main() {
+  const run = createRun("Claude accounts for everyone (round 18)");
+  const deadline = performance.now() + SUITE_LIMIT_MS;
+  const record = run.check.bind(run);
+  async function execute({ name, work, limitMs }) {
+    let passed = false;
+    await record(name, async () => {
+      const remaining = deadline - performance.now();
+      const limit = Math.min(limitMs, remaining);
+      // load-bound: a hang guard; the check still waits for its actual result.
+      const detail = await bounded(work, limit, `Accounts check did not finish within ${Math.ceil(limit / 1000)}s`);
+      passed = true;
+      return detail;
+    });
+    if (!passed) throw CHECK_FAILED;
+  }
+
+  const browser = await bounded(() => loadPlaywright().webkit.launch(), CHECK_LIMIT_MS, "WebKit launch did not finish within 45s");
+  try {
+    const checks = [];
+    planChecks({ check(name, work, { serial = false, limitMs = CHECK_LIMIT_MS } = {}) {
+      checks.push({ name, work, serial, limitMs });
+    } }, browser);
+    // A check that drives several pages or pauses its clock owns this phase.
+    // Nested parallel checks otherwise put five live app pages in one WebKit.
+    await runCases(checks.filter(check => !check.serial), execute, 2);
+    for (const check of checks.filter(check => check.serial)) await execute(check);
+  } catch (error) {
+    if (error !== CHECK_FAILED) throw error;
+  } finally {
+    const failures = run.report();
+    // The harness's owned browser reaper can clean up if a closed or stalled
+    // browser never answers. The report is already written before that path.
+    await bounded(() => browser.close(), CLOSE_LIMIT_MS, "WebKit did not close within 3s");
+    if (failures) process.exit(1);
+  }
+}
+main().catch(error => { console.error(error); process.exit(1); });
