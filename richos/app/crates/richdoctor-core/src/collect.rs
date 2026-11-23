@@ -855,6 +855,7 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64, gestures: bo
                 | "openWithDiscovery"
                 | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata"
                 | "glanceCaptureFrame" | "glanceCaptureOutput" | "glanceCaptureSession" | "glanceScrollCapture" | "glanceCompare" | "glanceOCR" | "glanceSearch" | "glancePin" | "glanceRedactedCopy" | "glanceShare"
+                | "glanceAnnotationDefaults"
                 | "glanceCaptureHelperStart" | "glanceCaptureHelperLogin" | "glanceCaptureHelperMenu" | "glanceCaptureShortcutLaunch" | "glanceCaptureMenuLaunch")
         };
         if id.len() != 36 || !id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
@@ -1233,6 +1234,7 @@ mod tests {
             "glanceCaptureOutput",
             "glanceCompare",
             "glanceScrollCapture",
+            "glanceAnnotationDefaults",
             "glanceCaptureHelperStart",
             "glanceCaptureHelperLogin",
             "glanceCaptureHelperMenu",
@@ -1248,6 +1250,11 @@ mod tests {
             let mut capture = record.clone();
             capture["operation"] = serde_json::json!(stage);
             capture["screen"] = serde_json::json!("Private screen content");
+            if stage == "glanceAnnotationDefaults" {
+                capture["outcome"] = serde_json::json!("complete");
+                capture["total"] = serde_json::json!(1);
+                capture["confirmed"] = serde_json::json!(1);
+            }
             if stage == "glanceScrollCapture" {
                 capture["outcome"] = serde_json::json!("issues");
                 capture["scrollCaptureFailure"] = serde_json::json!("conflictingPixels");
@@ -1296,6 +1303,7 @@ mod tests {
         assert!(timing.text.contains("operation=glanceCaptureSession"));
         assert!(timing.text.contains("operation=glanceCaptureOutput"));
         assert!(timing.text.contains("operation=glanceCompare"));
+        assert!(timing.text.contains("operation=glanceAnnotationDefaults outcome=complete"));
         assert!(timing.text.contains("operation=richFilesSuiteRestart outcome=interrupted"));
         assert!(timing.text.contains("application=app.richos.richfiles pid=123"));
         for stage in ["glanceCaptureHelperStart", "glanceCaptureHelperLogin", "glanceCaptureHelperMenu", "glanceCaptureShortcutLaunch", "glanceCaptureMenuLaunch"] {
