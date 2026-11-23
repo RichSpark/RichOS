@@ -937,16 +937,41 @@ function chatWait(row) {
   }
 }
 
-// Company ordering is a sidebar preference. The rest of the app uses registry order.
+// The pending order is visible as soon as the company is dropped. Unranked companies
+// (including newly registered ones) keep their registry order after the saved companies.
 let pendingCompanyOrder = null;
 let companyOrderWrites = Promise.resolve();
 
-function orderedCompanyGroups() {
+function sortCompanies(companies, idOf = (company) => company.id) {
   const order = pendingCompanyOrder ?? navPrefs?.company_order ?? [];
-  if (!order.length) return navTree.groups;
   const rank = new Map(order.map((id, index) => [id, index]));
-  const position = (group) => rank.get(group.entity.id) ?? order.length;
-  return [...navTree.groups].sort((a, b) => position(a) - position(b));
+  for (const group of navTree.groups) {
+    if (!rank.has(group.entity.id)) rank.set(group.entity.id, rank.size);
+  }
+  const position = (company) => rank.get(idOf(company)) ?? rank.size;
+  return [...companies].sort((a, b) => position(a) - position(b));
+}
+window.RichCompanyOrder = sortCompanies;
+
+function orderedCompanyGroups() {
+  return sortCompanies(navTree.groups, (group) => group.entity.id);
+}
+
+function refreshCompanyOrder() {
+  renderRail();
+  const syncRows = (container, end = null) => {
+    const rows = [...container.querySelectorAll(":scope > [data-company]")];
+    const ordered = sortCompanies(rows, (row) => row.dataset.company);
+    if (ordered.every((row, index) => row === rows[index])) return;
+    const focused = document.activeElement;
+    for (const row of ordered) container.insertBefore(row, end);
+    if (rows.includes(focused)) focused.focus();
+  };
+  if (!newChatMenuEl.hidden && !formInMenu()) syncRows(newChatMenuEl, newChatMenuEl.querySelector(".m-sep"));
+  if (!entityPickerEl.hidden) syncRows(entityPickerListEl);
+  if (searchState.open && searchState.navHits.length) renderSearchResults();
+  refreshCompanySetting();
+  window.dispatchEvent(new Event("richos:company-order-changed"));
 }
 
 function moveCompany(id, index) {
@@ -956,13 +981,13 @@ function moveCompany(id, index) {
   order.splice(from, 1);
   order.splice(index, 0, id);
   pendingCompanyOrder = order;
-  renderRail();
+  refreshCompanyOrder();
   companyOrderWrites = companyOrderWrites.then(async () => {
     const saved = await saveNavChange("set_company_order", { order });
     if (saved) navPrefs.company_order = order;
     if (pendingCompanyOrder === order) {
       pendingCompanyOrder = null;
-      if (!saved) renderRail();
+      if (!saved) refreshCompanyOrder();
     }
   });
   return true;
@@ -1794,7 +1819,7 @@ function openNewChatMenu(focusFirst) {
   returnCompanyForm();
   closeThreadMenu();
   hideRailTip();
-  const groups = (navTree && navTree.groups) || [];
+  const groups = orderedCompanyGroups();
   newChatMenuEl.className = "menu new-chat-menu";
   newChatMenuEl.setAttribute("role", "menu");
   newChatMenuEl.setAttribute("aria-label", "New chat or company");
@@ -7068,10 +7093,11 @@ function openEntityPicker(onPick, opts) {
     entityAddErrorEl.textContent = "";
   }
   entityPickerListEl.innerHTML = "";
-  for (const group of navTree.groups) {
+  for (const group of orderedCompanyGroups()) {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "picker-item";
+    b.dataset.company = group.entity.id;
     b.setAttribute("role", "option");
     b.setAttribute("aria-selected", "false");
     const name = document.createElement("span");
@@ -7391,7 +7417,7 @@ chooseCompanyBtnEl.addEventListener("click", () => openEntityPicker(chooseCompan
 function registerCompanySetting() {
   if (!window.RichSettings || !window.RichSettings.registerCompany) return;
   window.RichSettings.registerCompany({
-    read: () => entityChoice,
+    read: () => entityChoice && { ...entityChoice, options: sortCompanies(entityChoice.options || []) },
     write: (id) => chooseCompany(id),
   });
 }
@@ -9302,19 +9328,16 @@ function renderSearchResults(before) {
   searchState.items = [];
   const frag = document.createDocumentFragment();
   // §3.4: "Results group by entity."
-  const order = [];
   const byEntity = new Map();
   for (const hit of searchState.navHits) {
-    const key = hit.entity_label;
-    if (!byEntity.has(key)) {
-      byEntity.set(key, []);
-      order.push(key);
-    }
+    const key = hit.entity_id;
+    if (!byEntity.has(key)) byEntity.set(key, []);
     byEntity.get(key).push(hit);
   }
-  for (const label of order) {
+  for (const [, hits] of sortCompanies([...byEntity], ([id]) => id)) {
+    const label = hits[0].entity_label;
     frag.appendChild(searchNode("div", "result-group" + (label === "No entity" ? "" : " result-group--entity"), label));
-    for (const hit of byEntity.get(label)) frag.appendChild(searchNavRow(hit));
+    for (const hit of hits) frag.appendChild(searchNavRow(hit));
   }
   const group = searchNode("div", "result-group srch-group");
   group.appendChild(searchNode("span", null, "Documents"));
@@ -11918,6 +11941,9 @@ async function init() {
       archived_threads: [],
       renamed_threads: {},
     };
+  if (navPrefs.company_order?.length) {
+    window.dispatchEvent(new Event("richos:company-order-changed"));
+  }
   applyRailWidth(navPrefs.sidebar_width || RAIL_DEFAULT);
   // §25: "Worker-pane width can be changed directly and survives relaunch."
   applyInspectorWidth(navPrefs.inspector_width || INSPECTOR_DEFAULT);

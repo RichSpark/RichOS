@@ -5421,7 +5421,9 @@ impl dictation_app::VoiceMode for AppVoice {
     }
     fn vocabulary_companies(&self) -> Vec<dictation::vocabulary::Company> {
         let Some(state) = self.app.try_state::<AppState>() else { return Vec::new() };
-        state.reader.snapshot().entity_registry().entities().iter()
+        let spine = state.reader.snapshot();
+        let companies = state.nav.lock().unwrap().state().ordered_companies(spine.entity_registry());
+        companies.into_iter()
             .map(|e| dictation::vocabulary::Company { id: e.id.to_string(), name: e.display_name.clone() }).collect()
     }
 
@@ -7727,7 +7729,7 @@ fn run_search(spine: &dyn SpineView, nav_state: &nav::NavState, query: &str, lim
     let mut hits: Vec<SearchHit> = Vec::new();
 
     // 1. Entity names.
-    for e in registry.entities() {
+    for e in nav_state.ordered_companies(registry) {
         let hay_name = fold_chars(&e.display_name);
         let hay_id = fold_chars(e.id.as_str());
         if find_folded(&hay_name, &needle).is_some() || find_folded(&hay_id, &needle).is_some() {
@@ -8017,9 +8019,12 @@ fn set_entity_collapsed(state: State<AppState>, entity_id: String, collapsed: bo
 }
 
 #[richos_command::command]
-fn set_company_order(state: State<AppState>, order: Vec<String>) -> Result<(), String> {
+fn set_company_order(_app: AppHandle, state: State<AppState>, order: Vec<String>) -> Result<(), String> {
     let spine = state.reader.snapshot();
-    state.nav.lock().unwrap().set_company_order(order, spine.entity_registry()).map_err(|e| e.to_string())
+    state.nav.lock().unwrap().set_company_order(order, spine.entity_registry()).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    if let Some(host) = _app.try_state::<Arc<dictation_app::Host>>() { host.publish_vocabulary(); }
+    Ok(())
 }
 
 #[richos_command::command]
@@ -9250,6 +9255,12 @@ mod navigation_tests {
 
         let mut reopened = nav::NavStore::open(&path);
         assert_eq!(reopened.state().company_order, order);
+        let mut extended = registry.clone();
+        extended.register(Entity::new("new-company", "New Company", &["/fixture/new"]).unwrap()).unwrap();
+        assert_eq!(
+            reopened.state().ordered_companies(&extended).iter().map(|company| company.id.as_str()).collect::<Vec<_>>(),
+            ["richos", "deeply", "femcboost", "new-company"],
+        );
         assert_eq!(reopened.state().collapsed_entities, ["deeply"]);
         assert_eq!(reopened.state().pinned_threads, ["test-chat"]);
         for invalid in [["richos", "richos"], ["richos", "unbound"]] {

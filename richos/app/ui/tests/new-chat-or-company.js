@@ -634,6 +634,57 @@ async function main() {
     }
   });
 
+  await run.check("company lists follow a sidebar drag before the save and after reload", async () => {
+    const page = await openApp(browser);
+    const pickNames = ["Lumen Labs", "Northwind Traders"];
+    const ids = ["lumen", "northwind"];
+    const checkLists = async () => {
+      await page.click("#rail-new-thread");
+      const menu = await menuState(page);
+      assertEqual(menu.items.map((item) => item.name), [...pickNames, "New company"], "New Chat company order");
+      await page.keyboard.press("Escape");
+      await page.locator(".nav-group--unbound .nav-thread").first().click();
+      await page.click("#unbound-new-thread");
+      assertEqual(await page.locator("#entity-picker .picker-name").allTextContents(), pickNames, "company picker order");
+      await page.keyboard.press("Escape");
+      await page.click(".setbtn");
+      const settingsCompanies = page.locator("#set-company option[value]:not([value=''])");
+      await settingsCompanies.first().waitFor({ state: "attached" });
+      assertEqual((await settingsCompanies.evaluateAll((options) => options.map((option) => option.value))).slice(0, 2),
+        ids, "Settings company order");
+      await page.keyboard.press("Escape");
+    };
+    try {
+      await shellSettled(page);
+      await page.evaluate(() => {
+        const invoke = RichBridge.invoke.bind(RichBridge);
+        const saveGate = new Promise((release) => { window.releaseCompanyOrderSave = release; });
+        RichBridge.invoke = async (cmd, args) => {
+          if (cmd === "set_company_order") await saveGate;
+          return invoke(cmd, args);
+        };
+      });
+      const source = await page.locator("#nav-label-northwind").boundingBox();
+      const target = await page.locator("#nav-label-lumen").boundingBox();
+      await page.mouse.move(source.x + 30, source.y + 10);
+      await page.mouse.down();
+      await page.mouse.move(target.x + 30, target.y + target.height - 4, { steps: 6 });
+      await page.mouse.up();
+      const companyRows = page.locator("#rail-nav > [data-entity]");
+      assertEqual(await companyRows.evaluateAll((rows) => rows.map((row) => row.dataset.entity)), ids, "sidebar after drop");
+      await checkLists();
+      await page.evaluate(() => window.releaseCompanyOrderSave());
+      await page.waitForFunction(async () => (await RichBridge.invoke("nav_state")).company_order?.[0] === "lumen");
+      await page.reload();
+      await leaveHome(page);
+      await shellSettled(page);
+      if (await page.locator("#entity-picker").isVisible()) await page.keyboard.press("Escape");
+      await checkLists();
+    } finally {
+      await page.close();
+    }
+  });
+
   // ---- the seven states of the round, both themes, beside the mockup ---------------------
   const STATES = {
     one: { keep: ONE, drive: async () => {} },
