@@ -2,21 +2,20 @@ import AppKit
 import Carbon.HIToolbox
 
 public enum DesktopTrashShortcut {
-    /// Turn Forward Delete into Finder's Move to Trash shortcut when its native
-    /// Desktop selection has keyboard focus. Text fields keep their editing keys.
-    public static func rewrite(_ event: CGEvent, hasDesktopSelection: () -> Bool) -> Bool {
+    /// Return Finder's Move to Trash key only for its focused native Desktop selection.
+    public static func replacement(for event: CGEvent, hasDesktopSelection: () -> Bool) -> CGEvent? {
         let modifiers: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift]
         guard event.type == .keyDown, event.getIntegerValueField(.keyboardEventKeycode) == kVK_ForwardDelete,
               event.flags.intersection(modifiers).isEmpty,
-              event.getIntegerValueField(.keyboardEventAutorepeat) == 0, hasDesktopSelection() else { return false }
+              event.getIntegerValueField(.keyboardEventAutorepeat) == 0, hasDesktopSelection() else { return nil }
 
-        // Some keyboards include the Forward Delete character (U+F728) in the
-        // event. Changing its key code alone leaves Finder seeing that character.
-        var character = UniChar(NSDeleteCharacter)
-        event.setIntegerValueField(.keyboardEventKeycode, value: Int64(kVK_Delete))
-        event.keyboardSetUnicodeString(stringLength: 1, unicodeString: &character)
-        event.flags.subtract([.maskSecondaryFn, .maskNumericPad])
-        event.flags.insert(.maskCommand)
-        return true
+        // An explicit Unicode payload turns the event into text input. Even
+        // replacing U+F728 with U+007F leaves Finder ignoring the menu shortcut.
+        // Build an ordinary physical-key event and let the keyboard layout supply its character.
+        guard let replacement = CGEvent(keyboardEventSource: CGEventSource(event: event),
+                                        virtualKey: CGKeyCode(kVK_Delete), keyDown: true) else { return nil }
+        replacement.timestamp = event.timestamp
+        replacement.flags = event.flags.subtracting([.maskSecondaryFn, .maskNumericPad]).union(.maskCommand)
+        return replacement
     }
 }

@@ -176,8 +176,15 @@ final class GestureController {
                                          options: .defaultTap, eventsOfInterest: mask, callback: { _, type, event, context in
             if let context {
                 let controller = Unmanaged<GestureController>.fromOpaque(context).takeUnretainedValue()
-                if type == .keyDown, controller.handleWindowShortcut(event) { return nil }
-                controller.receive(type, event)
+                if type == .keyDown {
+                    if controller.handleWindowShortcut(event) { return nil }
+                    if let replacement = controller.desktopTrashEvent(for: event) {
+                        // Quartz releases a newly supplied event after dispatch.
+                        return Unmanaged.passRetained(replacement)
+                    }
+                } else {
+                    controller.receive(type, event)
+                }
             }
             return Unmanaged.passUnretained(event)
         }, userInfo: Unmanaged.passUnretained(self).toOpaque()),
@@ -214,10 +221,6 @@ final class GestureController {
             firstTitleClick = nil
             tileDrag = nil
             if let tap, AXIsProcessTrusted() { CGEvent.tapEnable(tap: tap, enable: true) }
-            return
-        }
-        if type == .keyDown {
-            applyDesktopDelete(to: event)
             return
         }
         let modifiers: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift, .maskSecondaryFn]
@@ -396,9 +399,9 @@ final class GestureController {
         record(.windowGestureTileRestore, restored ? .complete : .issues, started: started)
     }
 
-    private func applyDesktopDelete(to event: CGEvent) {
+    private func desktopTrashEvent(for event: CGEvent) -> CGEvent? {
         let started = ProcessInfo.processInfo.systemUptime
-        let rewritten = DesktopTrashShortcut.rewrite(event) {
+        let replacement = DesktopTrashShortcut.replacement(for: event) {
             guard Preferences.selection.contains(.desktopDelete),
                   let app = NSWorkspace.shared.frontmostApplication, app.bundleIdentifier == "com.apple.finder" else { return false }
             let finder = AXUIElementCreateApplication(app.processIdentifier)
@@ -410,7 +413,8 @@ final class GestureController {
                   let selected: [AXUIElement] = focused.value(kAXSelectedChildrenAttribute), !selected.isEmpty else { return false }
             return NSWorkspace.shared.frontmostApplication == app
         }
-        if rewritten { record(.desktopDeleteShortcut, .complete, started: started) }
+        if replacement != nil { record(.desktopDeleteShortcut, .complete, started: started) }
+        return replacement
     }
 
     private func hit(at point: CGPoint) -> AXUIElement? {
