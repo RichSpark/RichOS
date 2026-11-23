@@ -699,6 +699,8 @@ window.RichHome = (function () {
       });
   }
 
+  var entityRows = [];
+
   /// Draw the row — or DO NOT DRAW IT AT ALL.
   ///
   /// CEO, 2026-09-01: *"the company buttons should only appear if the user has more than one
@@ -707,6 +709,8 @@ window.RichHome = (function () {
   /// not a single lonely button. A row of one is noise, and with the row gone the composition
   /// is exactly the frozen round's, which is a layout somebody already made look deliberate.
   function renderEntities(rows) {
+    entityRows = rows;
+    rows = window.RichCompanyOrder?.(rows) || rows;
     if (!root) return;
     var box = root.querySelector("#home-entities");
     if (!box) return;
@@ -2384,16 +2388,35 @@ window.RichHome = (function () {
     // if he showed it again, which is the next one at its own position: that is what its field
     // has to promise, because an empty label box means "show the number".
     var n = 0;
-    for (var i = 0; i < rows.length; i++) {
-      var shown = rows[i] && rows[i].visible !== false;
+    var ordered = window.RichCompanyOrder?.(rows) || rows;
+    for (var i = 0; i < ordered.length; i++) {
+      var shown = ordered[i] && ordered[i].visible !== false;
       if (shown) n++;
-      list.appendChild(prefsRow(rows[i], String(shown ? n : n + 1)));
+      list.appendChild(prefsRow(ordered[i], String(shown ? n : n + 1)));
     }
     prefsFoot(rows);
     // The home screen's own row follows the same answer, live, so he can see what he is doing
     // to it while the panel is open.
     renderEntities(rows);
   }
+
+  window.addEventListener("richos:company-order-changed", function () {
+    if (!prefsEl) {
+      renderEntities(entityRows);
+      return;
+    }
+    var focused = prefsEl.querySelector("input:focus");
+    drawPrefsRows(entityRows);
+    if (!focused) return;
+    var selector = 'input[type="' + focused.type + '"][data-entity="' + CSS.escape(focused.dataset.entity) + '"]';
+    var replacement = prefsEl.querySelector(selector);
+    if (!replacement) return;
+    if (focused.type === "text") {
+      replacement.value = focused.value;
+      replacement.setSelectionRange(focused.selectionStart, focused.selectionEnd);
+    }
+    replacement.focus({ preventScroll: true });
+  });
 
   function prefsRow(row, number) {
     var li = elem("li", "home-prefs-row");
