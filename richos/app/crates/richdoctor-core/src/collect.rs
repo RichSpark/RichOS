@@ -899,7 +899,7 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64, gestures: bo
         let confirmed = record["confirmed"].as_u64()?;
         let known_operation = if gestures {
             matches!(operation, "windowGestureAvailability" | "windowGestureMaximize" | "windowGestureRestore"
-                | "windowGestureDockMinimize" | "windowGestureDockRestore" | "desktopDeleteShortcut"
+                | "windowGestureDockMinimize" | "windowGestureDockRestore" | "desktopDeleteShortcut" | "desktopFolderOpen"
                 | "windowGestureTile" | "windowGestureTileRestore" | "windowSwitcherList" | "windowSwitcherActivate")
         } else {
             matches!(operation, "listing" | "listingVisible" | "copy" | "move" | "recovery" | "gitHistory" | "gitComparison" | "railVideoFrame"
@@ -1373,7 +1373,7 @@ mod tests {
         let mut desktop_delete = record.clone();
         desktop_delete["operation"] = serde_json::json!("desktopDeleteShortcut");
         desktop_delete["path"] = serde_json::json!("/Users/private/Desktop/test.txt");
-        let extra_gestures = ["windowGestureTile", "windowGestureTileRestore", "windowSwitcherList", "windowSwitcherActivate"]
+        let extra_gestures = ["desktopFolderOpen", "windowGestureTile", "windowGestureTileRestore", "windowSwitcherList", "windowSwitcherActivate"]
             .map(|operation| {
                 let mut event = gestures.clone();
                 event["operation"] = serde_json::json!(operation);
@@ -1417,7 +1417,7 @@ mod tests {
         assert_eq!(window_gestures.status, Status::Collected);
         assert!(window_gestures.text.contains("operation=windowGestureDockRestore"));
         assert!(window_gestures.text.contains("operation=desktopDeleteShortcut"));
-        for operation in ["windowGestureTile", "windowGestureTileRestore", "windowSwitcherList", "windowSwitcherActivate"] {
+        for operation in ["desktopFolderOpen", "windowGestureTile", "windowGestureTileRestore", "windowSwitcherList", "windowSwitcherActivate"] {
             assert!(window_gestures.text.contains(&format!("operation={operation}")));
         }
         assert!(!window_gestures.text.contains("/Users/private/Desktop"));

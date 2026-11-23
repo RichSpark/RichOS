@@ -39,6 +39,7 @@ final class GestureController {
     private var source: CFRunLoopSource?
     private var selection: Preferences.Selection = []
     private var reportedStatus: Preferences.Status?
+    private let desktopFolder = DesktopFolderClick()
     private var press: Press?
     private var pointerRevision: UInt64 = 0
     private var firstTitleClick: AXUIElement?
@@ -77,7 +78,7 @@ final class GestureController {
         )
     }
 
-    var canRestartAfterUpdate: Bool { press == nil && tileDrag == nil && switcher == nil }
+    var canRestartAfterUpdate: Bool { press == nil && tileDrag == nil && switcher == nil && !desktopFolder.busy }
 
     func refresh() {
         guard !recheckingPermissions else { return }
@@ -165,19 +166,28 @@ final class GestureController {
     private func startTap() -> Bool {
         if let tap { return CGEvent.tapIsEnabled(tap: tap) }
         var types: [CGEventType] = []
-        if !selection.intersection([.titleBar, .dock, .tiling]).isEmpty {
+        if !selection.intersection([.titleBar, .dock, .tiling, .desktopFolder]).isEmpty {
             types = [.leftMouseDown, .leftMouseUp, .leftMouseDragged, .rightMouseDown, .otherMouseDown]
         }
         if !selection.intersection([.desktopDelete, .tiling, .switcher]).isEmpty { types.append(.keyDown) }
         let mask = types.reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
-        // Observe mouse-down before Dock can change focus and pass through
-        // mouse events unchanged. The desktop shortcut may modify a key-down.
+        // Observe input before Finder and the Dock can act on a desktop gesture.
         guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
                                          options: .defaultTap, eventsOfInterest: mask, callback: { _, type, event, context in
             if let context {
                 let controller = Unmanaged<GestureController>.fromOpaque(context).takeUnretainedValue()
-                if type == .keyDown, controller.handleWindowShortcut(event) { return nil }
-                controller.receive(type, event)
+                if type == .keyDown {
+                    if controller.handleWindowShortcut(event) { return nil }
+                    switch controller.desktopFileKey(for: event) {
+                    case .ignoreBackspace: return nil
+                    case let .moveToTrash(replacement):
+                        // Quartz releases a newly supplied event after dispatch.
+                        return Unmanaged.passRetained(replacement)
+                    case .passThrough: break
+                    }
+                } else {
+                    controller.receive(type, event)
+                }
             }
             return Unmanaged.passUnretained(event)
         }, userInfo: Unmanaged.passUnretained(self).toOpaque()),
@@ -194,6 +204,7 @@ final class GestureController {
         if let tap { CFMachPortInvalidate(tap) }
         self.source = nil
         tap = nil
+        desktopFolder.reset()
         press = nil
         firstTitleClick = nil
         tileDrag = nil
@@ -208,19 +219,17 @@ final class GestureController {
     private func receive(_ type: CGEventType, _ event: CGEvent) {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             pointerRevision &+= 1
+            desktopFolder.reset()
             press = nil
             firstTitleClick = nil
             tileDrag = nil
             if let tap, AXIsProcessTrusted() { CGEvent.tapEnable(tap: tap, enable: true) }
             return
         }
-        if type == .keyDown {
-            applyDesktopDelete(to: event)
-            return
-        }
         let modifiers: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift, .maskSecondaryFn]
         guard event.flags.intersection(modifiers).isEmpty else {
             pointerRevision &+= 1
+            desktopFolder.reset()
             press = nil
             firstTitleClick = nil
             tileDrag = nil
@@ -229,11 +238,18 @@ final class GestureController {
         switch type {
         case .leftMouseDown:
             pointerRevision &+= 1
+            let desktopClick = selection.contains(.desktopFolder)
+                && DesktopFolderClick.isDesktopWindow(at: event.unflippedLocation)
+            let windowGestures = !selection.intersection([.titleBar, .dock, .tiling]).isEmpty
+            if !desktopClick { desktopFolder.reset() }
+            guard desktopClick || windowGestures else { return }
             // Capture activation and window identity during mouse-down, before
             // native Dock mouse-up can activate, reopen or focus another window.
-            let frontmost = NSWorkspace.shared.frontmostApplication
+            let frontmost = windowGestures ? NSWorkspace.shared.frontmostApplication : nil
             let clicks = Int(event.getIntegerValueField(.mouseEventClickState))
             let element = hit(at: event.location)
+            if desktopClick { desktopFolder.down(event, element: element, clicks: clicks) }
+            guard windowGestures else { return }
             press = element.flatMap { element in
                 target(element, at: event.location, clicks: clicks, frontmost: frontmost)
                     .map { Press(point: event.location, timestamp: event.timestamp, target: $0) }
@@ -246,10 +262,12 @@ final class GestureController {
             }
             if press == nil { firstTitleClick = nil }
         case .leftMouseUp:
+            desktopFolder.up(event)
             finishPress(event)
             finishTileDrag(at: event.location)
         case .leftMouseDragged:
             pointerRevision &+= 1
+            desktopFolder.dragged(event)
             press = nil
             firstTitleClick = nil
             if let drag = tileDrag, hypot(event.location.x - drag.origin.x, event.location.y - drag.origin.y) >= 8 {
@@ -257,6 +275,7 @@ final class GestureController {
             }
         case .rightMouseDown, .otherMouseDown:
             pointerRevision &+= 1
+            desktopFolder.reset()
             press = nil
             firstTitleClick = nil
             tileDrag = nil
@@ -389,33 +408,24 @@ final class GestureController {
         record(.windowGestureTileRestore, restored ? .complete : .issues, started: started)
     }
 
-    private func applyDesktopDelete(to event: CGEvent) {
-        let key = event.getIntegerValueField(.keyboardEventKeycode)
-        let modifiers: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift]
-        // macOS sets Fn on the dedicated Forward Delete key.
-        guard key == kVK_Delete || key == kVK_ForwardDelete,
-              event.flags.intersection(modifiers).isEmpty,
-              key == kVK_ForwardDelete || !event.flags.contains(.maskSecondaryFn),
-              event.getIntegerValueField(.keyboardEventAutorepeat) == 0,
-              Preferences.selection.contains(.desktopDelete),
-              let app = NSWorkspace.shared.frontmostApplication, app.bundleIdentifier == "com.apple.finder" else { return }
-
+    private func desktopFileKey(for event: CGEvent) -> DesktopFileKey {
         let started = ProcessInfo.processInfo.systemUptime
-        let finder = AXUIElementCreateApplication(app.processIdentifier)
-        AXUIElementSetMessagingTimeout(finder, 0.08)
-        // Finder exposes the desktop as a focused group inside its scroll area.
-        // Finder windows, Quick Look and the inline rename field have different focus.
-        guard let window = finder.element(kAXFocusedWindowAttribute), window.role == kAXScrollAreaRole,
-              let focused = finder.element(kAXFocusedUIElementAttribute), focused.role == kAXGroupRole,
-              focused.element(kAXParentAttribute) == window,
-              let selected: [AXUIElement] = focused.value(kAXSelectedChildrenAttribute), !selected.isEmpty,
-              NSWorkspace.shared.frontmostApplication == app else { return }
-
-        // Use Finder's regular Move to Trash command, including its Undo support.
-        event.setIntegerValueField(.keyboardEventKeycode, value: Int64(kVK_Delete))
-        event.flags.remove(.maskSecondaryFn)
-        event.flags.insert(.maskCommand)
-        record(.desktopDeleteShortcut, .complete, started: started)
+        let action = DesktopFileKey.action(for: event) {
+            guard Preferences.selection.contains(.desktopDelete),
+                  let app = NSWorkspace.shared.frontmostApplication, app.bundleIdentifier == "com.apple.finder" else { return false }
+            let finder = AXUIElementCreateApplication(app.processIdentifier)
+            AXUIElementSetMessagingTimeout(finder, 0.08)
+            // Exclude Finder windows, Quick Look and inline filename editing.
+            guard let window = finder.element(kAXFocusedWindowAttribute), window.role == kAXScrollAreaRole,
+                  let focused = finder.element(kAXFocusedUIElementAttribute), focused.role == kAXGroupRole,
+                  focused.element(kAXParentAttribute) == window else { return false }
+            // Finder processes the click before the key. AXSelectedChildren can
+            // still be empty here when Del immediately follows the first click.
+            // Let the native command use Finder's selection at delivery.
+            return NSWorkspace.shared.frontmostApplication == app
+        }
+        if case .moveToTrash = action { record(.desktopDeleteShortcut, .complete, started: started) }
+        return action
     }
 
     private func hit(at point: CGPoint) -> AXUIElement? {
