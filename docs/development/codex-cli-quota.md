@@ -51,8 +51,10 @@ and non-main limits can leave automatic redemption unavailable.
 
 While a turn is active, RichOS responds to quota exhaustion notifications when
 available and otherwise checks the pinned account every five seconds over a
-reused App Server connection. It uses the same reset lock and attempt marker as
-preflight. Codex can draw from eligible credits when no banked reset is available.
+reused App Server connection. If preflight could not identify the account, the
+watch uses the first identified account it reads during the run. It uses the same
+reset lock and attempt marker as preflight. Codex can draw from eligible credits
+when no banked reset is available.
 Billing is controlled by Codex, so credits can also be drawn before exhaustion
 is reported or while redemption is pending. If a known usage-limit failure occurs
 during a turn, RichOS rechecks the account and can retry once after a confirmed

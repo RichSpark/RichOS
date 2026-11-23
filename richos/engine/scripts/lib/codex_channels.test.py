@@ -96,7 +96,7 @@ class Channels(unittest.TestCase):
             self.assertEqual(watcher.tick(state, out=io.StringIO(), sid="rich-session-a"), 0)
 
     def quota_fixture(self, used=100, resets=1, fail=False, fail_once=False, uncertain=False,
-                      reset_details=None, midrun=None, concurrent_runs=1):
+                      reset_details=None, midrun=None, concurrent_runs=1, preflight_failed=False):
         binary = self.root / "codex"
         ledger = self.root / "cli-events"
         binary.write_text(f"#!{sys.executable}\n" + r"""
@@ -112,6 +112,7 @@ def calls():
 """ + f"""
 used, resets, fail, fail_once, uncertain = {used}, {resets}, {fail}, {fail_once}, {uncertain}
 details, midrun, concurrent_runs = {reset_details!r}, {midrun!r}, {concurrent_runs}
+preflight_failed = {preflight_failed}
 """ + """
 if sys.argv[1] == "app-server":
     for line in sys.stdin:
@@ -126,6 +127,8 @@ if sys.argv[1] == "app-server":
             result = {"config": {"model_provider": "openai"}}
         if method == "account/rateLimits/read":
             events = calls()
+            if preflight_failed and not events:
+                sys.exit(1)
             redeemed = any(x[0] == "reset" for x in events)
             runs = sum(x[0] == "exec" for x in events)
             exhausted = (fail_once and runs > 0) or (midrun and runs >= concurrent_runs)
@@ -289,6 +292,15 @@ else:
             self.assertEqual(list(pool.map(c.dispatch, (first, second))), [0, 0])
         self.assertEqual([row[0] for row in calls()], ["exec", "exec", "reset"])
         self.assertIsNone(calls()[-1][2])
+
+    def test_live_codex_poll_recovers_from_failed_preflight_read(self):
+        calls = self.quota_fixture(used=99, midrun="poll", preflight_failed=True)
+        pair = self.connect(self.a)
+        with mock.patch.object(c, "QUOTA_POLL_SECONDS", 0.05):
+            self.assertEqual(c.dispatch(pair), 0)
+        self.assertEqual([row[0] for row in calls()], ["exec", "reset"])
+        health = c.load(c.root() / "quota/dispatch-health.json")
+        self.assertEqual((health["in_flight_source"], health["in_flight_reset"]), ("poll", "reset"))
 
     def test_codex_redeems_the_soonest_expiring_available_reset(self):
         details = [dict(id=credit_id, status=status, expiresAt=expiry, resetType="codexRateLimits")

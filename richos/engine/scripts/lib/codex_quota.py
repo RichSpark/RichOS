@@ -112,7 +112,8 @@ class Reading:
         buckets = obj(value.get("rateLimitsByLimitId"))
         main = obj(buckets.get("codex")) or primary
         self.main = bucket(main)
-        self.account = value.get("accountId")
+        account = value.get("accountId")
+        self.account = account if isinstance(account, str) and 0 < len(account) <= 256 else None
         self.allowed = flag(value.get("ordinaryUsageAllowed"))
         inventory = obj(value.get("rateLimitResetCredits"))
         self.resets = number(inventory.get("availableCount"))

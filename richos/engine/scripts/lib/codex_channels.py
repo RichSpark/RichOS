@@ -373,20 +373,20 @@ def quota_status():
         return dict(status="unavailable", limits=[], available_resets=None, ordinary_usage_allowed=None)
 
 
-def check_codex_quota(binary, expected_account=None, *, rpc=None, active=None):
+def check_codex_quota(binary, expected_account=None, *, rpc=None, reading=None, active=None):
     """Read the active account and serialize redemption across RichOS jobs."""
-    reading = None
     outcome = "unavailable"
     try:
         with (codex_quota.client(binary) if rpc is None else contextlib.nullcontext(rpc)) as rpc:
-            reading = codex_quota.read(rpc)
+            if reading is None:
+                reading = codex_quota.read(rpc)
             if expected_account is not None and reading.account != expected_account:
                 return None, "accountChanged"
             if not reading.exhausted_windows() or not reading.resets:
                 return reading, "none"
             if active is not None and not active():
                 return reading, "none"
-            if not isinstance(reading.account, str) or not 0 < len(reading.account) <= 256:
+            if not reading.account:
                 return reading, "accountUnavailable"
             config = rpc.request("config/read", {"cwd": os.getcwd(), "includeLayers": False}).get("config")
             if not isinstance(config, dict):
@@ -487,9 +487,6 @@ class DispatchQuotaWatch:
 
     @contextlib.contextmanager
     def during(self, binary, child):
-        if not self.account:
-            yield
-            return
         self.wake.clear()
         stopped = threading.Event()
 
@@ -518,7 +515,10 @@ class DispatchQuotaWatch:
                 try:
                     if rpc is None:
                         rpc = connection.enter_context(codex_quota.client(binary))
-                    reading, outcome = check_codex_quota(binary, self.account, rpc=rpc, active=active)
+                    reading = codex_quota.read(rpc)
+                    if self.account is None:
+                        self.account = reading.account
+                    reading, outcome = check_codex_quota(binary, self.account, rpc=rpc, reading=reading, active=active)
                 except (OSError, ValueError):
                     reading, outcome = None, "unavailable"
                 if (reading is None and outcome == "unavailable") or outcome == "unconfirmed":
@@ -641,7 +641,8 @@ def dispatch(locator, resume=False):
             quota_notice(path, reading, outcome)
             watch = DispatchQuotaWatch(path, reading, outcome)
             code, quota_failed = run_dispatch_attempt(binary, path, marker, state, prompt, recovering, watch)
-            if code and quota_failed and watch.account and (outcome == "none" or watch.redeemed):
+            if (code and quota_failed and watch.account and
+                    (outcome in ("none", "unavailable", "accountUnavailable") or watch.redeemed)):
                 updated, retry_outcome = check_codex_quota(binary, expected_account=watch.account)
                 if updated is not None:
                     reading = updated
