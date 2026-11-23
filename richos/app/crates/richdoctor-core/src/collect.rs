@@ -227,6 +227,7 @@ pub fn collect(category: Category, scope: &Scope, ctx: &Context, used: u64) -> V
             richfiles_timing(scope, ctx, &mut budget, false),
             update_timing(scope, ctx, &mut budget),
             richfiles_timing(scope, ctx, &mut budget, true),
+            suite_memory_health(scope, ctx),
             codex_channel_health(scope, ctx, &mut budget),
         ],
         Category::Richscribe => vec![richscribe(scope, ctx, &mut budget)],
@@ -720,6 +721,30 @@ fn configuration(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
     finish(item, &lines.join("\n"), ctx, false)
 }
 
+fn suite_memory_health(scope: &Scope, ctx: &Context) -> Item {
+    let state_root = scope.data_root().join("engine-state");
+    memory_health_item(richos_core::suite_memory::health(&state_root), ctx)
+}
+
+fn memory_health_item(health: richos_core::suite_memory::Health, ctx: &Context) -> Item {
+    let source = "Suite memory sampler";
+    let category = Category::Configuration;
+    let Some(sampled_at_ms) = health.sampled_at_ms.and_then(|at| u64::try_from(at).ok()) else {
+        return unread(category, source, if health.status == "unreadable" { Status::Unreadable } else { Status::Absent });
+    };
+    let mut item = Item::new(category, source).expect("random source");
+    item.observed_at = Some(sampled_at_ms);
+    item.coverage = Coverage::Current;
+    item.summary = format!("Most recent suite memory capture: {}.", health.status);
+    let text = format!(
+        "{}
+same_user_processes={} matched_processes={} unreadable_processes={} capture_us={}",
+        item.summary, health.same_user_processes, health.matched_processes,
+        health.unreadable_processes, health.capture_us
+    );
+    finish(item, &text, ctx, false)
+}
+
 fn codex_channel_health(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
     let source = "Codex connection watcher";
     let category = Category::Configuration;
@@ -739,11 +764,26 @@ fn codex_channel_health(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item 
     item.label = source.into();
     item.summary = format!("The last recorded scan deferred automatic routing: {waiting}. Held sources: {held}.");
     let mut text = item.summary.clone();
+    if let Some(repair) = codex_ownership_health_line(&read.text) {
+        text.push('\n');
+        text.push_str(&repair);
+    }
     if let Some(dispatch) = codex_dispatch_health_line(&read.text) {
         text.push('\n');
         text.push_str(&dispatch);
     }
     finish(item, &text, ctx, read.truncated)
+}
+
+fn codex_ownership_health_line(text: &str) -> Option<String> {
+    let record: serde_json::Value = serde_json::from_str(text).ok()?;
+    let repair = record.get("ownership_repair")?;
+    let at = repair["at_ms"].as_u64()?;
+    let outcome = match repair["outcome"].as_str()? {
+        outcome @ ("moved" | "held") => outcome,
+        _ => return None,
+    };
+    Some(format!("Legacy Codex company repair: {outcome} (at {at} ms)."))
 }
 
 fn codex_dispatch_health_line(text: &str) -> Option<String> {
@@ -792,9 +832,16 @@ pub fn search_timing_lines(text: &str) -> Vec<(u64, String)> {
         let operation = record["operation"].as_u64()?;
         let mode = record["mode"].as_str()?;
         let total = record["total_ms"].as_f64()?;
-        if !matches!(mode, "meaning" | "words" | "words_fallback" | "superseded" | "unavailable") { return None; }
         let build: String = record["build"].as_str()?.chars()
             .filter(|c| c.is_ascii_hexdigit() || matches!(c, '-' | '.' | '+')).take(64).collect();
+        if mode == "palette_size" {
+            let outcome = record["outcome"].as_str()?;
+            if !matches!(outcome, "saved" | "save_failed" | "restored" | "limited") { return None; }
+            let width = record["width_px"].as_u64()?;
+            let height = record["height_px"].as_u64()?;
+            return Some((at, format!("{} build={build} resize={operation} outcome={outcome} size={width}x{height}px elapsed={total:.1}ms", crate::util::utc_stamp(at))));
+        }
+        if !matches!(mode, "meaning" | "words" | "words_fallback" | "superseded" | "unavailable") { return None; }
         let stages = record["stages"].as_array()?.iter().take(24).filter_map(|stage| {
             let name = stage[0].as_str()?;
             let ms = stage[1].as_f64()?;
@@ -859,8 +906,9 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64, gestures: bo
                 | "suiteRestartRunning" | "richFilesSuiteRestart" | "richGlanceSuiteRestart" | "captureHelperSuiteRestart" | "gesturesSuiteRestart"
                 | "windowPlacement" | "transferStall" | "cleanupScan" | "cleanupDuplicates" | "cleanupTrash" | "cleanupDelete"
                 | "openWithDiscovery"
-                | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata"
+                | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata" | "glanceViewerEdit"
                 | "glanceCaptureFrame" | "glanceCaptureOutput" | "glanceCaptureSession" | "glanceScrollCapture" | "glanceCompare" | "glanceOCR" | "glanceSearch" | "glancePin" | "glanceRedactedCopy" | "glanceShare"
+                | "glanceAnnotationDefaults"
                 | "glanceCaptureHelperStart" | "glanceCaptureHelperLogin" | "glanceCaptureHelperMenu" | "glanceCaptureShortcutLaunch" | "glanceCaptureMenuLaunch")
         };
         if id.len() != 36 || !id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
@@ -1086,6 +1134,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn suite_memory_support_collects_capture_health() {
+        let h = home();
+        let scope = scope(&h.0, Window::around(T));
+        let empty = collect(Category::Configuration, &scope, &Context::default(), 0)
+            .into_iter().find(|item| item.source == "Suite memory sampler").unwrap();
+        assert_eq!(empty.status, Status::Absent);
+        let health = richos_core::suite_memory::Health {
+            status: "partial",
+            sampled_at_ms: Some(T as i64),
+            same_user_processes: 15,
+            matched_processes: 6,
+            unreadable_processes: 1,
+            capture_us: 1440,
+        };
+        let item = memory_health_item(health, &Context::default());
+        assert_eq!(item.status, Status::Collected);
+        assert_eq!(item.observed_at, Some(T));
+        assert!(item.text.contains("capture: partial"));
+        assert!(item.text.contains("matched_processes=6 unreadable_processes=1 capture_us=1440"));
+    }
+
+    #[test]
     fn codex_health_uses_only_the_watcher_fields() {
         let h = home();
         let scope = scope(&h.0, Window::around(T));
@@ -1097,12 +1167,13 @@ mod tests {
             "at_ms":14,"elapsed_ms":100,"preflight_ms":12,"reading":"available","reset":"none",
             "in_flight_source":"poll","in_flight_reset":"reset",
             "retry_reset":"private retry","quota_failed":true,"exit_code":1,"balance":"private balance"
-        }}"#);
+        },"ownership_repair":{"at_ms":13,"outcome":"moved","thread_id":"private thread"}}"#);
         let result = collect_health();
         assert_eq!(result.status, Status::Collected);
         assert_eq!(result.observed_at, Some(15));
         assert!(result.text.contains("deferred automatic routing: true"));
         assert!(result.text.contains("Held sources: 2"));
+        assert!(result.text.contains("Legacy Codex company repair: moved (at 13 ms)."));
         assert!(result.text.contains("Preflight 12 ms. Elapsed 100 ms."));
         assert!(result.text.contains("Reset none. In-flight reset reset (poll). Retry reset unavailable. Quota failure true. Exit 1."));
         assert!(!result.text.contains("private"));
@@ -1200,12 +1271,24 @@ mod tests {
             "query": "private-search-terms",
             "stages": [["embedding", 10.2], ["private-stage-label", 8.1]]
         });
-        write(&scope.data_root().join(SEARCH_TIMING_LOG), &record.to_string());
+        let resized = serde_json::json!({
+            "at_ms": T,
+            "operation": 4,
+            "build": "a123",
+            "mode": "palette_size",
+            "outcome": "restored",
+            "width_px": 1250,
+            "height_px": 800,
+            "total_ms": 203.1,
+            "query": "private-search-terms"
+        });
+        write(&scope.data_root().join(SEARCH_TIMING_LOG), &format!("{record}\n{resized}"));
         let items = collect(Category::RichFinder, &scope, &Context::default(), 0);
         let timing = items.iter().find(|item| item.source == "RichFinder timing log").unwrap();
         assert_eq!(timing.status, Status::Collected);
         assert_eq!(timing.coverage, Coverage::InWindow);
         assert!(timing.text.contains("response=152.1ms embedding=10.2ms"), "{}", timing.text);
+        assert!(timing.text.contains("resize=4 outcome=restored size=1250x800px elapsed=203.1ms"), "{}", timing.text);
         assert!(!timing.text.contains("private-"));
     }
 
@@ -1235,11 +1318,13 @@ mod tests {
         metadata["note"] = serde_json::json!("Personal RichCleaner note");
         metadata["scrollCaptureFailure"] = serde_json::json!("lostOverlap");
         let captures = [
+            "glanceViewerEdit",
             "glanceCaptureFrame",
             "glanceCaptureSession",
             "glanceCaptureOutput",
             "glanceCompare",
             "glanceScrollCapture",
+            "glanceAnnotationDefaults",
             "glanceCaptureHelperStart",
             "glanceCaptureHelperLogin",
             "glanceCaptureHelperMenu",
@@ -1255,6 +1340,11 @@ mod tests {
             let mut capture = record.clone();
             capture["operation"] = serde_json::json!(stage);
             capture["screen"] = serde_json::json!("Private screen content");
+            if stage == "glanceAnnotationDefaults" {
+                capture["outcome"] = serde_json::json!("complete");
+                capture["total"] = serde_json::json!(1);
+                capture["confirmed"] = serde_json::json!(1);
+            }
             if stage == "glanceScrollCapture" {
                 capture["outcome"] = serde_json::json!("issues");
                 capture["scrollCaptureFailure"] = serde_json::json!("conflictingPixels");
@@ -1299,10 +1389,12 @@ mod tests {
         assert!(timing.text.contains("operation=glanceDecode outcome=issues"));
         assert!(timing.text.contains("operation=glanceDefaults"));
         assert!(timing.text.contains("operation=glanceMetadata"));
+        assert!(timing.text.contains("operation=glanceViewerEdit"));
         assert!(timing.text.contains("operation=glanceCaptureFrame"));
         assert!(timing.text.contains("operation=glanceCaptureSession"));
         assert!(timing.text.contains("operation=glanceCaptureOutput"));
         assert!(timing.text.contains("operation=glanceCompare"));
+        assert!(timing.text.contains("operation=glanceAnnotationDefaults outcome=complete"));
         assert!(timing.text.contains("operation=richFilesSuiteRestart outcome=interrupted"));
         assert!(timing.text.contains("application=app.richos.richfiles pid=123"));
         for stage in ["glanceCaptureHelperStart", "glanceCaptureHelperLogin", "glanceCaptureHelperMenu", "glanceCaptureShortcutLaunch", "glanceCaptureMenuLaunch"] {

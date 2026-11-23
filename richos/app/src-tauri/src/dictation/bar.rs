@@ -171,6 +171,106 @@ pub fn build(app: &AppHandle, kind: Kind) -> Result<(), String> {
     Ok(())
 }
 
+/// The native client is the only process that knows which WebKit services back
+/// these windows. Publish their identities off the main and dictation threads.
+pub fn start_webkit_ownership(app: AppHandle, data_dir: std::path::PathBuf) {
+    use richos_core::suite_memory::Recorder;
+    use std::time::Duration;
+
+    let spawn = std::thread::Builder::new().name("scribe-webkit-ownership".into()).spawn(move || {
+        let state_root = data_dir.join("engine-state");
+        let mut recorder = None;
+        let mut last_error = None;
+        loop {
+            let Some(pids) = webkit_pids(&app) else {
+                std::thread::sleep(Duration::from_secs(3));
+                continue;
+            };
+            let result = match recorder.as_ref() {
+                Some(recorder) => Recorder::publish_richscribe_webkit(recorder, &pids),
+                None => Recorder::open(&state_root).and_then(|opened| {
+                    let result = opened.publish_richscribe_webkit(&pids);
+                    recorder = Some(opened);
+                    result
+                }),
+            };
+            let error = result.err();
+            if error != last_error {
+                if let Some(message) = &error {
+                    log::line(&format!("suite memory WebKit attribution: {message}"));
+                }
+                last_error = error;
+            }
+            std::thread::sleep(Duration::from_secs(20));
+        }
+    });
+    if let Err(error) = spawn {
+        log::line(&format!("could not start suite memory WebKit attribution: {error}"));
+    }
+}
+
+fn webkit_pids(app: &AppHandle) -> Option<Vec<i32>> {
+    let (send, receive) = std::sync::mpsc::channel();
+    for label in [BAR, FLIGHT, MENU] {
+        let send = send.clone();
+        app.get_webview_window(label)?.with_webview(move |view| {
+            let webview = view.inner().cast::<objc2::runtime::AnyObject>();
+            // Tauri supplies the live WKWebView on its main thread for this callback.
+            let pids = unsafe { webview.as_ref().map(webkit_view_pids) };
+            send.send(pids).ok();
+        }).ok()?;
+    }
+    let mut collected = Vec::new();
+    for _ in [BAR, FLIGHT, MENU] {
+        let pids = receive.recv_timeout(std::time::Duration::from_millis(250)).ok()??;
+        if pids[0] < 2 {
+            return None;
+        }
+        collected.extend(pids.into_iter().filter(|pid| *pid > 1));
+    }
+    Some(collected)
+}
+
+fn webkit_view_pids(view: &objc2::runtime::AnyObject) -> [i32; 4] {
+    use objc2::runtime::{AnyObject, Bool, Sel};
+    use objc2::{msg_send, sel};
+
+    fn responds(view: &AnyObject, selector: Sel) -> bool {
+        let yes: Bool = unsafe { msg_send![view, respondsToSelector: selector] };
+        yes.as_bool()
+    }
+
+    let mut pids = [0; 4];
+    // The four selectors return pid_t. In particular check the data store before
+    // reading its network PID, since the getter could otherwise launch a process.
+    unsafe {
+        if responds(view, sel!(_webProcessIdentifier)) {
+            pids[0] = msg_send![view, _webProcessIdentifier];
+        }
+        if responds(view, sel!(_provisionalWebProcessIdentifier)) {
+            pids[1] = msg_send![view, _provisionalWebProcessIdentifier];
+        }
+        if responds(view, sel!(_gpuProcessIdentifier)) {
+            pids[2] = msg_send![view, _gpuProcessIdentifier];
+        }
+        let configuration: *mut AnyObject = msg_send![view, configuration];
+        if let Some(configuration) = configuration.as_ref() {
+            let store: *mut AnyObject = msg_send![configuration, websiteDataStore];
+            if let Some(store) = store.as_ref() {
+                if responds(store, sel!(_networkProcessExists))
+                    && responds(store, sel!(_networkProcessIdentifier))
+                {
+                    let running: Bool = msg_send![store, _networkProcessExists];
+                    if running.as_bool() {
+                        pids[3] = msg_send![store, _networkProcessIdentifier];
+                    }
+                }
+            }
+        }
+    }
+    pids
+}
+
 fn win(app: &AppHandle, label: &str) -> Option<Win> {
     let w = app.get_webview_window(label)?;
     w.ns_window().ok().map(|p| Win(p as *mut _))

@@ -3283,13 +3283,18 @@ impl Spine {
     /// Called by the shell after the ledger and the control are both open. Safe to call
     /// when there is nothing to do.
     pub fn reconcile_intake(&mut self) -> Result<(), SpineError> {
-        self.reconcile_saved_intake(false)
+        self.reconcile_saved_intake(false, None)
     }
 
     /// Desktop startup resumes saved requests through their scoped native session. Provider
     /// I/O starts later, after the first page, through the detached delivery queue.
     pub fn recover_after_restart(&mut self) -> Result<(), SpineError> {
-        self.reconcile_saved_intake(true)
+        self.recover_after_restart_except(None)
+    }
+
+    /// Hold the history of a conversation with an unfinished ownership repair.
+    pub fn recover_after_restart_except(&mut self, held_thread: Option<&str>) -> Result<(), SpineError> {
+        self.reconcile_saved_intake(true, held_thread)
     }
 
     fn continuation_origin(&self, binding: &ThreadBinding, turn_id: &str) -> (String, usize) {
@@ -3309,9 +3314,9 @@ impl Spine {
         (successor.to_owned(), restarts)
     }
 
-    fn reconcile_saved_intake(&mut self, resume: bool) -> Result<(), SpineError> {
+    fn reconcile_saved_intake(&mut self, resume: bool, held_thread: Option<&str>) -> Result<(), SpineError> {
         let interrupted: Vec<String> = self.ledger.pending_turns().iter()
-            .filter(|turn| turn.source != Source::Internal)
+            .filter(|turn| turn.source != Source::Internal && Some(turn.thread_id.as_str()) != held_thread)
             .map(|turn| turn.id.clone()).collect();
         // A Stop that settled before the restart still covers a card answer saved before it
         // and not yet delivered (review rv-20261018T204635Z-c68a30ec-f61e#2).

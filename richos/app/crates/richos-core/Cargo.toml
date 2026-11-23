@@ -10,7 +10,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 thiserror = "1"
-time = { version = "0.3", features = ["parsing"] }
+time = { version = "0.3", features = ["formatting", "parsing"] }
 # SHA-256 for the pinned engine asset (`setup.rs`). Pure Rust, no native dependency and no
 # TLS stack, so `cargo test -p richos-core` stays fast. Chosen over shelling out to
 # `shasum -a 256` because an integrity check whose answer depends on parsing a subprocess's

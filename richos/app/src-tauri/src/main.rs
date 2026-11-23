@@ -510,33 +510,49 @@ fn codex_sink(app: AppHandle) -> richos_core::codex_watch::Sink {
         let event:serde_json::Value=serde_json::from_str(line).map_err(|e|e.to_string())?;
         let view=state.reader.snapshot();
         let state_root=state.data_dir.join("engine-state");
+        use richos_core::codex_bridge::ownership;
+        let coordination = richos_core::codex_bridge::root();
+        let pending = ownership::pending_legacy_repair(&state.data_dir, &coordination);
         if event["type"] == "automatic" {
-            let coordination = richos_core::codex_bridge::root();
-            if coordination.join("automatic.json").try_exists().map_err(|e| e.to_string())? {
+            let request = if let Some(locator) = event["locator"].as_str() {
+                let Some(request) = ownership::AutomaticRequest::read(&coordination, Path::new(locator))
+                    .map_err(|e| e.to_string())? else { return Ok(()) };
+                Some(request)
+            } else if event["legacy"] == true {
+                None
+            } else {
+                // A previous verified engine sends a destination request with no provenance.
                 return Ok(());
+            };
+            let company = match &request {
+                Some(request) => request.company(view.entity_registry()),
+                None => ownership::legacy_company(view.entity_registry()),
+            }.ok_or("Codex work is saved until its project has a registered company")?;
+            if pending.is_some_and(|(destination, _)| destination == company) {
+                return Err("Codex work is saved while its company move is pending".into());
             }
-            let configured = state.entity.lock().unwrap().clone();
-            let company = configured.or_else(|| match view.entity_registry().entities() {
-                [only] => Some(only.id.clone()),
-                _ => None,
-            }).ok_or("independent Codex work is saved until a company is available")?;
             // Keep servicing already addressed channels while a turn owns the spine.
             let mut spine = state.spine.try_lock().map_err(|_| "the conversation ledger is busy")?;
             let (binding, created) = spine.codex_conversation(&company).map_err(|e| e.to_string())?;
             drop(spine);
+            match request {
+                Some(request) => request.bind(&binding),
+                None => ownership::publish_legacy_target(&coordination, &binding),
+            }.map_err(|e| e.to_string())?;
             if created {
                 drop(app.emit("rich://chat-list-changed", ()));
                 tell_the_phone_the_threads(&app);
             }
-            richos_core::codex_bridge::publish_automatic_target(&coordination, &binding)
-                .map_err(|e| e.to_string())?;
-            eprintln!("[richos] Codex watch: automatic destination ready");
+            eprintln!("[richos] Codex watch: project destination ready");
             return Ok(());
         }
         let thread=event["connection"]["thread_id"].as_str().ok_or("no channel conversation")?;
+        if pending.is_some_and(|(_, moved_thread)| moved_thread == thread) {
+            return Err("Codex work is saved while its company move is pending".into());
+        }
         let binding=view.ledger().thread_binding(thread).map_err(|e|e.to_string())?;
         if !view.entity_registry().contains(binding.entity_id()) {return Err("channel company is no longer registered".into())}
-        richos_core::codex_bridge::accept(&state_root,&binding,&event,&richos_core::codex_bridge::root())
+        richos_core::codex_bridge::accept(&state_root,&binding,&event,&coordination)
     })
 }
 
@@ -984,6 +1000,7 @@ impl LeaseFactory for EngineLeaseFactory {
     /// host reports it in those words rather than leaving it to surface later as a worker
     /// that never speaks.
     fn spawn_work(&self, binding: &richos_core::entity::ThreadBinding) -> Result<Box<dyn Cognition>, CognitionError> {
+        self.check_codex_repair(binding)?;
         let dir = self
             .engine_dir
             .lock()
@@ -1042,6 +1059,16 @@ impl LeaseFactory for EngineLeaseFactory {
 }
 
 impl EngineLeaseFactory {
+    fn check_codex_repair(&self, binding: &richos_core::entity::ThreadBinding) -> Result<(), CognitionError> {
+        let coordination = richos_core::codex_bridge::root();
+        if richos_core::codex_bridge::ownership::pending_legacy_repair(&self.data_dir, &coordination)
+            .is_some_and(|(_, thread)| thread == binding.thread_id())
+        {
+            return Err(CognitionError::Io("This conversation's company move will retry when RichOS next opens.".into()));
+        }
+        Ok(())
+    }
+
     fn effective_model_choices(&self, account: &str)
         -> (richos_core::config::LeaseModels, richos_core::config::LeaseEfforts) {
         let settings = ConfigStore::open(self.data_dir.join("config.json")).ok();
@@ -1051,6 +1078,9 @@ impl EngineLeaseFactory {
     }
 
     fn spawn_chat(&self, control: Option<&ConversationControl>, binding: Option<&richos_core::entity::ThreadBinding>) -> Result<Box<dyn Cognition>, CognitionError> {
+        if let Some(binding) = binding {
+            self.check_codex_repair(binding)?;
+        }
         let dir = self
             .engine_dir
             .lock()
@@ -3364,6 +3394,17 @@ fn main() {
                         }
                     });
                 }
+                let registry_path = richos_core::entity::entity_registry_path(&data_dir);
+                let mut registry_load = EntityRegistry::load(&registry_path);
+                let coordination = richos_core::codex_bridge::root();
+                use richos_core::codex_bridge::ownership;
+                match ownership::repair_legacy_company(&data_dir, &coordination, &registry_load.registry) {
+                    Ok(true) => eprintln!("[richos] Codex ownership repair: thread and delivery state moved"),
+                    Ok(false) => {}
+                    Err(error) => eprintln!("[richos] Codex ownership repair held: {error}"),
+                }
+                let pending_codex_thread = ownership::pending_legacy_repair(&data_dir, &coordination)
+                    .map(|(_, thread)| thread);
                 let ledger_path = data_dir.join("conversation-ledger.jsonl");
                 let checkpoint_path = data_dir.join("swearmeter-cache");
                 let cards_path = data_dir.join("engine-state/questions/store.json");
@@ -3461,8 +3502,6 @@ fn main() {
                 // It is his own file now. Absent is the ordinary first-run state and yields an
                 // EMPTY registry, which resolves nothing, refuses every root, and makes the app
                 // ASK — the same shape `entity_choice`'s `chosen: None` already had.
-                let registry_path = richos_core::entity::entity_registry_path(&data_dir);
-                let mut registry_load = EntityRegistry::load(&registry_path);
                 for note in &registry_load.notes {
                     eprintln!("[richos] {note}");
                 }
@@ -4055,7 +4094,7 @@ fn main() {
                 // Restore durable Stops before any recovered message is submitted. Reconciliation
                 // queues accepted inputs locally. A provider reply must never hold the window's thread.
                 spine.detach_conversation_io();
-                if let Err(e) = spine.recover_after_restart() {
+                if let Err(e) = spine.recover_after_restart_except(pending_codex_thread.as_deref()) {
                     eprintln!("[richos] intake reconciliation at boot: {e}");
                 }
                 adopt_at_the_turn_boundary(&mut spine, &work);
@@ -4583,6 +4622,7 @@ fn main() {
             set_sidebar_width,
             set_sidebar_collapsed,
             set_entity_collapsed,
+            set_company_order,
             set_thread_pinned,
             set_thread_archived,
             chat_list::set_chat_list_state,
@@ -4760,6 +4800,7 @@ fn main() {
             search_document_sources,
             cancel_search_documents,
             open_search_document,
+            search_diagnostics::search_palette_size_diagnostic,
             // --- Meeting notes (Granola PRD V4) — appended ---
             meetings::meeting_panel_state,
             meetings::meeting_panel_laid_out,
@@ -8024,6 +8065,12 @@ fn set_entity_collapsed(state: State<AppState>, entity_id: String, collapsed: bo
 }
 
 #[richos_command::command]
+fn set_company_order(state: State<AppState>, order: Vec<String>) -> Result<(), String> {
+    let spine = state.reader.snapshot();
+    state.nav.lock().unwrap().set_company_order(order, spine.entity_registry()).map_err(|e| e.to_string())
+}
+
+#[richos_command::command]
 fn set_thread_pinned(state: State<AppState>, thread_id: String, pinned: bool) -> Result<(), String> {
     state.nav.lock().unwrap().set_thread_pinned(&thread_id, pinned).map_err(|e| e.to_string())
 }
@@ -9235,6 +9282,33 @@ mod navigation_tests {
             Entity::new("richos", "RichOS", &["/fixture/ab/richos"]).unwrap(),
         ])
         .unwrap()
+    }
+
+    #[test]
+    fn company_order_round_trips_and_refused_changes_keep_the_saved_order() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("navigation.json");
+        std::fs::write(&path, r#"{"collapsed_entities":["deeply"],"pinned_threads":["test-chat"]}"#).unwrap();
+        let registry = nav_test_registry();
+        let order = vec!["richos".to_string(), "deeply".to_string(), "femcboost".to_string()];
+        let mut store = nav::NavStore::open(&path);
+        assert!(store.state().company_order.is_empty(), "older files use registry order");
+        store.set_company_order(order.clone(), &registry).unwrap();
+        assert!(crate::chat_list::recent_diagnostics().unwrap().contains("company order · saved"));
+
+        let mut reopened = nav::NavStore::open(&path);
+        assert_eq!(reopened.state().company_order, order);
+        assert_eq!(reopened.state().collapsed_entities, ["deeply"]);
+        assert_eq!(reopened.state().pinned_threads, ["test-chat"]);
+        for invalid in [["richos", "richos"], ["richos", "unbound"]] {
+            assert!(reopened.set_company_order(invalid.map(str::to_string).to_vec(), &registry).is_err());
+        }
+        // Make the temporary write target unusable and verify both memory and disk roll back.
+        std::fs::create_dir(path.with_extension("json.tmp")).unwrap();
+        let reversed = order.iter().rev().cloned().collect();
+        assert!(reopened.set_company_order(reversed, &registry).is_err());
+        assert_eq!(reopened.state().company_order, order);
+        assert_eq!(nav::NavStore::open(&path).state().company_order, order);
     }
 
     #[test]
