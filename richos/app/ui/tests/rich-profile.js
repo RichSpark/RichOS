@@ -120,6 +120,8 @@ async function main() {
 
     await run.check("the setup portrait opens the profile above the setup sheet and Escape returns to Rich", async () => {
       const page = await openApp(browser, "light", 1440, { setup: "missing-both", dictation: true, videoTools: "downloading", memory: "ready" });
+      // Keep the download in progress while testing Escape. Setup focuses Start on completion.
+      await page.evaluate(() => window.__RICHOS_MOCK__.setupHold(true));
       await page.locator("#setup-go").click();
       await page.locator("#setup-steps").waitFor();
       await page.evaluate(() => window.__RICHOS_MOCK__.setupEmit({
