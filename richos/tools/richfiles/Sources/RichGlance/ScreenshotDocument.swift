@@ -7,6 +7,7 @@ enum ScreenshotTool: String, CaseIterable, Codable, Sendable {
 
     var title: String { rawValue.capitalized }
     var hasThickness: Bool { self == .line || self == .box }
+    var hasSideGrabbers: Bool { self == .box || self == .redact }
     var hasEndpoints: Bool { self == .line || self == .arrow }
     var defaultInk: ScreenshotInk? {
         switch self {

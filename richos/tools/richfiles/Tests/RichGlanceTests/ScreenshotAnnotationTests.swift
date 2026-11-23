@@ -94,6 +94,10 @@ final class ScreenshotAnnotationTests: XCTestCase {
         try checkSideGrabbers(of: .box)
     }
 
+    func testEachRedactSideChangesOnlyItsOwnAxis() async throws {
+        try checkSideGrabbers(of: .redact)
+    }
+
     func testArrowGeometryMatchesBothSourceSizesAndScales() async throws {
         for (large, shaft, head) in [(false, 6, 18), (true, 10, 30)] {
             var document = ScreenshotDocument(original: try bitmap(gray: 1), scale: 1)

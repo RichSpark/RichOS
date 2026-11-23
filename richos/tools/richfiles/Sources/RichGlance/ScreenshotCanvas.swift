@@ -187,7 +187,7 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
         if let mark = selectedMark, tool != .crop {
             if !mark.tool.hasEndpoints {
                 var frame = viewRect(markBounds(mark))
-                if mark.tool == .box { frame = frame.insetBy(dx: -5, dy: -5) }
+                if mark.tool.hasSideGrabbers { frame = frame.insetBy(dx: -5, dy: -5) }
                 outline(frame, dashed: true, in: context)
             }
             for (handle, point) in handles() { drawHandle(handle, at: viewPoint(point), in: context) }
@@ -237,7 +237,7 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
 
     override func cursorUpdate(with event: NSEvent) {
         let location = convert(event.locationInWindow, from: nil)
-        if selectedMark?.tool == .box, case .edge(let side) = handle(at: location) {
+        if selectedMark?.tool.hasSideGrabbers == true, case .edge(let side) = handle(at: location) {
             (side.isMultiple(of: 2) ? NSCursor.resizeUpDown : NSCursor.resizeLeftRight).set()
         } else {
             NSCursor.arrow.set()
@@ -348,7 +348,7 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
                 let original = mark.rect
                 var destination = point
                 var limits = shown
-                if mark.tool == .box, case .edge(let side) = gesture.handle {
+                if mark.tool.hasSideGrabbers, case .edge(let side) = gesture.handle {
                     if side.isMultiple(of: 2) {
                         destination.y = (side == 0 ? original.minY : original.maxY) + target.y - gesture.anchor.y
                         limits = CGRect(x: original.minX, y: shown.minY, width: original.width, height: shown.height)
@@ -619,7 +619,7 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
     private func handle(at location: CGPoint) -> Handle? {
         return handles().min { distance($0.1) < distance($1.1) }.flatMap { handle, point in
             let center = viewPoint(point)
-            if selectedMark?.tool == .box, case .edge(let side) = handle {
+            if selectedMark?.tool.hasSideGrabbers == true, case .edge(let side) = handle {
                 let dx = abs(center.x - location.x), dy = abs(center.y - location.y)
                 return (side.isMultiple(of: 2) ? dx <= 15 && dy <= 9 : dx <= 9 && dy <= 15) ? handle : nil
             }
@@ -639,8 +639,7 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
         case .arrow, .line: return [(.start, mark.start), (.end, mark.end)]
         case .text:
             return rectHandles(mark.rect, edges: true) + (mark.pointer.map { [(.pointer, $0)] } ?? [])
-        case .box: return rectHandles(mark.rect, edges: true)
-        case .redact, .highlight: return rectHandles(mark.rect, edges: false)
+        case .box, .redact, .highlight: return rectHandles(mark.rect, edges: mark.tool.hasSideGrabbers)
         default: return []
         }
     }
@@ -714,7 +713,7 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
         switch handle {
         case .start, .end: path = CGPath(ellipseIn: rect, transform: nil)
         case .edge(let i):
-            if pendingCrop == nil, selectedMark?.tool == .box {
+            if pendingCrop == nil, selectedMark?.tool.hasSideGrabbers == true {
                 rect = rect.insetBy(dx: i.isMultiple(of: 2) ? -5 : 3, dy: i.isMultiple(of: 2) ? 3 : -5)
             } else {
                 rect = rect.insetBy(dx: i.isMultiple(of: 2) ? 0 : 4, dy: i.isMultiple(of: 2) ? 4 : 0)
