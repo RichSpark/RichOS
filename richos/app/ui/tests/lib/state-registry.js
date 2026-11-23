@@ -6417,7 +6417,8 @@ module.exports = [
   {"s":"no channel conversation","c":"NOT-RENDERED","why":"codex_sink in main.rs refuses a malformed watcher event. Its only consumer is codex_watch.rs's Sink worker, which logs a changed failure with eprintln and retains the source. This is never returned to the webview."},
   {"s":"channel company is no longer registered","c":"NOT-RENDERED","why":"codex_sink in main.rs holds a channel whose ledger company is unavailable. The codex_watch.rs Sink worker logs the changed failure with eprintln and retries the retained source. This is never returned to the webview."},
   {"s":"Codex work is saved until its project has a registered company","c":"NOT-RENDERED","why":"The Codex watcher logs why it cannot resolve the project's company and retries the saved input on later polls."},
-  {"s":"the conversation ledger is busy","c":"NOT-RENDERED","why":"The Codex watch worker logs a busy ledger and tries the automatic destination again on a later poll."},
+  {"s":"Codex work is saved while its company move is pending","c":"NOT-RENDERED","why":"The Codex watcher holds this conversation's saved work for the next repair attempt."},
+  {"s":"This conversation's company move will retry when RichOS next opens.","c":"INFORMATIONAL","why":"A pending repair temporarily holds this conversation's provider session."},
   // Rounds 98 and 99, the RichBrief and RichGlance rail pages.
   {"s":"A fast picture viewer","c":"INFORMATIONAL","why":"The approved page copy describes the tool, its settings or how it is used."},
   {"s":"A short summary, the decisions, your actions, what others committed to and what is still open, in the meeting’s chat. Ask Rich to change them like anything else.","c":"INFORMATIONAL","why":"The approved page copy describes the tool, its settings or how it is used."},

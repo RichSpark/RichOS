@@ -510,9 +510,10 @@ fn codex_sink(app: AppHandle) -> richos_core::codex_watch::Sink {
         let event:serde_json::Value=serde_json::from_str(line).map_err(|e|e.to_string())?;
         let view=state.reader.snapshot();
         let state_root=state.data_dir.join("engine-state");
+        use richos_core::codex_bridge::ownership;
+        let coordination = richos_core::codex_bridge::root();
+        let pending = ownership::pending_legacy_repair(&state.data_dir, &coordination);
         if event["type"] == "automatic" {
-            use richos_core::codex_bridge::ownership;
-            let coordination = richos_core::codex_bridge::root();
             let request = if let Some(locator) = event["locator"].as_str() {
                 let Some(request) = ownership::AutomaticRequest::read(&coordination, Path::new(locator))
                     .map_err(|e| e.to_string())? else { return Ok(()) };
@@ -527,6 +528,9 @@ fn codex_sink(app: AppHandle) -> richos_core::codex_watch::Sink {
                 Some(request) => request.company(view.entity_registry()),
                 None => ownership::legacy_company(view.entity_registry()),
             }.ok_or("Codex work is saved until its project has a registered company")?;
+            if pending.is_some_and(|(destination, _)| destination == company) {
+                return Err("Codex work is saved while its company move is pending".into());
+            }
             // Keep servicing already addressed channels while a turn owns the spine.
             let mut spine = state.spine.try_lock().map_err(|_| "the conversation ledger is busy")?;
             let (binding, created) = spine.codex_conversation(&company).map_err(|e| e.to_string())?;
@@ -543,9 +547,12 @@ fn codex_sink(app: AppHandle) -> richos_core::codex_watch::Sink {
             return Ok(());
         }
         let thread=event["connection"]["thread_id"].as_str().ok_or("no channel conversation")?;
+        if pending.is_some_and(|(_, moved_thread)| moved_thread == thread) {
+            return Err("Codex work is saved while its company move is pending".into());
+        }
         let binding=view.ledger().thread_binding(thread).map_err(|e|e.to_string())?;
         if !view.entity_registry().contains(binding.entity_id()) {return Err("channel company is no longer registered".into())}
-        richos_core::codex_bridge::accept(&state_root,&binding,&event,&richos_core::codex_bridge::root())
+        richos_core::codex_bridge::accept(&state_root,&binding,&event,&coordination)
     })
 }
 
@@ -993,6 +1000,7 @@ impl LeaseFactory for EngineLeaseFactory {
     /// host reports it in those words rather than leaving it to surface later as a worker
     /// that never speaks.
     fn spawn_work(&self, binding: &richos_core::entity::ThreadBinding) -> Result<Box<dyn Cognition>, CognitionError> {
+        self.check_codex_repair(binding)?;
         let dir = self
             .engine_dir
             .lock()
@@ -1051,6 +1059,16 @@ impl LeaseFactory for EngineLeaseFactory {
 }
 
 impl EngineLeaseFactory {
+    fn check_codex_repair(&self, binding: &richos_core::entity::ThreadBinding) -> Result<(), CognitionError> {
+        let coordination = richos_core::codex_bridge::root();
+        if richos_core::codex_bridge::ownership::pending_legacy_repair(&self.data_dir, &coordination)
+            .is_some_and(|(_, thread)| thread == binding.thread_id())
+        {
+            return Err(CognitionError::Io("This conversation's company move will retry when RichOS next opens.".into()));
+        }
+        Ok(())
+    }
+
     fn effective_model_choices(&self, account: &str)
         -> (richos_core::config::LeaseModels, richos_core::config::LeaseEfforts) {
         let settings = ConfigStore::open(self.data_dir.join("config.json")).ok();
@@ -1060,6 +1078,9 @@ impl EngineLeaseFactory {
     }
 
     fn spawn_chat(&self, control: Option<&ConversationControl>, binding: Option<&richos_core::entity::ThreadBinding>) -> Result<Box<dyn Cognition>, CognitionError> {
+        if let Some(binding) = binding {
+            self.check_codex_repair(binding)?;
+        }
         let dir = self
             .engine_dir
             .lock()
@@ -3372,13 +3393,10 @@ fn main() {
                 match ownership::repair_legacy_company(&data_dir, &coordination, &registry_load.registry) {
                     Ok(true) => eprintln!("[richos] Codex ownership repair: thread and delivery state moved"),
                     Ok(false) => {}
-                    Err(error) => {
-                        eprintln!("[richos] Codex ownership repair held: {error}");
-                        if ownership::legacy_repair_pending(&data_dir, &coordination) {
-                            return Err(error.into());
-                        }
-                    }
+                    Err(error) => eprintln!("[richos] Codex ownership repair held: {error}"),
                 }
+                let pending_codex_thread = ownership::pending_legacy_repair(&data_dir, &coordination)
+                    .map(|(_, thread)| thread);
                 let ledger_path = data_dir.join("conversation-ledger.jsonl");
                 let checkpoint_path = data_dir.join("swearmeter-cache");
                 let cards_path = data_dir.join("engine-state/questions/store.json");
@@ -4068,7 +4086,7 @@ fn main() {
                 // Restore durable Stops before any recovered message is submitted. Reconciliation
                 // queues accepted inputs locally. A provider reply must never hold the window's thread.
                 spine.detach_conversation_io();
-                if let Err(e) = spine.recover_after_restart() {
+                if let Err(e) = spine.recover_after_restart_except(pending_codex_thread.as_deref()) {
                     eprintln!("[richos] intake reconciliation at boot: {e}");
                 }
                 adopt_at_the_turn_boundary(&mut spine, &work);

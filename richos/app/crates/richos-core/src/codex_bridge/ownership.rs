@@ -484,8 +484,11 @@ fn repair(data: &Path, coordination: &Path, registry: &EntityRegistry) -> io::Re
     Ok(true)
 }
 
-pub fn legacy_repair_pending(data: &Path, coordination: &Path) -> bool {
-    matches!(read_record::<Move>(&coordination.join(MOVE)), Ok(Some(repair)) if !repair.complete && repair.data_dir == data)
+/// A restart can continue with the rest of the profile even if this move has
+/// crossed a persistence boundary. Hold its deliveries until a launch finishes it.
+pub fn pending_legacy_repair(data: &Path, coordination: &Path) -> Option<(EntityId, String)> {
+    let repair = read_record::<Move>(&coordination.join(MOVE)).ok().flatten()?;
+    (!repair.complete && repair.data_dir == data).then_some((repair.to, repair.thread_id))
 }
 
 pub(super) fn unresolved_legacy(coordination: &Path, endpoint: &Value) -> io::Result<bool> {
@@ -783,6 +786,28 @@ mod tests {
                 )
                 .unwrap();
                 move_dir(&old_connections, &new_connections).unwrap();
+                let busy = lock(&coordination.join("coordinator.lock")).unwrap();
+                assert_eq!(
+                    repair_legacy_company(&data, &coordination, &registry)
+                        .unwrap_err()
+                        .kind(),
+                    io::ErrorKind::WouldBlock
+                );
+                assert_eq!(
+                    pending_legacy_repair(&data, &coordination),
+                    Some((right.clone(), conversation.clone()))
+                );
+                let still_readable = Ledger::open(&path).unwrap();
+                assert_eq!(
+                    still_readable.thread_binding(&conversation).unwrap(),
+                    original
+                );
+                assert_eq!(
+                    still_readable.messages_scoped(&original).unwrap()[0].text,
+                    "Saved Codex request"
+                );
+                drop(still_readable);
+                drop(busy);
             }
             assert!(repair_legacy_company(&data, &coordination, &registry).unwrap());
             assert!(!repair_legacy_company(&data, &coordination, &registry).unwrap());
