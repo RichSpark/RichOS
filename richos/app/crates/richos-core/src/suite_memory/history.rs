@@ -5,7 +5,7 @@ use rusqlite::{
 };
 use std::fs::OpenOptions;
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 const MINUTE_MS: i64 = 60_000;
@@ -39,6 +39,16 @@ const SCHEMA: &str = "
     ) WITHOUT ROWID;
 ";
 
+// macOS and user-selected storage can put the app's data under a directory
+// symlink. Resolve the directory without resolving the database's own name.
+fn sqlite_path(path: &Path) -> rusqlite::Result<PathBuf> {
+    let invalid = || Error::InvalidPath(path.to_path_buf());
+    let name = path.file_name().ok_or_else(invalid)?;
+    let parent = path.parent().ok_or_else(invalid)?;
+    let directory = std::fs::canonicalize(parent).map_err(|_| invalid())?;
+    Ok(directory.join(name))
+}
+
 pub struct Recorder(Connection);
 
 impl Recorder {
@@ -60,7 +70,7 @@ impl Recorder {
 
     fn open_file(path: &Path, pages: i64) -> rusqlite::Result<Self> {
         let db = Connection::open_with_flags(
-            path,
+            sqlite_path(path)?,
             OpenFlags::default() | OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
         db.busy_timeout(Duration::from_millis(250))?;
@@ -230,7 +240,7 @@ fn latest(db: &Connection) -> rusqlite::Result<Option<Latest>> {
 
 fn reader(state_root: &Path) -> rusqlite::Result<Connection> {
     let db = Connection::open_with_flags(
-        super::path(state_root),
+        sqlite_path(&super::path(state_root))?,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
     )?;
     db.busy_timeout(Duration::from_millis(250))?;
@@ -486,6 +496,31 @@ mod tests {
                 .count(),
             readings,
         }
+    }
+
+    #[test]
+    fn the_data_directory_may_be_aliased_but_the_database_file_may_not() {
+        use std::os::unix::fs::symlink;
+        let fixture = Fixture::new();
+        let real = fixture.0.join("real");
+        std::fs::create_dir(&real).unwrap();
+        let alias = fixture.0.join("alias");
+        symlink(&real, &alias).unwrap();
+        let now = crate::util::now_millis() as i64;
+        let mut recorder = Recorder::open(&alias).unwrap();
+        recorder
+            .record(now, Some(&sample(&[(Kind::RichOs, Some(90 * MIB), 1)])), 0)
+            .unwrap();
+        assert_eq!(
+            read(&alias, now).apps[0].current.as_ref().unwrap().bytes,
+            Some(90 * MIB)
+        );
+
+        let other = fixture.0.join("other");
+        std::fs::create_dir(&other).unwrap();
+        symlink(suite_memory::path(&real), suite_memory::path(&other)).unwrap();
+        assert!(Recorder::open(&other).is_err());
+        assert_eq!(read(&other, now).status, "unavailable");
     }
 
     #[test]
