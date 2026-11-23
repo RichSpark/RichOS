@@ -179,6 +179,44 @@ final class ScreenshotAnnotationTests: XCTestCase {
         }
     }
 
+    func testTextAndStepsRememberSizeAcrossCapturesAndEditorRecreation() async throws {
+        try withStore { store in
+            let editor = try makeEditor(store)
+            let canvas = try XCTUnwrap(editor.canvas)
+            for tool in [ScreenshotTool.text, .steps] {
+                canvas.tool = .select
+                let mark = makeMark(tool, from: CGPoint(x: 30, y: 30), to: CGPoint(x: 130, y: 70))
+                canvas.document.edits.marks = [mark]
+                canvas.selected = mark.id
+                canvas.setStyle(ink: .blue, large: true)
+                XCTAssertEqual(canvas.selectedMark?.large, true)
+            }
+            canvas.document.edits.marks = []
+            canvas.selected = nil
+            editor.changeDocument(ScreenshotDocument(original: try bitmap(), scale: 1))
+            let sameEditor = try XCTUnwrap(editor.canvas)
+            let reopened = try makeEditor(store)
+            let newEditor = try XCTUnwrap(reopened.canvas)
+            for fresh in [sameEditor, newEditor] {
+                for tool in [ScreenshotTool.text, .steps] {
+                    fresh.tool = tool
+                    XCTAssertTrue(fresh.large, tool.title)
+                    XCTAssertEqual(fresh.ink, .blue, tool.title)
+                }
+            }
+            newEditor.tool = .text
+            newEditor.setStyle(large: false)
+            let third = try makeEditor(store)
+            let latest = try XCTUnwrap(third.canvas)
+            latest.tool = .text
+            XCTAssertFalse(latest.large)
+            XCTAssertEqual(latest.ink, .blue)
+            XCTAssertEqual(store.annotationStyle(for: .text).large, false)
+            latest.tool = .steps
+            XCTAssertTrue(latest.large)
+        }
+    }
+
     func testRedactionIsSolidAndHasNoWhiteBorderAtAnyInset() async throws {
         var document = ScreenshotDocument(original: try bitmap(), scale: 1)
         document.edits.marks = [makeMark(.redact, from: CGPoint(x: 30, y: 40), to: CGPoint(x: 100, y: 90))]

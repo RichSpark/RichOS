@@ -237,7 +237,9 @@ final class ScreenshotWorkflowTests: XCTestCase {
         canvas.tool = .box
         XCTAssertFalse(canvas.large)
         XCTAssertEqual(canvas.ink, .red)
+        canvas.tool = .text
         canvas.setStyle(large: true)
+        XCTAssertTrue(canvas.large)
         canvas.tool = .arrow
         XCTAssertFalse(canvas.large)
         XCTAssertEqual(canvas.ink, .blue)

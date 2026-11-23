@@ -337,7 +337,6 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
         }
         indexedCurrentEdits = canvas?.document.edits
         if let previous, let canvas {
-            canvas.sizes = previous.sizes
             if previous.tool != .crop { canvas.tool = previous.tool }
         }
         scroll.documentView = canvas
@@ -1188,7 +1187,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
             thickness.title = "Thickness · " + width
             thickness.setAccessibilityValue(width)
         }
-        size.isHidden = !styled || selectedTool == .highlight || selectedTool.hasThickness
+        size.isHidden = !styled || !selectedTool.hasSizeChoice
         size.selection = (mark?.large ?? canvas?.large) == true ? 1 : 0
         edit.isHidden = cropping || mark?.tool != .text
         delete.isHidden = cropping || mark == nil

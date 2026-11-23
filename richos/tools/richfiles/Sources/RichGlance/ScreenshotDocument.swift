@@ -6,6 +6,7 @@ enum ScreenshotTool: String, CaseIterable, Codable, Sendable {
     case select, arrow, text, line, box, highlight, steps, redact, crop
 
     var title: String { rawValue.capitalized }
+    var hasSizeChoice: Bool { self == .arrow || self == .text || self == .steps }
     var hasThickness: Bool { self == .line || self == .box }
     var hasSideGrabbers: Bool { self == .box || self == .redact }
     var hasEndpoints: Bool { self == .line || self == .arrow }

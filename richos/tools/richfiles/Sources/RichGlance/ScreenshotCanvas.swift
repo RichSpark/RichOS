@@ -27,14 +27,13 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
         }
     }
     var ink: ScreenshotInk { styles[tool]?.ink ?? tool.defaultInk ?? .red }
-    var large: Bool { styles[tool]?.large ?? sizes[tool] ?? (tool == .arrow) }
+    var large: Bool { styles[tool]?.large ?? (tool == .arrow) }
     var thickness: CGFloat {
         if let selectedMark { return selectedMark.strokeWidth(at: document.scale) }
         return ScreenshotMark(tool: tool, start: .zero, end: .zero, thickness: styles[tool]?.thickness)
             .strokeWidth(at: document.scale)
     }
     private var styles: [ScreenshotTool: ScreenshotMarkStyle] = [:]
-    var sizes: [ScreenshotTool: Bool] = [:]
     var saveStyle: ((ScreenshotMarkStyle, ScreenshotTool) -> Void)?
     var previewThickness: Int? { didSet { needsDisplay = true } }
     var isSnappingLine: Bool { gesture?.snapped == true }
@@ -410,9 +409,9 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
         var style = styles[editedTool] ?? ScreenshotMarkStyle()
         var changes = ScreenshotMarkStyle()
         if let ink { style.ink = ink; changes.ink = ink }
-        if let large {
-            if editedTool == .arrow { style.large = large; changes.large = large }
-            else { sizes[editedTool] = large }
+        if let large, editedTool.hasSizeChoice {
+            style.large = large
+            changes.large = large
         }
         if let thickness, editedTool.hasThickness, ScreenshotMark.thicknessOptions.contains(thickness) {
             style.thickness = thickness
@@ -422,7 +421,7 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
         if changes.ink != nil || changes.large != nil || changes.thickness != nil { saveStyle?(changes, editedTool) }
         editSelected { mark in
             if let ink { mark.ink = ink }
-            if let large { mark.large = large }
+            if let large = changes.large { mark.large = large }
             if let thickness = changes.thickness { mark.thickness = thickness }
         }
         if selectedMark == nil { refresh() }
