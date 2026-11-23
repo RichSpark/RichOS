@@ -14,8 +14,8 @@
 // own button, choices, count and sheet (`hv-skip`) are never in the file. "Save video" hands the
 // file to `home_video_save` (`src-tauri/src/home_video.rs`), which opens the Mac's own save window.
 //
-// THE MICROPHONE is asked for when he switches it on, never when recording starts, so the Mac's
-// question is answered before the count. In a test run (`home_video_input` answers "tone") a quiet
+// THE MICROPHONE is asked for in the choices, before the count. In a test run
+// (`home_video_input` answers "tone") a quiet
 // tone made in the page goes into the file only, never to the speakers, and the sheet plays muted.
 //
 // `home.js` builds the chrome (`build`), says when his count changes (`onCount`); `home-growth.js`
@@ -30,9 +30,29 @@ window.RichHomeVideo = (function () {
   var root = null;
   var el = {};
   var state = "idle"; // idle | choosing | count | rec | saving | sheet
-  // the three choices; they stay as he left them
-  var opts = { stops: "me", pointer: true };
+  var opts = { stops: "me", pointer: true, voice: false };
+  var choicesKey = "richos-video-choices";
+  var lastChoices = opts;
   var NS = "http://www.w3.org/2000/svg";
+
+  // Microphone and pointer follow the last video from either button. Home alone sets its stop mode.
+  function readVideoChoices() {
+    try {
+      const stored = JSON.parse(localStorage.getItem(choicesKey));
+      if (stored) {
+        lastChoices = { stops: stored.stops === "itself" ? "itself" : "me",
+          pointer: stored.pointer !== false, voice: stored.voice === true };
+      }
+    } catch (_) {}
+    return { ...lastChoices };
+  }
+
+  function rememberVideoChoices(out, stops) {
+    lastChoices = { voice: out.voice, pointer: out.pointer, stops: stops ?? readVideoChoices().stops };
+    try {
+      localStorage.setItem(choicesKey, JSON.stringify(lastChoices));
+    } catch (_) {}
+  }
 
   var growth = function () {
     return window.RichHomeGrowth;
@@ -78,8 +98,7 @@ window.RichHomeVideo = (function () {
   // ---------------------------------------------------------------------------------------------
   // THE MICROPHONE
   // ---------------------------------------------------------------------------------------------
-  // `want` is his choice, which stays as he left it; the microphone itself is held only while he is
-  // choosing, counting or recording, so the Mac's microphone light is never left on behind him.
+  // The microphone is held only while choosing, counting or recording.
   //
   // ONE MICROPHONE FOR EACH RECORDER (`microphone`): this screen's, and the one that records the
   // whole app from the heading of Settings (round 79, `video-anywhere.js`). `paint` is called
@@ -112,7 +131,8 @@ window.RichHomeVideo = (function () {
   // sound); `tests/video-as-shown.js` holds both recorders to asking this way.
   var ASK = { audio: { echoCancellation: false } };
   function microphone(paint, bars) {
-    var mic = { want: false, state: "off", stream: null, ac: null, an: null, buf: null, level: 0, tone: false };
+    var mic = { state: "off", stream: null, ac: null, an: null, buf: null, level: 0, tone: false };
+    var request = 0;
     /// The made-up microphone: a 196 Hz tone that swells 1.7 times a second, into the file only.
     function tone(AC) {
       var ac = (mic.ac = new AC());
@@ -134,12 +154,14 @@ window.RichHomeVideo = (function () {
       return dest.stream;
     }
     mic.start = function () {
-      if (mic.stream) return Promise.resolve(true);
+      if (mic.stream || mic.state === "asking") return;
+      var asked = ++request;
       mic.state = "asking";
       paint();
       var AC = window.AudioContext || window.webkitAudioContext;
       return input()
         .then(function (kind) {
+          if (request !== asked) return null;
           mic.tone = kind === "tone";
           if (mic.tone) {
             if (!AC) throw new Error("no microphone");
@@ -150,8 +172,9 @@ window.RichHomeVideo = (function () {
         })
         .then(
           function (stream) {
-            // he switched it off again while the Mac was asking
-            if (mic.state !== "asking") {
+            if (!stream) return false;
+            // The choice may have been closed, reopened or switched off while the Mac was asking.
+            if (request !== asked) {
               stream.getTracks().forEach(function (t) {
                 t.stop();
               });
@@ -174,7 +197,7 @@ window.RichHomeVideo = (function () {
             return true;
           },
           function () {
-            mic.want = false;
+            if (request !== asked) return false;
             mic.state = "denied";
             paint();
             return false;
@@ -182,6 +205,7 @@ window.RichHomeVideo = (function () {
         );
     };
     mic.stop = function () {
+      request++;
       if (mic.stream)
         mic.stream.getTracks().forEach(function (t) {
           t.stop();
@@ -759,7 +783,7 @@ window.RichHomeVideo = (function () {
     stale = null;
     shot = out;
     state = "sheet";
-    mic.stop(); // the file is whole: the microphone is let go (his choice stays)
+    mic.stop();
     var g = growth();
     var n = g.state().n;
     var day = g.day();
@@ -776,6 +800,7 @@ window.RichHomeVideo = (function () {
     el.sheet.classList.toggle("square", out.h === out.w);
     var here = homeOpen();
     if (out.blob && out.blob.size) {
+      rememberVideoChoices(out, take.film ? "itself" : "me");
       el.video.src = shot.url = URL.createObjectURL(out.blob);
       // with the made-up microphone the sheet never plays sound: a check must stay silent on a Mac
       el.video.muted = !out.voice || out.tone;
@@ -962,7 +987,7 @@ window.RichHomeVideo = (function () {
       else if (state === "rec") finish();
       else if (state === "count") {
         cancelCount();
-        openPanel();
+        openPanel(true);
       }
     });
 
@@ -977,8 +1002,7 @@ window.RichHomeVideo = (function () {
         return mic.state === "on" ? "on" : "off";
       },
       function (k) {
-        mic.want = k === "on";
-        if (mic.want) mic.start();
+        if (k === "on") mic.start();
         else mic.stop();
       }
     );
@@ -987,45 +1011,35 @@ window.RichHomeVideo = (function () {
     el.micNote = make("p", "hv-mic-note", DENIED);
     el.micNote.hidden = true;
     el.panel.appendChild(el.micNote);
-    el.panel.appendChild(
-      row(
-        "stops",
-        "Recording stops",
-        seg(
-          [
-            { key: "itself", label: "By itself" },
-            { key: "me", label: "When I stop it" },
-          ],
-          function () {
-            return opts.stops;
-          },
-          function (k) {
-            opts.stops = k;
-            el.says.textContent = SAYS[k];
-          }
-        )
-      )
+    el.stopsSeg = seg(
+      [
+        { key: "itself", label: "By itself" },
+        { key: "me", label: "When I stop it" },
+      ],
+      function () {
+        return opts.stops;
+      },
+      function (k) {
+        opts.stops = k;
+        el.says.textContent = SAYS[k];
+      }
     );
+    el.panel.appendChild(row("stops", "Recording stops", el.stopsSeg));
     el.says = make("p", "says", SAYS[opts.stops]);
     el.panel.appendChild(el.says);
-    el.panel.appendChild(
-      row(
-        "pointer",
-        "Mouse pointer",
-        seg(
-          [
-            { key: "shown", label: "Shown" },
-            { key: "hidden", label: "Hidden" },
-          ],
-          function () {
-            return opts.pointer ? "shown" : "hidden";
-          },
-          function (k) {
-            opts.pointer = k === "shown";
-          }
-        )
-      )
+    el.pointerSeg = seg(
+      [
+        { key: "shown", label: "Shown" },
+        { key: "hidden", label: "Hidden" },
+      ],
+      function () {
+        return opts.pointer ? "shown" : "hidden";
+      },
+      function (k) {
+        opts.pointer = k === "shown";
+      }
     );
+    el.panel.appendChild(row("pointer", "Mouse pointer", el.pointerSeg));
     el.go = make("button", "hv-main hv-go", "Start recording", { type: "button" });
     el.panel.appendChild(el.go);
     root.appendChild(el.panel);
@@ -1033,13 +1047,18 @@ window.RichHomeVideo = (function () {
       if (state === "choosing" && mic.state !== "asking") begin();
     });
   }
-  function openPanel() {
+  function openPanel(revise = false) {
     var g = growth();
     if (g && g.replaying) g.grow(); // a film already running is stopped first
     state = "choosing";
-    if (mic.state === "denied") mic.state = "off";
+    if (!revise) {
+      opts = readVideoChoices();
+      el.stopsSeg.paint();
+      el.pointerSeg.paint();
+      el.says.textContent = SAYS[opts.stops];
+      if (opts.voice) mic.start();
+    }
     paintMic();
-    if (mic.want && !mic.stream) mic.start(); // his choice from last time: the microphone again
     el.panel.hidden = false;
     paintState();
     el.go.focus();
@@ -1052,7 +1071,7 @@ window.RichHomeVideo = (function () {
     return true;
   }
 
-  /// Back to the button alone: the microphone is let go (his choice stays).
+  /// Back to the button alone: the microphone is let go.
   function rest() {
     state = "idle";
     mic.stop();
@@ -1159,7 +1178,7 @@ window.RichHomeVideo = (function () {
     onCount: onCount,
     left: left,
     /// What the recorder of the whole app is made of too (round 79, `video-anywhere.js`).
-    parts: { make: make, icon: icon, level: level, fmt: fmt, clock: clock, microphone: microphone, radius: radius, plate: plate, ground: ground, paintPointer: paintPointer, mimeType: mimeType, tape: tape, even: even, handOver: handOver, DENIED: DENIED },
+    parts: { make: make, icon: icon, level: level, fmt: fmt, clock: clock, microphone: microphone, radius: radius, plate: plate, ground: ground, paintPointer: paintPointer, mimeType: mimeType, tape: tape, even: even, handOver: handOver, readVideoChoices: readVideoChoices, rememberVideoChoices: rememberVideoChoices, DENIED: DENIED },
     state: function () {
       return { state: state, mic: mic.state, stops: opts.stops, pointer: opts.pointer, frames: rec ? rec.frames : shot ? shot.frames : 0, ended: shot ? shot.ended || null : null, saved: !!(el.sheetSaved && !el.sheetSaved.hidden && el.sheetSave.hidden) };
     },

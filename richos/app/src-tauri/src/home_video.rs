@@ -45,7 +45,7 @@ pub fn home_video_input() -> &'static str {
 }
 
 #[derive(Default)]
-struct CleanerFrames {
+struct RecordingFrames {
     recording: u32,
     captured: u32,
     missed: u32,
@@ -53,7 +53,11 @@ struct CleanerFrames {
     slowest: Duration,
 }
 
-impl CleanerFrames {
+impl RecordingFrames {
+    const EMPTY: Self = Self {
+        recording: 0, captured: 0, missed: 0, elapsed: Duration::ZERO, slowest: Duration::ZERO,
+    };
+
     fn add(&mut self, recording: u32, captured: bool, elapsed: Duration) {
         if self.recording != recording {
             *self = Self { recording, ..Self::default() };
@@ -64,22 +68,44 @@ impl CleanerFrames {
         self.slowest = self.slowest.max(elapsed);
     }
 
-    fn excerpt(&self) -> Option<String> {
+    fn excerpt(&self, format: &str) -> Option<String> {
         let total = self.captured + self.missed;
         (total > 0).then(|| {
             let build = option_env!("RICHOS_SOURCE_SHA").unwrap_or(env!("CARGO_PKG_VERSION"));
-            format!("{build} · recording {} · {} captured, {} unavailable · average {} ms, slowest {} ms from request to JPEG",
+            format!("{build} · recording {} · {} captured, {} unavailable · average {} ms, slowest {} ms from request to {format}",
                 self.recording, self.captured, self.missed, self.elapsed.as_millis() / u128::from(total), self.slowest.as_millis())
         })
     }
 }
 
-static CLEANER_FRAMES: Mutex<CleanerFrames> = Mutex::new(CleanerFrames {
-    recording: 0, captured: 0, missed: 0, elapsed: Duration::ZERO, slowest: Duration::ZERO,
-});
+static CLEANER_FRAMES: Mutex<RecordingFrames> = Mutex::new(RecordingFrames::EMPTY);
+static OUTPUT_GIT_FRAMES: Mutex<RecordingFrames> = Mutex::new(RecordingFrames::EMPTY);
 
 pub(crate) fn recent_cleaner_capture() -> Option<String> {
-    CLEANER_FRAMES.lock().ok()?.excerpt()
+    CLEANER_FRAMES.lock().ok()?.excerpt("JPEG")
+}
+
+pub(crate) fn recent_output_git_capture() -> Option<String> {
+    OUTPUT_GIT_FRAMES.lock().ok()?.excerpt("PNG")
+}
+
+/// Sample the live Git overlay attached to the main webview while recording.
+#[richos_command::command]
+pub async fn output_git_recording_frame(window: tauri::WebviewWindow, recording: u32) -> tauri::ipc::Response {
+    #[cfg(target_os = "macos")]
+    if window.label() == "main" {
+        let start = Instant::now();
+        let result = crate::richfiles_integration::take_output_git_frame(&window).await;
+        if !matches!(result, Ok(None)) {
+            if let Ok(mut frames) = OUTPUT_GIT_FRAMES.lock() {
+                frames.add(recording, result.is_ok(), start.elapsed());
+            }
+        }
+        return tauri::ipc::Response::new(result.ok().flatten().unwrap_or_default());
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _window_and_recording = (window, recording);
+    tauri::ipc::Response::new(Vec::new())
 }
 
 /// The main recorder can sample the fixed RichCleaner library window as long as it has focus.
@@ -295,16 +321,16 @@ mod tests {
 
     #[test]
     fn cleaner_window_timings_describe_only_the_latest_recording() {
-        let mut frames = CleanerFrames::default();
-        assert_eq!(frames.excerpt(), None);
+        let mut frames = RecordingFrames::default();
+        assert_eq!(frames.excerpt("JPEG"), None);
         frames.add(1, true, Duration::from_millis(20));
         frames.add(1, false, Duration::from_millis(400));
-        assert!(frames.excerpt().unwrap().ends_with(
+        assert!(frames.excerpt("JPEG").unwrap().ends_with(
             "recording 1 · 1 captured, 1 unavailable · average 210 ms, slowest 400 ms from request to JPEG"
         ));
         frames.add(2, true, Duration::from_millis(50));
-        assert!(frames.excerpt().unwrap().ends_with(
-            "recording 2 · 1 captured, 0 unavailable · average 50 ms, slowest 50 ms from request to JPEG"
+        assert!(frames.excerpt("PNG").unwrap().ends_with(
+            "recording 2 · 1 captured, 0 unavailable · average 50 ms, slowest 50 ms from request to PNG"
         ));
     }
 
