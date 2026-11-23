@@ -832,9 +832,16 @@ pub fn search_timing_lines(text: &str) -> Vec<(u64, String)> {
         let operation = record["operation"].as_u64()?;
         let mode = record["mode"].as_str()?;
         let total = record["total_ms"].as_f64()?;
-        if !matches!(mode, "meaning" | "words" | "words_fallback" | "superseded" | "unavailable") { return None; }
         let build: String = record["build"].as_str()?.chars()
             .filter(|c| c.is_ascii_hexdigit() || matches!(c, '-' | '.' | '+')).take(64).collect();
+        if mode == "palette_size" {
+            let outcome = record["outcome"].as_str()?;
+            if !matches!(outcome, "saved" | "save_failed" | "restored" | "limited") { return None; }
+            let width = record["width_px"].as_u64()?;
+            let height = record["height_px"].as_u64()?;
+            return Some((at, format!("{} build={build} resize={operation} outcome={outcome} size={width}x{height}px elapsed={total:.1}ms", crate::util::utc_stamp(at))));
+        }
+        if !matches!(mode, "meaning" | "words" | "words_fallback" | "superseded" | "unavailable") { return None; }
         let stages = record["stages"].as_array()?.iter().take(24).filter_map(|stage| {
             let name = stage[0].as_str()?;
             let ms = stage[1].as_f64()?;
@@ -1264,12 +1271,24 @@ mod tests {
             "query": "private-search-terms",
             "stages": [["embedding", 10.2], ["private-stage-label", 8.1]]
         });
-        write(&scope.data_root().join(SEARCH_TIMING_LOG), &record.to_string());
+        let resized = serde_json::json!({
+            "at_ms": T,
+            "operation": 4,
+            "build": "a123",
+            "mode": "palette_size",
+            "outcome": "restored",
+            "width_px": 1250,
+            "height_px": 800,
+            "total_ms": 203.1,
+            "query": "private-search-terms"
+        });
+        write(&scope.data_root().join(SEARCH_TIMING_LOG), &format!("{record}\n{resized}"));
         let items = collect(Category::RichFinder, &scope, &Context::default(), 0);
         let timing = items.iter().find(|item| item.source == "RichFinder timing log").unwrap();
         assert_eq!(timing.status, Status::Collected);
         assert_eq!(timing.coverage, Coverage::InWindow);
         assert!(timing.text.contains("response=152.1ms embedding=10.2ms"), "{}", timing.text);
+        assert!(timing.text.contains("resize=4 outcome=restored size=1250x800px elapsed=203.1ms"), "{}", timing.text);
         assert!(!timing.text.contains("private-"));
     }
 
