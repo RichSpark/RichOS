@@ -1293,10 +1293,7 @@ async function openThread(threadId, opts) {
   opts = opts || {};
   const row = threadRow(threadId);
   if (!row) return;
-  if (!opts.restore) {
-    window.RichProfile.close({ instant: true, keepFocus: true });
-    leaveRailPage();
-  }
+  if (!opts.restore) leaveRailPage();
   // THE RESTORE NEVER OVERWRITES A CHOICE, and it is checked here as well as at the call site
   // so that a future second caller of the restore path inherits the rule rather than having to
   // remember it.
@@ -5357,6 +5354,7 @@ function setTalkPressed(pressed) {
   talkToggleBtn.dataset.tip = pressed ? "Stop talking" : "Talk to Rich";
   // D21: the inline copies of the icon (greeting, voice row) say what the button says.
   document.querySelectorAll("svg.talk-icon-inline").forEach((i) => i.setAttribute("aria-label", pressed ? "Stop talking" : "Talk to Rich"));
+  window.RichProfile.syncTalk();
 }
 
 async function enterVoiceMode() {

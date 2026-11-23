@@ -103,6 +103,7 @@ window.RichProfile = (() => {
     icon.classList.add("rich-profile-talk-icon");
     talkButton.prepend(icon);
     talkButton.addEventListener("click", () => {
+      if (talk.hidden || talk.disabled) return;
       close({ keepFocus: true });
       talk.focus({ preventScroll: true });
       talk.click();
@@ -111,6 +112,18 @@ window.RichProfile = (() => {
       close({ keepFocus: true });
       byId("input").focus();
     });
+  }
+
+  function syncTalk() {
+    if (!panel?.isConnected || panel.inert) return;
+    const original = byId("talk-toggle");
+    const action = panel.querySelector('[data-action="talk"]');
+    action.hidden = original.hidden;
+    action.disabled = original.disabled;
+    if (original.hasAttribute("aria-disabled")) action.setAttribute("aria-disabled", original.getAttribute("aria-disabled"));
+    else action.removeAttribute("aria-disabled");
+    const label = original.getAttribute("aria-label");
+    if (label) action.lastChild.data = label;
   }
 
   function renderWork() {
@@ -242,7 +255,7 @@ window.RichProfile = (() => {
     panel.querySelector(".rich-profile-body").scrollTop = 0;
     panel.querySelector("[data-model]").textContent = context.model();
     panel.querySelector(".rich-profile-actions").hidden = !!setup;
-    panel.querySelector('[data-action="talk"]').hidden = byId("talk-toggle").hidden;
+    syncTalk();
     renderWork();
     renderSince(opener);
     fly(from);
@@ -318,5 +331,5 @@ window.RichProfile = (() => {
     return `${layout}, first-launch date ${start}, ${activity}`;
   }
 
-  return { identity, init, close, renderWork, reportDetails };
+  return { identity, init, close, syncTalk, renderWork, reportDetails };
 })();

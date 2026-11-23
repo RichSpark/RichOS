@@ -186,11 +186,18 @@ body.rich-profile-docked #stage.narrow #stage-header {
   cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
 }
-.rich-profile-btn:hover {
+.rich-profile-btn:enabled:hover {
   background: var(--tint-soft);
 }
-.rich-profile-btn:active {
+.rich-profile-btn:enabled:active {
   transform: translateY(1px);
+}
+.rich-profile-btn:disabled {
+  cursor: default;
+}
+.rich-profile-btn:disabled .rich-profile-talk-icon {
+  outline: 1.5px dashed var(--line-control);
+  outline-offset: 2px;
 }
 .rich-profile-btn:focus-visible {
   outline: 2px solid var(--accent);

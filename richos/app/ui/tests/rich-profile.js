@@ -118,6 +118,28 @@ async function main() {
       await page.context().close();
     });
 
+    await run.check("the profile stays open when switching chats in the conversation list", async () => {
+      const page = await openApp(browser, "light", 1440);
+      const profile = await openFromGreeting(page);
+      await page.locator('.nav-thread[data-thread-id="acme"]').first().click();
+      await page.locator("#messages .tl-prose").filter({ hasText: "Their counter came in this morning" }).waitFor();
+      assert(await profile.isVisible(), "the conversation list keeps the profile open");
+      await page.context().close();
+    });
+
+    await run.check("Talk to Rich mirrors the composer's disabled control", async () => {
+      const page = await openApp(browser, "dark", 1440, { voice: "refused" });
+      const profile = await openFromGreeting(page);
+      const talk = page.locator("#talk-toggle");
+      const profileTalk = profile.getByRole("button", { name: "Talk to Rich" });
+      assert(await talk.isDisabled(), "the refused voice fixture disables talking");
+      assert(await profileTalk.isDisabled(), "the profile also disables talking");
+      assertEqual(await profileTalk.getAttribute("aria-disabled"), "true", "availability reaches accessibility");
+      await profileTalk.evaluate((button) => button.click());
+      assert(await profile.isVisible(), "pressing disabled Talk to Rich leaves the profile open");
+      await page.context().close();
+    });
+
     await run.check("the setup portrait opens the profile above the setup sheet and Escape returns to Rich", async () => {
       const page = await openApp(browser, "light", 1440, { setup: "missing-both", dictation: true, videoTools: "downloading", memory: "ready" });
       // Keep the download in progress while testing Escape. Setup focuses Start on completion.
