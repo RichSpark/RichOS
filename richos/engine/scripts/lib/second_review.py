@@ -952,7 +952,7 @@ def version_of(binary):
         return ""
 
 
-def run_bounded(argv, cwd, prompt, out_path, err_path, limit, env=None):
+def run_bounded(argv, cwd, prompt, out_path, err_path, limit, env=None, *, quota_watch=None):
     """(exit code or None on the time limit, seconds).
 
     Keep the reviewer in the watcher's process group, including the window
@@ -975,17 +975,18 @@ def run_bounded(argv, cwd, prompt, out_path, err_path, limit, env=None):
                 # A fast exit or exec can race the first identity read.
                 # Retry if a timeout actually needs tree cleanup.
                 tree = None
-            try:
-                p.communicate(prompt.encode("utf-8"), timeout=limit)
-                return p.returncode, time.monotonic() - start
-            except subprocess.TimeoutExpired:
-                if tree is None:
-                    tree = proc_tree.TrackedTree(p.pid, scope)
-                left = proc_tree.finish_scope(p, tree)
-                p.wait(timeout=1)
-                if left:
-                    raise Refused("timed-out reviewer cleanup incomplete: %s" % left)
-                return None, time.monotonic() - start
+            with (quota_watch.during(argv[0], p) if quota_watch else contextlib.nullcontext()):
+                try:
+                    p.communicate(prompt.encode("utf-8"), timeout=limit)
+                except subprocess.TimeoutExpired:
+                    if tree is None:
+                        tree = proc_tree.TrackedTree(p.pid, scope)
+                    left = proc_tree.finish_scope(p, tree)
+                    p.wait(timeout=1)
+                    if left:
+                        raise Refused("timed-out reviewer cleanup incomplete: %s" % left)
+                    return None, time.monotonic() - start
+            return p.returncode, time.monotonic() - start
         finally:
             _REVIEWER["proc"] = None
 
@@ -1054,6 +1055,16 @@ def codex_run_facts(stdout_path, stderr_path):
 def codex_env():
     """Codex logs its SessionConfiguredEvent (model, effort, rollout path) on stderr at this level."""
     return dict(os.environ, RUST_LOG="codex_exec=info")
+
+
+def run_codex_bounded(argv, cwd, prompt, out_path, err_path, limit):
+    from codex_channels import CodexQuotaWatch, check_codex_quota
+
+    env = codex_env()
+    reading, outcome = check_codex_quota(argv[0], cwd=cwd, env=env)
+    watch = CodexQuotaWatch(reading, outcome, cwd=cwd, env=env)
+    rc, elapsed = run_bounded(argv, cwd, prompt, out_path, err_path, limit, env=env, quota_watch=watch)
+    return rc, elapsed, dict(preflight_reset=outcome, in_flight_source=watch.source, in_flight_reset=watch.outcome)
 
 
 # The reviewer never runs the user's own Codex setup: see "ISOLATED FROM THE USER'S OWN SETUP" above.
@@ -1516,8 +1527,8 @@ def _review_owned(a, w):
             row["reviewer"], row["cli_version"] = "codex", version_of(codex)
             answer_path = os.path.join(out_dir, "answer.json")
             so, se = os.path.join(out_dir, "codex.stdout.jsonl"), os.path.join(out_dir, "codex.stderr.txt")
-            rc, secs = run_bounded(codex_argv(codex, export, schema_path, answer_path), export, prompt, so, se, limit,
-                                   env=codex_env())
+            rc, secs, row["codex_quota"] = run_codex_bounded(
+                codex_argv(codex, export, schema_path, answer_path), export, prompt, so, se, limit)
             row["duration_s"] = round(secs, 1)
             facts = codex_run_facts(so, se)
             row["reviewer_model"] = facts["model"] or "unverified (Codex logged no session start; asked for %s)" % CODEX_MODEL

@@ -1372,12 +1372,43 @@ print(json.dumps(result))
 '''
 
 FAKE_CODEX = r'''
-import json, os, sys
+import json, os, sys, time
 from pathlib import Path
+from threading import Event
 if sys.argv[1:3] == ["login", "status"]:
     sys.stderr.write("Logged in using ChatGPT\n")
     raise SystemExit(0)
-Path(os.environ["CODEX_CAPTURE"]).write_text(json.dumps({"argv": sys.argv, "prompt": sys.stdin.read()}))
+capture = Path(os.environ["CODEX_CAPTURE"])
+redemption = capture.with_suffix(".reset")
+if sys.argv[1] == "app-server":
+    for line in sys.stdin:
+        request = json.loads(line)
+        if "id" not in request:
+            continue
+        method = request["method"]
+        result = {}
+        if method == "account/read":
+            result = {"account": {"type": "chatgpt"}, "userId": "fixture-user"}
+        if method == "config/read":
+            result = {"config": {"model_provider": "openai"}}
+        if method == "account/rateLimits/read":
+            reset = redemption.exists()
+            exhausted = capture.exists() and not reset
+            result = {"accountId": "fixture-pierce", "ordinaryUsageAllowed": not exhausted,
+                      "rateLimits": {"limitId": "codex", "credits": {"hasCredits": True}, "primary": {
+                          "usedPercent": 100 if exhausted else 99, "resetsAt": 4200000000}},
+                      "rateLimitResetCredits": {"availableCount": int(not reset)}}
+        if method == "account/rateLimitResetCredit/consume":
+            redemption.touch()
+            result = {"outcome": "reset"}
+        print(json.dumps({"id": request["id"], "result": result}), flush=True)
+    raise SystemExit(0)
+capture.write_text(json.dumps({"argv": sys.argv, "prompt": sys.stdin.read()}))
+# Wait for redemption. The deadline bounds the fake on the old launcher.
+deadline = time.monotonic() + 4
+wake = Event()
+while not redemption.exists() and time.monotonic() < deadline:
+    wake.wait(0.02)
 answer = {"findings": [{"id": "A1", "report": "A", "text": "The API removal", "label": "real-material",
                         "evidence": "fixture.md says keep the API"}],
           "matches": [], "brief_depends_on_ceo_words": True, "ceo_words_evidence": "It repeats his request."}
@@ -1848,6 +1879,8 @@ class HaikuParallelTrack(unittest.TestCase):
                 self.assertEqual(sorted(k for k, v in signals.items() if v), [signal_name] if signal_name else [])
 
     def test_blind_adjudication_by_codex_labels_unshared_findings(self):
+        import codex_channels
+
         S = shadow_module()
         path, pair, _ = self.job()
         pairs = self.shadow / "pairs"
@@ -1856,11 +1889,15 @@ class HaikuParallelTrack(unittest.TestCase):
         (pairs / (pair + ".kind.json")).write_text(json.dumps({"kind": 1, "commits": {"/fixture/repo": "abc123"}}))
         (pairs / (pair + ".adjudication.json")).write_text(json.dumps({"pair": pair, "status": "pending", "attempts": 0}))
         codex = self.executable("codex", FAKE_CODEX)
-        env = {**self.track_env({}, {}), "SECOND_REVIEW_CODEX": str(codex), "CODEX_CAPTURE": str(self.root / "codex.json")}
-        with patch.dict(os.environ, env):
+        env = {**self.track_env({}, {}), "SECOND_REVIEW_CODEX": str(codex),
+               "CODEX_CAPTURE": str(self.root / "codex.json"), "CODEX_HOME": str(self.root / "codex-home"),
+               "CODEX_COORDINATION_ROOT": str(self.root / "coord")}
+        with patch.dict(os.environ, env), patch.object(codex_channels, "QUOTA_POLL_SECONDS", 0.05):
             S.adjudicate(pair)
         judged = json.loads((pairs / (pair + ".adjudication.json")).read_text())
         self.assertEqual(judged["status"], "done")
+        self.assertTrue((self.root / "codex.reset").is_file())
+        self.assertEqual(judged["codex_quota"]["in_flight_reset"], "reset")
         self.assertEqual(sorted(judged["order"].values()), ["haiku", "opus"])
         self.assertEqual(judged["counts"][judged["order"]["A"]]["real-material"], 1)
         self.assertTrue(judged["positive"])
