@@ -12,6 +12,8 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
         var mark: ScreenshotMark?
         var crop: CGRect?
         let handle: Handle
+        var lastPoint: CGPoint?
+        var snapped = false
     }
 
     var document: ScreenshotDocument
@@ -24,11 +26,18 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
             refresh()
         }
     }
-    var ink: ScreenshotInk { tool == .highlight ? highlightInk : commonInk }
-    var large: Bool { sizes[tool] ?? false }
-    var commonInk = ScreenshotInk.red
-    var highlightInk = ScreenshotInk.yellow
-    var sizes: [ScreenshotTool: Bool] = [.arrow: true]
+    var ink: ScreenshotInk { styles[tool]?.ink ?? tool.defaultInk ?? .red }
+    var large: Bool { styles[tool]?.large ?? sizes[tool] ?? (tool == .arrow) }
+    var thickness: CGFloat {
+        if let selectedMark { return selectedMark.strokeWidth(at: document.scale) }
+        return ScreenshotMark(tool: tool, start: .zero, end: .zero, thickness: styles[tool]?.thickness)
+            .strokeWidth(at: document.scale)
+    }
+    private var styles: [ScreenshotTool: ScreenshotMarkStyle] = [:]
+    var sizes: [ScreenshotTool: Bool] = [:]
+    var saveStyle: ((ScreenshotMarkStyle, ScreenshotTool) -> Void)?
+    var previewThickness: Int? { didSet { needsDisplay = true } }
+    var isSnappingLine: Bool { gesture?.snapped == true }
     var isInteracting: Bool { gesture != nil || textEntry != nil }
     var previewCrop: CGRect? { pendingCrop }
     var isTyping: Bool { textEntry != nil }
@@ -56,8 +65,13 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
     override var acceptsFirstResponder: Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
 
-    init(document: ScreenshotDocument) {
+    init(document: ScreenshotDocument, store: ScreenshotStore? = nil) {
         self.document = document
+        if let store {
+            for tool in ScreenshotTool.allCases where tool.defaultInk != nil {
+                styles[tool] = store.annotationStyle(for: tool)
+            }
+        }
         image = NSImage(cgImage: document.original, size: document.bounds.size)
         super.init(frame: .zero)
         setAccessibilityElement(true)
@@ -102,7 +116,7 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(rect: .zero, options: [.inVisibleRect, .activeInKeyWindow, .mouseMoved, .mouseEnteredAndExited],
+        let area = NSTrackingArea(rect: .zero, options: [.inVisibleRect, .activeInKeyWindow, .mouseMoved, .mouseEnteredAndExited, .cursorUpdate],
                                   owner: self, userInfo: nil)
         tracking = area
         addTrackingArea(area)
@@ -132,8 +146,9 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
         context.translateBy(x: imageOrigin.x, y: imageOrigin.y)
         context.scaleBy(x: factor, y: factor)
         var drawing = document.edits
-        if textEntry != nil, let index = drawing.marks.firstIndex(where: { $0.id == selected }) {
-            drawing.marks[index].text = ""
+        if let index = drawing.marks.firstIndex(where: { $0.id == selected }) {
+            if textEntry != nil { drawing.marks[index].text = "" }
+            if let previewThickness { drawing.marks[index].thickness = previewThickness }
         }
         ScreenshotRenderer.drawMarks(drawing, scale: document.scale, in: context)
         if tool == .steps, let hover, shown.contains(hover), gesture == nil {
@@ -170,26 +185,46 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
             for (handle, point) in handles() { drawHandle(handle, at: viewPoint(point), in: context) }
         }
         if let mark = selectedMark, tool != .crop {
-            outline(viewRect(markBounds(mark)), dashed: true, in: context)
+            if !mark.tool.hasEndpoints {
+                var frame = viewRect(markBounds(mark))
+                if mark.tool.hasSideGrabbers { frame = frame.insetBy(dx: -5, dy: -5) }
+                outline(frame, dashed: true, in: context)
+            }
             for (handle, point) in handles() { drawHandle(handle, at: viewPoint(point), in: context) }
             if mark.tool == .redact {
-                let rect = viewRect(mark.rect)
-                let label = NSAttributedString(string: "\(Int(mark.rect.integral.width)) × \(Int(mark.rect.integral.height)) px",
-                                               attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 16, weight: .semibold),
-                                                            .foregroundColor: NSColor.white])
-                let size = label.size()
-                let above = rect.minY - size.height - 10
-                let point = CGPoint(x: max(6, min(rect.minX, bounds.maxX - size.width - 12)),
-                                    y: above >= visibleRect.minY ? above : rect.maxY + 10)
-                let path = NSBezierPath(roundedRect: CGRect(origin: point, size: size).insetBy(dx: -9, dy: -4),
-                                        xRadius: 13, yRadius: 13)
-                ScreenshotRenderer.ink.setFill()
-                path.fill()
-                NSColor.white.setStroke()
-                path.stroke()
-                label.draw(at: point)
+                drawMeasurement("\(Int(mark.rect.integral.width)) × \(Int(mark.rect.integral.height)) px", around: mark.rect)
+            } else if gesture != nil {
+                switch mark.tool {
+                case .line where gesture?.handle != .move:
+                    let mode = isSnappingLine ? "snapped" : "Shift snaps"
+                    drawMeasurement("Line · \(Int(mark.length.rounded())) px · \(mark.angle)° · \(mode)", around: markBounds(mark))
+                case .box:
+                    drawMeasurement("Box · \(Int(mark.rect.width)) × \(Int(mark.rect.height)) px", around: markBounds(mark))
+                default: break
+                }
             }
         }
+    }
+
+    private func drawMeasurement(_ title: String, around bounds: CGRect) {
+        let rect = viewRect(bounds)
+        let palette = ScreenshotEditorPalette(self)
+        let label = NSAttributedString(string: title, attributes: [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 16, weight: .semibold),
+            .foregroundColor: palette.ink,
+        ])
+        let size = label.size()
+        let visible = visibleRect
+        let above = rect.minY - size.height - 10
+        let point = CGPoint(x: max(visible.minX + 10, min(rect.minX, visible.maxX - size.width - 10)),
+                            y: above >= visible.minY + 5 ? above : rect.maxY + 10)
+        let path = NSBezierPath(roundedRect: CGRect(origin: point, size: size).insetBy(dx: -9, dy: -4),
+                                xRadius: 7, yRadius: 7)
+        palette.floating.setFill()
+        path.fill()
+        palette.control.setStroke()
+        path.stroke()
+        label.draw(at: point)
     }
 
     override func mouseMoved(with event: NSEvent) {
@@ -197,12 +232,32 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
         let handle = handle(at: convert(event.locationInWindow, from: nil))
         if hoverHandle != handle || tool == .steps { needsDisplay = true }
         hoverHandle = handle
+        cursorUpdate(with: event)
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        let location = convert(event.locationInWindow, from: nil)
+        if selectedMark?.tool.hasSideGrabbers == true, case .edge(let side) = handle(at: location) {
+            (side.isMultiple(of: 2) ? NSCursor.resizeUpDown : NSCursor.resizeLeftRight).set()
+        } else {
+            NSCursor.arrow.set()
+        }
     }
 
     override func mouseExited(with event: NSEvent) {
         hover = nil
         hoverHandle = nil
         needsDisplay = true
+    }
+
+    private func selectableMark(at point: CGPoint) -> ScreenshotMark? {
+        let marks = document.edits.marks.reversed()
+        if tool == .select {
+            return marks.first { $0.tool == .redact && contains(point, in: $0) }
+                ?? marks.first { $0.tool != .redact && contains(point, in: $0) }
+        }
+        guard tool.hasThickness else { return nil }
+        return marks.first { $0.tool == tool && contains(point, in: $0) }
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -221,12 +276,10 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
             let crop = pendingCrop?.contains(point) == true ? pendingCrop : CGRect(origin: point, size: .zero)
             gesture = Gesture(anchor: point, before: document.edits, crop: crop,
                               handle: crop?.isEmpty == false ? .move : .end)
-        } else if tool == .select {
-            let top = document.edits.marks.reversed().filter { $0.tool == .redact } +
-                document.edits.marks.reversed().filter { $0.tool != .redact }
-            selected = top.first { contains(point, in: $0) }?.id
-            if let selectedMark { gesture = Gesture(anchor: point, before: document.edits, mark: selectedMark, handle: .move) }
-        } else if shown.contains(point) {
+        } else if let mark = selectableMark(at: point) {
+            selected = mark.id
+            gesture = Gesture(anchor: point, before: document.edits, mark: mark, handle: .move)
+        } else if tool != .select, shown.contains(point) {
             var end = point
             var pointer: CGPoint?
             if tool == .text {
@@ -235,7 +288,8 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
                 pointer = CGPoint(x: max(shown.minX, point.x - 12 * document.scale),
                                   y: min(shown.maxY, end.y + 22 * document.scale))
             }
-            let mark = ScreenshotMark(tool: tool, start: point, end: end, pointer: pointer, ink: ink, large: large)
+            let mark = ScreenshotMark(tool: tool, start: point, end: end, pointer: pointer, ink: ink, large: large,
+                                      thickness: styles[tool]?.thickness)
             gesture = Gesture(anchor: point, before: document.edits, handle: .end)
             document.edits.marks.append(mark)
             selected = mark.id
@@ -246,8 +300,23 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        guard gesture != nil else { return }
+        let point = source(event)
+        gesture?.lastPoint = point
+        drag(to: point, shift: event.modifierFlags.contains(.shift))
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        if let gesture, let point = gesture.lastPoint, selectedMark?.tool == .line,
+           gesture.handle == .start || gesture.handle == .end {
+            drag(to: point, shift: event.modifierFlags.contains(.shift))
+        }
+        super.flagsChanged(with: event)
+    }
+
+    private func drag(to target: CGPoint, shift: Bool) {
         guard let gesture else { return }
-        let point = bounded(source(event), within: shown)
+        let point = bounded(target, within: shown)
         let dx = point.x - gesture.anchor.x
         let dy = point.y - gesture.anchor.y
         if let crop = gesture.crop {
@@ -261,12 +330,35 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
                 let x = box.width <= available.width ? min(available.maxX - box.maxX, max(available.minX - box.minX, dx)) : dx
                 let y = box.height <= available.height ? min(available.maxY - box.maxY, max(available.minY - box.minY, dy)) : dy
                 mark.move(dx: x, dy: y)
-            case .start: mark.start = point
-            case .end:
-                if mark.tool != .steps, mark.tool != .text || gesture.mark != nil { mark.end = point }
+            case .start, .end:
+                if mark.tool != .steps, mark.tool != .text || gesture.mark != nil {
+                    let extendingStart = gesture.handle == .start
+                    let endpoint = extendingStart ? mark.start : mark.end
+                    let moving = gesture.mark == nil ? point :
+                        bounded(CGPoint(x: endpoint.x + target.x - gesture.anchor.x,
+                                        y: endpoint.y + target.y - gesture.anchor.y), within: shown)
+                    let snapped = mark.tool == .line && shift
+                    self.gesture?.snapped = snapped
+                    let fixed = extendingStart ? mark.end : mark.start
+                    let end = snapped ? snap(moving, around: fixed) : moving
+                    if extendingStart { mark.start = end } else { mark.end = end }
+                }
             case .pointer: mark.pointer = point
             case .corner, .edge:
-                let rect = resize(mark.rect, handle: gesture.handle, to: point, dx: dx, dy: dy, within: shown)
+                let original = mark.rect
+                var destination = point
+                var limits = shown
+                if mark.tool.hasSideGrabbers, case .edge(let side) = gesture.handle {
+                    if side.isMultiple(of: 2) {
+                        destination.y = (side == 0 ? original.minY : original.maxY) + target.y - gesture.anchor.y
+                        limits = CGRect(x: original.minX, y: shown.minY, width: original.width, height: shown.height)
+                    } else {
+                        destination.x = (side == 1 ? original.maxX : original.minX) + target.x - gesture.anchor.x
+                        limits = CGRect(x: shown.minX, y: original.minY, width: shown.width, height: original.height)
+                    }
+                    destination = bounded(destination, within: shown)
+                }
+                let rect = resize(original, handle: gesture.handle, to: destination, dx: dx, dy: dy, within: limits)
                 mark.start = rect.origin
                 mark.end = CGPoint(x: rect.maxX, y: rect.maxY)
             }
@@ -279,7 +371,7 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
         guard let gesture else { return }
         self.gesture = nil
         if let mark = selectedMark, gesture.mark == nil, gesture.crop == nil {
-            if mark.tool != .steps, mark.rect.isEmpty, mark.tool != .arrow || mark.start == mark.end {
+            if mark.tool != .steps, mark.tool.hasEndpoints ? mark.start == mark.end : mark.rect.isEmpty {
                 document.edits = gesture.before
                 selected = nil
             }
@@ -312,18 +404,36 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
         refresh()
     }
 
-    func setStyle(ink: ScreenshotInk? = nil, large: Bool? = nil) {
+    func setStyle(ink: ScreenshotInk? = nil, large: Bool? = nil, thickness: Int? = nil) {
         let editedTool = selectedMark?.tool ?? tool
-        if let ink {
-            if editedTool == .highlight { highlightInk = ink }
-            else { commonInk = ink }
+        guard editedTool.defaultInk != nil else { return }
+        var style = styles[editedTool] ?? ScreenshotMarkStyle()
+        var changes = ScreenshotMarkStyle()
+        if let ink { style.ink = ink; changes.ink = ink }
+        if let large {
+            if editedTool == .arrow { style.large = large; changes.large = large }
+            else { sizes[editedTool] = large }
         }
-        if let large { sizes[editedTool] = large }
+        if let thickness, editedTool.hasThickness, ScreenshotMark.thicknessOptions.contains(thickness) {
+            style.thickness = thickness
+            changes.thickness = thickness
+        }
+        styles[editedTool] = style
+        if changes.ink != nil || changes.large != nil || changes.thickness != nil { saveStyle?(changes, editedTool) }
         editSelected { mark in
             if let ink { mark.ink = ink }
             if let large { mark.large = large }
+            if let thickness = changes.thickness { mark.thickness = thickness }
         }
         if selectedMark == nil { refresh() }
+    }
+
+    func stepThickness(by direction: Int) {
+        guard (selectedMark?.tool ?? tool).hasThickness else { return }
+        let options = ScreenshotMark.thicknessOptions
+        let choice = direction > 0 ? options.first { CGFloat($0) > thickness }
+            : options.last { CGFloat($0) < thickness }
+        if let choice { setStyle(thickness: choice) }
     }
 
     func startCallout(before: ScreenshotEdits? = nil) {
@@ -474,37 +584,62 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
             let radius = 15 * document.scale * (mark.large ? 1.5 : 1)
             return CGRect(x: mark.start.x - radius, y: mark.start.y - radius, width: 2 * radius, height: 2 * radius)
         }
-        if mark.tool == .arrow { return mark.rect.insetBy(dx: -4 * document.scale, dy: -4 * document.scale) }
+        if mark.tool == .arrow {
+            return ScreenshotRenderer.arrowPath(for: mark, scale: document.scale)?.boundingBoxOfPath ?? mark.rect
+        }
+        if mark.tool.hasThickness {
+            let width = previewThickness.map { CGFloat($0) } ?? mark.strokeWidth(at: document.scale)
+            let radius = width / 2 + 0.5
+            return mark.rect.insetBy(dx: -radius, dy: -radius)
+        }
         return mark.rect
     }
 
     private func contains(_ point: CGPoint, in mark: ScreenshotMark) -> Bool {
-        if mark.tool == .arrow {
+        let tolerance = 7 / factor
+        if mark.tool.hasEndpoints {
+            if mark.tool == .arrow,
+               let path = ScreenshotRenderer.arrowPath(for: mark, scale: document.scale), path.contains(point) { return true }
             let dx = mark.end.x - mark.start.x
             let dy = mark.end.y - mark.start.y
             let length = dx * dx + dy * dy
             guard length > 0 else { return false }
             let progress = min(1, max(0, ((point.x - mark.start.x) * dx + (point.y - mark.start.y) * dy) / length))
-            return hypot(point.x - mark.start.x - progress * dx, point.y - mark.start.y - progress * dy) <= max(7 / factor, 4)
+            let radius = mark.tool == .line ? mark.strokeWidth(at: document.scale) / 2 : 0
+            return hypot(point.x - mark.start.x - progress * dx, point.y - mark.start.y - progress * dy) <= tolerance + radius
+        }
+        if mark.tool == .box {
+            let inset = mark.strokeWidth(at: document.scale) / 2 + tolerance
+            return mark.rect.insetBy(dx: -inset, dy: -inset).contains(point) &&
+                !mark.rect.insetBy(dx: inset, dy: inset).contains(point)
         }
         return markBounds(mark).contains(point)
     }
 
     private func handle(at location: CGPoint) -> Handle? {
-        handles().first {
-            let point = viewPoint($0.1)
-            return hypot(point.x - location.x, point.y - location.y) <= 10
-        }?.0
+        return handles().min { distance($0.1) < distance($1.1) }.flatMap { handle, point in
+            let center = viewPoint(point)
+            if selectedMark?.tool.hasSideGrabbers == true, case .edge(let side) = handle {
+                let dx = abs(center.x - location.x), dy = abs(center.y - location.y)
+                return (side.isMultiple(of: 2) ? dx <= 15 && dy <= 9 : dx <= 9 && dy <= 15) ? handle : nil
+            }
+            return distance(point) <= 10 ? handle : nil
+        }
+
+        func distance(_ point: CGPoint) -> CGFloat {
+            let center = viewPoint(point)
+            return hypot(center.x - location.x, center.y - location.y)
+        }
     }
 
     private func handles() -> [(Handle, CGPoint)] {
         if let crop = pendingCrop { return rectHandles(crop, edges: true) }
         guard let mark = selectedMark else { return [] }
         switch mark.tool {
-        case .arrow: return [(.start, mark.start), (.end, mark.end)]
+        case .arrow, .line: return [(.start, mark.start), (.end, mark.end)]
         case .text:
             return rectHandles(mark.rect, edges: true) + (mark.pointer.map { [(.pointer, $0)] } ?? [])
-        case .box, .redact, .highlight: return rectHandles(mark.rect, edges: false)
+        case .box, .redact, .highlight: return rectHandles(mark.rect, edges: mark.tool.hasSideGrabbers)
         default: return []
         }
     }
@@ -578,7 +713,11 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
         switch handle {
         case .start, .end: path = CGPath(ellipseIn: rect, transform: nil)
         case .edge(let i):
-            rect = rect.insetBy(dx: i.isMultiple(of: 2) ? 0 : 4, dy: i.isMultiple(of: 2) ? 4 : 0)
+            if pendingCrop == nil, selectedMark?.tool.hasSideGrabbers == true {
+                rect = rect.insetBy(dx: i.isMultiple(of: 2) ? -5 : 3, dy: i.isMultiple(of: 2) ? 3 : -5)
+            } else {
+                rect = rect.insetBy(dx: i.isMultiple(of: 2) ? 0 : 4, dy: i.isMultiple(of: 2) ? 4 : 0)
+            }
             path = CGPath(rect: rect, transform: nil)
         case .pointer:
             let diamond = CGMutablePath()
@@ -606,6 +745,18 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
         let point = convert(event.locationInWindow, from: nil)
         return CGPoint(x: ((point.x - imageOrigin.x) / factor).rounded(),
                        y: ((point.y - imageOrigin.y) / factor).rounded())
+    }
+
+    private func snap(_ point: CGPoint, around anchor: CGPoint) -> CGPoint {
+        let dx = point.x - anchor.x, dy = point.y - anchor.y
+        let octant = (Int((atan2(dy, dx) / (.pi / 4)).rounded()) + 8) % 8
+        let directions: [(CGFloat, CGFloat)] = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)]
+        let (x, y) = directions[octant]
+        let distance = ((dx * x + dy * y) / (x * x + y * y)).rounded()
+        let limitX = x > 0 ? shown.maxX - anchor.x : anchor.x - shown.minX
+        let limitY = y > 0 ? shown.maxY - anchor.y : anchor.y - shown.minY
+        let reach = max(0, min(distance, x == 0 ? distance : limitX, y == 0 ? distance : limitY))
+        return CGPoint(x: anchor.x + x * reach, y: anchor.y + y * reach)
     }
 
     private func bounded(_ point: CGPoint, within rect: CGRect) -> CGPoint {
