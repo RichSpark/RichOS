@@ -69,6 +69,7 @@
 @home   richos/app/ui/home.js richos/app/ui/home-growth.js richos/app/ui/home-video.js richos/app/ui/home.css richos/app/ui/swearmeter.js richos/app/ui/home/field-engine.js richos/app/ui/home/field-ghost.js richos/app/ui/home/field-prep.js richos/app/ui/home/field-ref.js
 @splash  richos/app/ui/splash.js richos/app/ui/splash-library.js richos/app/ui/splash.css richos/app/ui/theme-boot.js
 @phone   richos/app/ui/phone.js richos/app/ui/qr.js
+@app-title-styles richos/app/ui/chat-list.css richos/app/ui/cleaner.css richos/app/ui/context-meter.css richos/app/ui/dictation-overlay.css richos/app/ui/fonts/fonts.css richos/app/ui/home.css richos/app/ui/instructions-update.css richos/app/ui/keep-alive.css richos/app/ui/openings.css richos/app/ui/search-folder-settings.css richos/app/ui/speckle.css richos/app/ui/splash.css richos/app/ui/style.css richos/app/ui/suite-tools.css richos/app/ui/terminal-and-git.css richos/app/ui/video-anywhere.css
 
 # FIXTURES (`ui/tests/fixtures/*`) are named on the row of the suite that LOADS them, found by
 # reference in the suite's code (`path.join(__dirname, "fixtures", "<name>")`,
@@ -135,6 +136,7 @@ accounts.js             @shell richos/app/ui/accounts.js richos/app/ui/settings-
 resources.js            @shell richos/app/ui/resources.js richos/app/ui/mock.js
 chat-list.js            @shell richos/app/ui/chat-list.js richos/app/ui/chat-list.css richos/app/ui/settings-button.js richos/app/src-tauri/src/chat_list.rs richos/app/src-tauri/src/chat_notifications.rs
 nav-rail.js             @shell richos/app/ui/richfiles-page.js richos/app/ui/richpass-page.js richos/app/ui/richpass.js richos/app/ui/nav-rail.js richos/app/ui/resources.js richos/app/ui/dictation.js richos/app/ui/bug-report.js richos/app/ui/settings-button.js richos/app/ui/home.js richos/app/ui/cleaner-settings.js richos/app/ui/mock.js
+app-title-alignment.js  @shell @app-title-styles richos/app/ui/theme-boot.js richos/app/ui/nav-rail.js richos/app/ui/richfiles-page.js richos/app/ui/richpass-page.js richos/app/ui/meeting-notes.js richos/app/ui/dictation.js richos/app/ui/cleaner-settings.js richos/app/ui/glance-capture-settings.js richos/app/ui/settings-button.js richos/app/ui/mock.js richos/app/ui/cleaner.html richos/app/ui/cleaner.js richos/app/ui/fonts/ richos/app/ui/assets/app-icons/
 dictation.js            @shell richos/app/ui/dictation.js richos/app/ui/settings-button.js richos/app/ui/mock.js
 bug-report.js           @shell richos/app/ui/bug-report.js richos/app/ui/settings-button.js richos/app/ui/timeline.js richos/app/ui/mock.js @allui
 meeting-notes.js        @shell richos/app/ui/meeting-notes.js richos/app/ui/settings-button.js richos/app/ui/mock.js

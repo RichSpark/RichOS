@@ -244,7 +244,7 @@ async function main() {
       assertEqual(await page.getAttribute("#nr-scribe", "aria-label"), "RichScribe, needs a Mac permission", "the dot is said, not only shown");
       assert(await page.evaluate(() => {
         const h = document.getElementById("dict-title");
-        const img = h && h.querySelector("img.feature-icon");
+        const img = h && h.querySelector("img.app-title-icon");
         return !!img && /richscribe-128\.png$/.test(img.getAttribute("src")) && h.textContent.trim() === "RichScribe";
       }), "the RichScribe icon is in front of the sheet's title");
       // Over the sheet the rail is still reachable: RichFinder closes it by its own Close and the
@@ -456,12 +456,14 @@ async function main() {
         await info.waitFor({ state: "visible" });
         assertEqual(await calls(), 0, "the first rail press opens the page");
         assertEqual(await always.getAttribute("aria-checked"), "false", "standalone shortcut defaults to off");
+        // The icon centered on the name's capitals is measured in pixels by
+        // app-title-alignment.js (design round 105); here, that the page uses its component.
         const offset = await app.evaluate(() => {
-          const icon = document.querySelector(".rf-title-icon").getBoundingClientRect();
-          const title = document.getElementById("richfiles-title").getBoundingClientRect();
-          return Math.abs(icon.y + icon.height / 2 - title.y - title.height / 2);
+          const row = document.getElementById("richfiles-title").parentElement;
+          return row.matches(".app-title.app-title--page") && !!row.querySelector(":scope > img.app-title-icon") &&
+            document.getElementById("richfiles-title").matches(".app-title-name") ? "the app-title component" : "";
         });
-        assert(offset <= 1, "title and icon centers differ by " + offset + " px");
+        assert(offset, "the RichFiles title row does not use the app-title component");
         await app.evaluate(C.pageScript());
         const walk = await app.evaluate((t) => window.__contrastProbe({ surface: "richfiles-page", theme: t }), theme);
         assert(walk.measuredPaths.includes("h1#richfiles-title"), "the page heading was not measured");
@@ -488,7 +490,7 @@ async function main() {
         assertEqual(await app.locator("#richfiles-pane").count(), 0, "there is no embedded browser surface");
         const stale = await app.evaluate(() => window.__richFilesCommands.filter((name) => /pane|preload|request/.test(name)));
         assertEqual(stale, [], "there are no calls to the removed browser host");
-        return "title and icon centers differ by " + offset + " px";
+        return "title row: " + offset;
       } finally {
         await files.close();
       }
@@ -502,8 +504,8 @@ async function main() {
       assertEqual(f.selected, ["pass"], "RichPass is selected while its page is shown");
       assert(f.barBesideSelected, "the bar slid to RichPass");
       const p = await page.evaluate(() => {
-        const ttl = document.querySelector("#richpass-page .rp-ttl");
-        const mark = ttl.querySelector(".rp-mark");
+        const ttl = document.querySelector("#richpass-page .app-title");
+        const mark = ttl.querySelector(".app-title-mark");
         const img = [...mark.querySelectorAll("img")].find((node) => node.getClientRects().length);
         const body = document.querySelector("#richpass-page .rp-body");
         return {

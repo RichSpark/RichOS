@@ -170,7 +170,7 @@ async function main() {
   await run.check("the new name is where the old one was: Settings, the sheet, the menu bar and the Mac shell", async () => {
     const where = [
       ["settings-button.js", '"' + NEW_NAME + '"'],
-      ["dictation.js", ">" + NEW_NAME + "</h2>"],
+      ["dictation.js", '<span class="app-title-name">' + NEW_NAME + "</span></h2>"],
       ["dictation-menu.js", NEW_NAME + " settings"],
       ["dictation-menu.html", 'aria-label="' + NEW_NAME + '"'],
       ["dictation-bar.js", NEW_NAME + " is off."],

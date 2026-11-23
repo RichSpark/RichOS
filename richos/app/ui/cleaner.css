@@ -101,9 +101,7 @@
 .rf-lights { display: flex; gap: 8px; }
 .rf-lights b { width: 12px; height: 12px; border-radius: 50%; display: block; }
 .rf-lights b:nth-child(1) { background: #FF5F57; } .rf-lights b:nth-child(2) { background: #FEBC2E; } .rf-lights b:nth-child(3) { background: #28C840; }
-.rf-win-title { display: flex; align-items: center; gap: 10px; font-size: 1.0625rem; font-weight: 600; color: var(--ink); justify-self: center; }
-.rf-win-title img { width: 22px; height: 22px; display: block; }
-.rf-win-title .cnt { font-weight: 400; color: var(--ink-soft); }
+.rf-win-bar > .app-title { justify-self: center; }
 .rf-search { position: relative; display: flex; align-items: center; }
 .rf-search svg { position: absolute; left: 10px; width: 16px; height: 16px; color: var(--ink-soft); pointer-events: none; }
 .rf-search input { width: 100%; font: inherit; font-size: 1rem; color: var(--ink); background: var(--surface-sunk); border: 1px solid var(--line-control); border-radius: 9px; padding: 7px 10px 7px 34px; outline: none; }
@@ -205,7 +203,6 @@ body.cleaner-library { display: block; padding: 0; background:var(--surface-rais
 .tl-rfile-note {display:block;font-family:var(--font-serif);font-size:1rem;line-height:1.45;color:var(--ink);margin-top:.25rem;}
 
 #cleaner-settings {z-index:220;}
-#cleaner-settings-title {font:400 2rem/1.15 var(--font-serif);margin:0;color:var(--ink);}
 #cleaner-settings .dict-close {border:0;background:none;color:var(--ink);font-size:1.75rem;cursor:pointer;}
 .cleaner-library .rf-win-bar {padding-right:4rem;}
 html.cleaner-panel {background:transparent;}
