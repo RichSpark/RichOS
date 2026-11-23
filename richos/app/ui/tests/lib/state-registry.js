@@ -288,6 +288,13 @@ module.exports = [
     "c": "INFORMATIONAL",
     "why": "The io::Error from NavStore::persist (nav.rs) over an unreadable navigation file, returned by rename_thread, set_thread_pinned and set_thread_archived as Err(String). main.js `saveNavChange` renders it, sentence-cased with a full stop, in `#nav-save-note` in the rail where he pinned, archived or renamed; the next successful change clears it. It states the outcome and asks nothing. tests/thread-switch.js checks it and its contrast in both themes."
   },
+  {
+    "s": "the companies changed while you were reordering them. Try again",
+    "c": "ACTIONABLE",
+    "control": "#rail-nav .nav-group--entity .nav-group-label",
+    "fixture": null,
+    "why": "The sidebar shows the save refusal and restores the saved order. Dragging a company row in that sidebar retries the move."
+  },
   // Native notification API states.
   {"s": "Invalid notification registration", "c": "UNREACHABLE", "why": "Defensive duplicate validation inside the native notification desk. The authenticated route rejects malformed registrations before calling it and the native adapter supplies fixed bundle/environment values."},
   {"s": "Native notifications are unavailable", "c": "UNREACHABLE", "why": "Default bridge refusal. Production overrides it and routes refuse unsupported native-push capability before calling the default."},
