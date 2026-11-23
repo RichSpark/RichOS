@@ -126,7 +126,7 @@ def run(copy, target, workspace, filt):
 # Everything the export carries. richos-core compiles the dialect table in with `include_str!`,
 # so its directory is a root too; `unexported_includes` keeps this list honest.
 EXPORT_ROOTS = [APP, "richos/tools/richpass/RichPass.html", "richos/tools/richpass/releases.json", "richos/web", "richos/mobile", "richos/engine/voice/models",
-                "richos/engine/scripts/lib/dialect",
+                "richos/engine/scripts/lib/dialect", "richos/engine/ecs/core/legacy_codex_move.sql",
                 "richos/engine/.env.example", "richos/engine/scripts/lib/machine_settings.fixtures.json",
                 "richos/engine/scripts/lib/machine_settings.py",
                 # richos-core's integration tests compile in the captured upstream failures.

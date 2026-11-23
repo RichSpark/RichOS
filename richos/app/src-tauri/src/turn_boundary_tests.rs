@@ -204,7 +204,7 @@ fn the_boundary_wakes_peer_input_without_dispatching_the_record() {
 
 /// The calls that run one of his turns. A shell line that makes one must be followed by a
 /// boundary door before the next function begins.
-const RUNS_HIS_TURNS: [&str; 8] = [
+const RUNS_HIS_TURNS: [&str; 9] = [
     ".submit_prompt(",
     ".submit_prompt_to(",
     ".submit_prompt_to_provenance(",
@@ -212,6 +212,7 @@ const RUNS_HIS_TURNS: [&str; 8] = [
     ".poll_intake(",
     ".reconcile_intake(",
     ".recover_after_restart(",
+    ".recover_after_restart_except(",
     "::prime_front_desk_without_the_spine(",
 ];
 
@@ -315,7 +316,9 @@ fn the_voice_callback_and_the_phone_drain_go_through_their_doors() {
     // The scan's own negative control: a door removed from the text is seen as missing.
     let broken = include_str!("main.rs").replace("adopt_at_the_turn_boundary(&mut spine, &work);", "");
     let lines = shipped_lines("src/main.rs", &broken);
-    let recovery = lines.iter().position(|(_, _, l)| l.contains("spine.recover_after_restart()")).unwrap();
+    let recovery = lines.iter()
+        .position(|(_, _, l)| l.contains("spine.recover_after_restart_except("))
+        .expect("the startup recovery entrance must be present in the scan");
     let adopted = lines[recovery..]
         .iter()
         .skip(1)

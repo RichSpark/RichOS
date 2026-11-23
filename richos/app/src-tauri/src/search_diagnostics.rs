@@ -38,16 +38,48 @@ pub(crate) fn record_unavailable(elapsed: Duration, stages: &[(&str, f64)]) {
 }
 
 fn record_mode(mode: &str, elapsed: Duration, stages: &[(&str, f64)]) {
-    let Some(sender) = SENDER.get() else { return };
-    let at_ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|duration| duration.as_millis() as u64).unwrap_or(0);
-    let entry = serde_json::json!({
-        "at_ms": at_ms,
-        "operation": NEXT.fetch_add(1, Ordering::Relaxed),
-        "build": option_env!("RICHOS_SOURCE_SHA").unwrap_or(env!("CARGO_PKG_VERSION")),
+    send(serde_json::json!({
         "mode": mode,
         "total_ms": elapsed.as_secs_f64() * 1_000.0,
         "stages": stages.iter().take(24).copied().collect::<Vec<_>>(),
-    });
+    }));
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PaletteSizeOutcome {
+    Saved,
+    SaveFailed,
+    Restored,
+    Limited,
+}
+
+#[richos_command::command]
+pub fn search_palette_size_diagnostic(outcome: PaletteSizeOutcome, width: u32, height: u32, elapsed_ms: f64) {
+    if width == 0 || height == 0 || !elapsed_ms.is_finite() || elapsed_ms < 0.0 {
+        return;
+    }
+    let outcome = match outcome {
+        PaletteSizeOutcome::Saved => "saved",
+        PaletteSizeOutcome::SaveFailed => "save_failed",
+        PaletteSizeOutcome::Restored => "restored",
+        PaletteSizeOutcome::Limited => "limited",
+    };
+    send(serde_json::json!({
+        "mode": "palette_size",
+        "outcome": outcome,
+        "width_px": width,
+        "height_px": height,
+        "total_ms": elapsed_ms,
+    }));
+}
+
+fn send(mut entry: serde_json::Value) {
+    let Some(sender) = SENDER.get() else { return };
+    let at_ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|duration| duration.as_millis() as u64).unwrap_or(0);
+    entry["at_ms"] = at_ms.into();
+    entry["operation"] = NEXT.fetch_add(1, Ordering::Relaxed).into();
+    entry["build"] = option_env!("RICHOS_SOURCE_SHA").unwrap_or(env!("CARGO_PKG_VERSION")).into();
     let _sent = sender.try_send(entry.to_string());
 }
 

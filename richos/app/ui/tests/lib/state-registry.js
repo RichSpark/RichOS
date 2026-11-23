@@ -288,6 +288,13 @@ module.exports = [
     "c": "INFORMATIONAL",
     "why": "The io::Error from NavStore::persist (nav.rs) over an unreadable navigation file, returned by rename_thread, set_thread_pinned and set_thread_archived as Err(String). main.js `saveNavChange` renders it, sentence-cased with a full stop, in `#nav-save-note` in the rail where he pinned, archived or renamed; the next successful change clears it. It states the outcome and asks nothing. tests/thread-switch.js checks it and its contrast in both themes."
   },
+  {
+    "s": "the companies changed while you were reordering them. Try again",
+    "c": "ACTIONABLE",
+    "control": "#rail-nav .nav-group--entity .nav-group-label",
+    "fixture": null,
+    "why": "The sidebar shows the save refusal and restores the saved order. Dragging a company row in that sidebar retries the move."
+  },
   // Native notification API states.
   {"s": "Invalid notification registration", "c": "UNREACHABLE", "why": "Defensive duplicate validation inside the native notification desk. The authenticated route rejects malformed registrations before calling it and the native adapter supplies fixed bundle/environment values."},
   {"s": "Native notifications are unavailable", "c": "UNREACHABLE", "why": "Default bridge refusal. Production overrides it and routes refuse unsupported native-push capability before calling the default."},
@@ -6417,8 +6424,9 @@ module.exports = [
   {"s": "weekly window is at . At <b>%</b>, every agent’s next step runs on <b></b>, the account whose week ends soonest. Nothing stops.", "c": "INFORMATIONAL", "why": "The CEO, 2026-10-31: \"If no 5-hour-limit data, then don't show/don't handle it.\" The same state with the five-hour words made conditional on the account having a five-hour window. quota.js: the on card with two or more accounts and no five-hour window on the account in use, after its label."},
   {"s":"no channel conversation","c":"NOT-RENDERED","why":"codex_sink in main.rs refuses a malformed watcher event. Its only consumer is codex_watch.rs's Sink worker, which logs a changed failure with eprintln and retains the source. This is never returned to the webview."},
   {"s":"channel company is no longer registered","c":"NOT-RENDERED","why":"codex_sink in main.rs holds a channel whose ledger company is unavailable. The codex_watch.rs Sink worker logs the changed failure with eprintln and retries the retained source. This is never returned to the webview."},
-  {"s":"independent Codex work is saved until a company is available","c":"NOT-RENDERED","why":"The Codex watch worker logs why automatic routing is deferred and retries the retained messages when a company becomes available."},
-  {"s":"the conversation ledger is busy","c":"NOT-RENDERED","why":"The Codex watch worker logs a busy ledger and tries the automatic destination again on a later poll."},
+  {"s":"Codex work is saved until its project has a registered company","c":"NOT-RENDERED","why":"The Codex watcher logs why it cannot resolve the project's company and retries the saved input on later polls."},
+  {"s":"Codex work is saved while its company move is pending","c":"NOT-RENDERED","why":"The Codex watcher holds this conversation's saved work for the next repair attempt."},
+  {"s":"This conversation's company move will retry when RichOS next opens.","c":"INFORMATIONAL","why":"A pending repair temporarily holds this conversation's provider session."},
   // Rounds 98 and 99, the RichBrief and RichGlance rail pages.
   {"s":"A fast picture viewer","c":"INFORMATIONAL","why":"The approved page copy describes the tool, its settings or how it is used."},
   {"s":"A short summary, the decisions, your actions, what others committed to and what is still open, in the meeting’s chat. Ask Rich to change them like anything else.","c":"INFORMATIONAL","why":"The approved page copy describes the tool, its settings or how it is used."},
