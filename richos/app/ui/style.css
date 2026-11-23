@@ -14388,6 +14388,11 @@ body.bug-dock-open .sp-title { display: none; }   /* the eyebrow names the scree
   scrollbar-color: var(--line) transparent;
   overscroll-behavior: contain;
 }
+.is-results #search-results.srch-results {
+  /* Separate the scrollbar from the resize strip while keeping the result text aligned. */
+  margin-inline-end: 8px;
+  padding-inline-end: 4px;
+}
 #search-overlay .result-group {
   display: flex;
   align-items: baseline;

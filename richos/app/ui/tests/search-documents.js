@@ -146,6 +146,46 @@ async function main() {
       await page.waitForSelector("#search-results .srch-doc.is-active .srch-open-btn", { state: "visible" });
     });
 
+    await run.check("RichFinder's scrollbar scrolls and the adjacent edge resizes", async () => {
+      const scrollPage = await openApp(browser);
+      try {
+        // Expose a draggable track in headless WebKit, which otherwise uses auto-hiding bars.
+        await scrollPage.addStyleTag({ content: `
+          #search-results.srch-results { scrollbar-width: auto; overflow-y: scroll; }
+          #search-results::-webkit-scrollbar { width: 10px; background: #ccc; }
+          #search-results::-webkit-scrollbar-thumb { background: #555; }
+        ` });
+        await scrollPage.fill("#search-input", "subscription pricing");
+        await scrollPage.waitForSelector("#search-results .srch-doc");
+        const before = await searchPanelBox(scrollPage);
+        const results = scrollPage.locator("#search-results");
+        const scrollbar = await results.evaluate((list) => {
+          const { top, right } = list.getBoundingClientRect();
+          return { x: right - 3, y: top + 12, trackWidth: list.offsetWidth - list.clientWidth };
+        });
+        assertEqual(scrollbar.trackWidth, 10, "the results are using a draggable scrollbar");
+        await scrollPage.mouse.move(scrollbar.x, scrollbar.y);
+        await scrollPage.mouse.down();
+        await scrollPage.mouse.move(scrollbar.x, scrollbar.y + 70, { steps: 5 });
+        await scrollPage.mouse.up();
+        const scrollTop = await results.evaluate((list) => new Promise((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(list.scrollTop)));
+        }));
+        assert(scrollTop > 0, "dragging the scrollbar thumb scrolls the results");
+        assertEqual(await searchPanelBox(scrollPage), before, "scrolling leaves the overlay size intact");
+
+        const edge = before.x + before.width - 3;
+        const y = before.y + before.height / 2;
+        await scrollPage.mouse.move(edge, y);
+        await scrollPage.mouse.down();
+        await scrollPage.mouse.move(edge + 70, y, { steps: 5 });
+        await scrollPage.mouse.up();
+        assertEqual((await searchPanelBox(scrollPage)).width, before.width + 70, "dragging the adjacent edge grows the overlay");
+      } finally {
+        await scrollPage.close();
+      }
+    });
+
     await run.check("unchecking RichFinder keeps the query and reruns as text search; checking it brings the match back", async () => {
       await page.click("label.srch-check:has(#srch-super)");
       await page.waitForFunction(() => document.getElementById("srch-status-text").textContent.startsWith("Text search"));
