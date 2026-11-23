@@ -393,8 +393,9 @@ function readJsonLocal(key) {
 function writeJsonLocal(key, value) {
   try {
     window.localStorage.setItem(key, JSON.stringify(value));
+    return true;
   } catch (_e) {
-    /* A quota or a denied store costs the restore, never the session. */
+    return false;
   }
 }
 
@@ -8623,6 +8624,14 @@ const searchSourceOptionsEl = el("srch-source-options");
 const searchSourceNoteEl = el("srch-source-note");
 const searchSourceSettingsEl = el("srch-source-settings");
 const searchCoverageNoteEl = el("srch-coverage-note");
+const searchPanelEl = searchOverlayEl.querySelector(".overlay-panel--search");
+const SEARCH_SIZE_KEY = "richos.richfinder.results-size";
+const SEARCH_GUTTER = 12;
+const previousSearchSize = readJsonLocal(SEARCH_SIZE_KEY);
+let searchResultsSize = ["width", "height"].every((axis) =>
+  Number.isFinite(previousSearchSize?.[axis]) && previousSearchSize[axis] > 0) ? previousSearchSize : null;
+let searchSizeAnimation = null;
+let searchResizeDrag = null;
 
 const SEARCH_PAGE = 12;
 const searchState = {
@@ -8662,7 +8671,125 @@ function searchReducedMotion() {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
+function sizeSearchPanel(size, left = "", top = "") {
+  searchPanelEl.classList.toggle("is-sized", size !== null);
+  searchPanelEl.style.setProperty("--srch-width", size ? size.width + "px" : "");
+  searchPanelEl.style.setProperty("--srch-height", size ? size.height + "px" : "");
+  searchPanelEl.style.setProperty("--srch-left", left);
+  searchPanelEl.style.setProperty("--srch-top", top);
+}
+
+function searchPanelFrame() {
+  const style = getComputedStyle(searchPanelEl);
+  return { width: style.width, height: style.height, left: style.left, top: style.top, maxHeight: "none" };
+}
+
+function recordSearchSize(outcome, { width, height }, started) {
+  void Bridge.invoke("search_palette_size_diagnostic", {
+    outcome, width: Math.round(width), height: Math.round(height), elapsedMs: performance.now() - started,
+  }).catch(() => {});
+}
+
+function animateSearchSize(before, restored) {
+  searchSizeAnimation?.cancel();
+  const target = searchPanelFrame();
+  const size = searchPanelEl.getBoundingClientRect();
+  const started = performance.now();
+  const finish = () => {
+    if (!restored) return;
+    const limited = size.width + 0.5 < restored.width || size.height + 0.5 < restored.height;
+    recordSearchSize(limited ? "limited" : "restored", size, started);
+  };
+  if (searchReducedMotion() || Object.keys(target).every((key) => target[key] === before[key])) {
+    finish();
+    return;
+  }
+  searchSizeAnimation = searchPanelEl.animate([before, target], {
+    duration: 200, easing: "cubic-bezier(0.2, 0, 0, 1)",
+  });
+  void searchSizeAnimation.finished.then(finish, () => {});
+}
+
+function stopSearchResize() {
+  const drag = searchResizeDrag;
+  searchResizeDrag = null;
+  searchOverlayEl.classList.remove("is-resizing");
+  searchOverlayEl.style.removeProperty("--srch-cursor");
+  if (drag?.handle.hasPointerCapture(drag.pointerId)) drag.handle.releasePointerCapture(drag.pointerId);
+}
+
+function beginSearchResize(event) {
+  if (event.button !== 0 || !event.isPrimary || searchResizeDrag) return;
+  const handle = event.currentTarget;
+  const edge = handle.dataset.edge;
+  const frame = searchPanelFrame();
+  const rect = searchPanelEl.getBoundingClientRect();
+  const bounds = searchOverlayEl.getBoundingClientRect();
+  const left = searchPanelEl.style.getPropertyValue("--srch-left");
+  const top = searchPanelEl.style.getPropertyValue("--srch-top");
+  searchSizeAnimation?.cancel();
+  sizeSearchPanel(rect, frame.left, frame.top);
+  searchResizeDrag = {
+    handle, pointerId: event.pointerId, rect, bounds, left, top,
+    x: event.clientX, y: event.clientY, started: performance.now(),
+    west: edge.includes("w"), east: edge.includes("e"), north: edge.includes("n"), south: edge.includes("s"),
+  };
+  searchOverlayEl.style.setProperty("--srch-cursor", getComputedStyle(handle).cursor);
+  searchOverlayEl.classList.add("is-resizing");
+  handle.setPointerCapture(event.pointerId);
+  event.preventDefault();
+}
+
+function moveSearchResize(event) {
+  const drag = searchResizeDrag;
+  if (!drag || drag.pointerId !== event.pointerId) return;
+  const { rect, bounds } = drag;
+  const dx = event.clientX - drag.x;
+  const dy = event.clientY - drag.y;
+  const minWidth = Math.min(600, rect.width);
+  const minHeight = Math.min(320, rect.height);
+  const left = drag.west ? Math.max(bounds.left + SEARCH_GUTTER, Math.min(rect.left + dx, rect.right - minWidth)) : rect.left;
+  const right = drag.east ? Math.min(bounds.right - SEARCH_GUTTER, Math.max(rect.right + dx, rect.left + minWidth)) : rect.right;
+  const top = drag.north ? Math.max(bounds.top + SEARCH_GUTTER, Math.min(rect.top + dy, rect.bottom - minHeight)) : rect.top;
+  const bottom = drag.south ? Math.min(bounds.bottom - SEARCH_GUTTER, Math.max(rect.bottom + dy, rect.top + minHeight)) : rect.bottom;
+  const size = { width: right - left, height: bottom - top };
+  const centeredLeft = bounds.left + (bounds.width - size.width) / 2;
+  const normalTop = bounds.top + parseFloat(getComputedStyle(searchOverlayEl).paddingTop);
+  sizeSearchPanel(size, (left - centeredLeft) + "px", (top - normalTop) + "px");
+}
+
+function endSearchResize(event) {
+  const drag = searchResizeDrag;
+  if (!drag || drag.pointerId !== event.pointerId) return;
+  const { width, height } = searchPanelEl.getBoundingClientRect();
+  stopSearchResize();
+  if (event.type !== "pointerup" || (width === drag.rect.width && height === drag.rect.height)) {
+    sizeSearchPanel(searchResultsSize, drag.left, drag.top);
+    return;
+  }
+  searchResultsSize = { width, height };
+  const saved = writeJsonLocal(SEARCH_SIZE_KEY, searchResultsSize);
+  recordSearchSize(saved ? "saved" : "save_failed", searchResultsSize, drag.started);
+}
+
+for (const handle of searchPanelEl.querySelectorAll(".srch-resize")) {
+  handle.addEventListener("pointerdown", beginSearchResize);
+  handle.addEventListener("pointermove", moveSearchResize);
+  for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) handle.addEventListener(type, endSearchResize);
+}
+
+window.addEventListener("resize", () => {
+  if (!searchPanelEl.classList.contains("is-results")) return;
+  stopSearchResize();
+  searchSizeAnimation?.cancel();
+  sizeSearchPanel(searchResultsSize);
+});
+
 function openSearch() {
+  stopSearchResize();
+  searchSizeAnimation?.cancel();
+  searchPanelEl.classList.remove("is-results");
+  sizeSearchPanel(null);
   searchOverlayEl.hidden = false;
   searchState.open = true;
   searchState.gen += 1;
@@ -8703,6 +8830,8 @@ function openSearch() {
 window.RichSearch = { open: () => openSearch() };
 
 function closeSearch() {
+  stopSearchResize();
+  searchSizeAnimation?.cancel();
   searchOverlayEl.hidden = true;
   searchState.open = false;
   searchState.sourceEpoch++;
@@ -8815,7 +8944,7 @@ function refreshScopedSearch() {
   if (searchInputEl.value.trim()) {
     searchState.docsPending = true;
     searchCountEl.classList.add("is-empty");
-    renderSearchResults(null);
+    if (searchPanelEl.classList.contains("is-results")) renderSearchResults(null);
     void runSearch(false);
   }
 }
@@ -9288,6 +9417,10 @@ async function runSearch(animate) {
     searchState.more = null;
   }
   if (!query) {
+    const before = searchPanelEl.classList.contains("is-results") ? searchPanelFrame() : null;
+    stopSearchResize();
+    searchPanelEl.classList.remove("is-results");
+    sizeSearchPanel(null);
     searchState.docsPending = false;
     searchHintEl.hidden = false;
     searchResultsEl.textContent = "";
@@ -9298,9 +9431,9 @@ async function runSearch(animate) {
     searchCountEl.textContent = "";
     searchCountEl.classList.add("is-empty");
     searchInputEl.setAttribute("aria-expanded", "false");
+    if (before) animateSearchSize(before, null);
     return;
   }
-  searchHintEl.hidden = true;
   searchHeadEl.classList.remove("is-searching");
   void searchHeadEl.offsetWidth;
   searchHeadEl.classList.add("is-searching");
@@ -9312,6 +9445,13 @@ async function runSearch(animate) {
     Bridge.invoke("search_documents", { request, generation: gen, sourceIds }).catch(() => null),
   ]);
   if (gen !== searchState.gen || !searchState.open) return;
+  const firstResponse = !searchPanelEl.classList.contains("is-results");
+  const compact = firstResponse ? searchPanelFrame() : null;
+  searchHintEl.hidden = true;
+  if (firstResponse) {
+    searchPanelEl.classList.add("is-results");
+    sizeSearchPanel(searchResultsSize);
+  }
   const before = animate ? searchSnapshot() : null;
   searchState.navHits = nav || [];
   searchState.conversations = null;
@@ -9337,6 +9477,7 @@ async function runSearch(animate) {
   const ms = Math.round(performance.now() - started);
   searchCountEl.textContent = (n ? n + (n === 1 ? " result" : " results") + " · " : "") + ms + " ms";
   searchCountEl.classList.remove("is-empty");
+  if (compact) animateSearchSize(compact, searchResultsSize);
   void loadSearchRecords("conversations", request, gen, ms);
   void loadSearchRecords("companyMemory", request, gen, ms);
 }
@@ -9526,7 +9667,8 @@ searchInputEl.addEventListener("input", () => {
   searchState.scopeNotice = "";
   paintSearchCoverage();
   invalidateSearch();
-  searchState.timer = setTimeout(() => runSearch(false), 120);
+  if (searchInputEl.value.trim()) searchState.timer = setTimeout(() => runSearch(false), 120);
+  else void runSearch(false);
 });
 
 for (const box of [searchSuperEl, searchStrictEl]) {

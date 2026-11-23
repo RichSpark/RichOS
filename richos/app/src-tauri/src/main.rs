@@ -4752,6 +4752,7 @@ fn main() {
             search_document_sources,
             cancel_search_documents,
             open_search_document,
+            search_diagnostics::search_palette_size_diagnostic,
             // --- Meeting notes (Granola PRD V4) — appended ---
             meetings::meeting_panel_state,
             meetings::meeting_panel_laid_out,

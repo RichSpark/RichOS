@@ -40,6 +40,14 @@ async function docTitles(page) {
   return page.evaluate(() => [...document.querySelectorAll("#search-results .srch-doc .srch-title")].map((t) => t.textContent));
 }
 
+async function searchPanelBox(page) {
+  return page.locator(".overlay-panel--search").evaluate(async (panel) => {
+    await Promise.allSettled(panel.getAnimations().map((animation) => animation.finished));
+    const { x, y, width, height } = panel.getBoundingClientRect();
+    return { x, y, width, height };
+  });
+}
+
 function ratio(colors) {
   const contrast = spawnSync("python3", [path.resolve(UI_DIR, "../scripts/qa/contrast.py"), ...colors], { encoding: "utf8" });
   assertEqual(contrast.status, 0, contrast.stdout + contrast.stderr);
@@ -63,6 +71,65 @@ async function main() {
       assertEqual(state.strict, false, "Require quoted text");
       assert(state.hint, "the empty palette explains the two boxes");
       assert(state.status.startsWith("RichFinder ready"), state.status);
+    });
+
+    await run.check("RichFinder drags from an edge or corner and restores the results size after reload", async () => {
+      const resizePage = await openApp(browser);
+      try {
+        const empty = await searchPanelBox(resizePage);
+        const findRefund = async () => {
+          await resizePage.fill("#search-input", "refund");
+          await resizePage.waitForSelector("#search-results .srch-doc");
+          return searchPanelBox(resizePage);
+        };
+        const initial = await findRefund();
+        assertEqual(initial.width, empty.width, "first search uses the current default width");
+        assert(initial.height > empty.height, "first search fits its results");
+        const drag = async (x, y, dx, dy, cursor) => {
+          await resizePage.mouse.move(x, y);
+          assertEqual(await resizePage.evaluate(([x, y]) => getComputedStyle(document.elementFromPoint(x, y)).cursor, [x, y]), cursor, "cursor at the resize handle");
+          await resizePage.mouse.down();
+          await resizePage.mouse.move(x + dx, y + dy, { steps: 4 });
+          await resizePage.mouse.up();
+          return searchPanelBox(resizePage);
+        };
+        const wider = await drag(initial.x + initial.width - 3, initial.y + initial.height / 2, 120, 0, "ew-resize");
+        assertEqual([wider.x, wider.y, wider.width, wider.height], [initial.x, initial.y, initial.width + 120, initial.height], "right edge changes only the width");
+        const larger = await drag(wider.x + 4, wider.y + 4, -80, -45, "nwse-resize");
+        assertEqual([larger.x, larger.y, larger.width, larger.height], [wider.x - 80, wider.y - 45, wider.width + 80, wider.height + 45], "top left corner keeps the opposite corner still");
+
+        await resizePage.fill("#search-input", "");
+        await resizePage.waitForSelector("#search-hint", { state: "visible" });
+        assertEqual(await searchPanelBox(resizePage), empty, "clearing the query restores the compact overlay");
+        await resizePage.keyboard.press("Escape");
+        await resizePage.reload();
+        await leaveHome(resizePage);
+        await resizePage.keyboard.press("Meta+k");
+        await resizePage.waitForSelector("#search-overlay:not([hidden])");
+        assertEqual(await searchPanelBox(resizePage), empty, "reopening after reload stays compact");
+        const restored = await findRefund();
+        assertEqual([restored.width, restored.height], [larger.width, larger.height], "the next search restores both saved dimensions");
+
+        await resizePage.setViewportSize({ width: 900, height: 600 });
+        const constrained = await searchPanelBox(resizePage);
+        assert(constrained.x >= 52 && constrained.y >= 0 && constrained.x + constrained.width <= 900 && constrained.y + constrained.height <= 600,
+          "a smaller app window leaves the overlay and the rail reachable");
+        await resizePage.setViewportSize({ width: 1440, height: 900 });
+        assertEqual(await searchPanelBox(resizePage), restored, "the smaller window leaves the saved size intact");
+        const right = restored.x + restored.width - 3;
+        const middle = restored.y + restored.height / 2;
+        await resizePage.mouse.move(right, middle);
+        await resizePage.mouse.down();
+        await resizePage.mouse.move(right + 20, middle);
+        await resizePage.keyboard.press("Meta+k");
+        await resizePage.mouse.up();
+        assertEqual(await searchPanelBox(resizePage), empty, "opening a fresh search cancels an in-progress drag");
+        const searchedAgain = await findRefund();
+        assertEqual([searchedAgain.width, searchedAgain.height], [larger.width, larger.height], "the cancelled drag leaves the saved size intact");
+        assertEqual(resizePage.__errors, [], "the renderer logged errors");
+      } finally {
+        await resizePage.close();
+      }
     });
 
     await run.check("a document found only by meaning is marked so, with its passage and Open original", async () => {
