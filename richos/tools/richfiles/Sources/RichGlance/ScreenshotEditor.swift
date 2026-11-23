@@ -18,7 +18,7 @@ enum ScreenshotChrome {
 }
 
 @MainActor
-final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
+final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate, NSPopoverDelegate {
     typealias LeaveSheetPresenter = @MainActor (NSAlert, NSWindow, @escaping (NSApplication.ModalResponse) -> Void) -> Void
     let window: ScreenshotEditorWindow
     var closed: (() -> Void)?
@@ -91,6 +91,14 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
     private let zoomOutButton = ScreenshotButton("Zoom out", symbol: "minus")
     private let zoomInButton = ScreenshotButton("Zoom in", symbol: "plus")
     private let size = ScreenshotChoice(["Regular", "Large"], label: "Mark size")
+    private let thickness = ScreenshotButton("Thickness", symbol: "lineweight")
+    private lazy var thicknessMenu: NSPopover = {
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.animates = false
+        popover.delegate = self
+        return popover
+    }()
     private let edit = ScreenshotButton("Edit Text", hint: "↩")
     private let delete = ScreenshotButton("Delete", hint: "⌫")
     private let earlier = ScreenshotButton("Make Earlier")
@@ -218,7 +226,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
         NotificationCenter.default.addObserver(self, selector: #selector(scrolled),
                                                name: NSView.boundsDidChangeNotification, object: scroll.contentView)
         for view in [scroll, inspector, empty, reveal, toast] { work.addSubview(view) }
-        for view in [inspection, hint, size, edit, delete, earlier, later, acceptCrop, cancelCrop] { inspector.addSubview(view) }
+        for view in [inspection, hint, size, thickness, edit, delete, earlier, later, acceptCrop, cancelCrop] { inspector.addSubview(view) }
         swatches = ScreenshotInk.allCases.map { ink in
             let button = ScreenshotButton(ink.rawValue.capitalized, style: .swatch)
             button.swatch = ink.color
@@ -259,6 +267,8 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
         zoomModes.changed = { [weak self] in self?.setZoom($0 == 0 ? .fit : .actual) }
         zoomOutButton.onPress = { [weak self] in self?.changeZoom(direction: -1) }
         zoomInButton.onPress = { [weak self] in self?.changeZoom(direction: 1) }
+        thickness.trailingSymbol = "chevron.down"
+        thickness.onPress = { [weak self] in self?.showThicknessMenu() }
         size.changed = { [weak self] in self?.canvas?.setStyle(large: $0 == 1); self?.focusPicture() }
         edit.onPress = { [weak self] in self?.canvas?.startCallout() }
         delete.onPress = { [weak self] in self?.canvas?.deleteSelected(); self?.focusPicture() }
@@ -318,11 +328,15 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
                                                             zoom: zoom, autoZoom: autoZoom,
                                                             scrollPosition: scroll.contentView.bounds.origin)
         }
-        canvas = document.map(ScreenshotCanvas.init)
+        thicknessMenu.performClose(nil)
+        canvas = document.map { ScreenshotCanvas(document: $0, store: store) }
+        canvas?.saveStyle = { [weak self] changes, tool in
+            guard let self else { return }
+            do { try store.rememberAnnotationStyle(changes, for: tool) }
+            catch { announce("Could not save the \(tool.title) defaults.") }
+        }
         indexedCurrentEdits = canvas?.document.edits
         if let previous, let canvas {
-            canvas.commonInk = previous.commonInk
-            canvas.highlightInk = previous.highlightInk
             canvas.sizes = previous.sizes
             if previous.tool != .crop { canvas.tool = previous.tool }
         }
@@ -934,10 +948,52 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
 
     private func select(_ tool: ScreenshotTool) {
         guard let canvas else { return }
+        thicknessMenu.performClose(nil)
         canvas.finishCallout()
         canvas.selected = nil
         canvas.tool = tool
         focusPicture()
+    }
+
+    private func showThicknessMenu() {
+        guard let canvas, !thickness.isHidden else { return }
+        if thicknessMenu.isShown {
+            thicknessMenu.performClose(nil)
+            return
+        }
+
+        let choices = ScreenshotMark.thicknessOptions
+        let width: CGFloat = 236, rowHeight: CGFloat = 38, padding: CGFloat = 6
+        let frame = CGRect(x: 0, y: 0, width: width, height: rowHeight * CGFloat(choices.count) + 2 * padding)
+        let panel = ScreenshotSurface(.floating)
+        panel.frame = frame
+        for (index, value) in choices.enumerated() {
+            let row = ScreenshotButton("\(value) px", style: .segment)
+            row.sampleWidth = CGFloat(value)
+            row.isSelected = canvas.thickness == CGFloat(value)
+            row.frame = CGRect(x: padding, y: padding + CGFloat(index) * rowHeight,
+                               width: width - 2 * padding, height: rowHeight)
+            row.onHover = { [weak canvas] hovering in
+                if hovering { canvas?.previewThickness = value }
+                else if canvas?.previewThickness == value { canvas?.previewThickness = nil }
+            }
+            row.onPress = { [weak self, weak canvas] in
+                guard let self, let canvas else { return }
+                thicknessMenu.performClose(nil)
+                canvas.setStyle(thickness: value)
+                focusPicture()
+            }
+            panel.addSubview(row)
+        }
+        let controller = NSViewController()
+        controller.view = panel
+        thicknessMenu.contentViewController = controller
+        thicknessMenu.contentSize = frame.size
+        thicknessMenu.show(relativeTo: thickness.bounds, of: thickness, preferredEdge: .maxY)
+    }
+
+    func popoverWillClose(_ notification: Notification) {
+        canvas?.previewThickness = nil
     }
 
     private func commitCrop() {
@@ -1000,6 +1056,11 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
         case ("s", .command): saveImage(); return true
         case ("0", .command): setZoom(.fit); return true
         case ("1", .command): setZoom(.actual); return true
+        case ("-", []), ("=", []):
+            if (canvas.selectedMark?.tool ?? canvas.tool).hasThickness {
+                canvas.stepThickness(by: key == "-" ? -1 : 1)
+                return true
+            }
         case ("[", []), ("]", []):
             if let index = entries.firstIndex(where: { $0.id == canvas.document.id }) {
                 let next = index + (key == "[" ? 1 : -1)
@@ -1097,12 +1158,18 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
 
         let cropping = canvas?.previewCrop != nil
         let selectedTool = mark?.tool ?? tool
-        let styled = !cropping && selectedTool != .redact && selectedTool != .select
+        let styled = !cropping && selectedTool.defaultInk != nil
         for (button, color) in zip(swatches, ScreenshotInk.allCases) {
             button.isHidden = !styled
             button.isSelected = (mark?.ink ?? canvas?.ink) == color
         }
-        size.isHidden = !styled || selectedTool == .highlight
+        thickness.isHidden = !styled || !selectedTool.hasThickness
+        if !thickness.isHidden, let canvas {
+            let width = "\(canvas.thickness.formatted()) px"
+            thickness.title = "Thickness · " + width
+            thickness.setAccessibilityValue(width)
+        }
+        size.isHidden = !styled || selectedTool == .highlight || selectedTool.hasThickness
         size.selection = (mark?.large ?? canvas?.large) == true ? 1 : 0
         edit.isHidden = cropping || mark?.tool != .text
         delete.isHidden = cropping || mark == nil
@@ -1121,6 +1188,13 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
                 inspection.stringValue = "Step \(index) of \(steps)"
                 earlier.isEnabled = index > 1
                 later.isEnabled = index < steps
+            } else if mark.tool == .line {
+                inspection.stringValue = "Line · \(Int(mark.length.rounded())) px · \(mark.angle)°"
+                if canvas?.isInteracting == true {
+                    hint.stringValue = canvas?.isSnappingLine == true ? "· snapped" : "· Shift snaps"
+                }
+            } else if mark.tool == .box {
+                inspection.stringValue = "Box · \(Int(mark.rect.width)) × \(Int(mark.rect.height)) px"
             } else if mark.tool == .redact {
                 inspection.stringValue = "Redaction · \(Int(mark.rect.integral.width)) × \(Int(mark.rect.integral.height)) px"
                 hint.stringValue = "· resize it until nothing shows"
@@ -1134,6 +1208,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
             case .select: instructions = "click a mark to choose it, drag it to move it"
             case .arrow: instructions = "drag from the tail to the point"
             case .text: instructions = "click to add a callout, then type"
+            case .line: instructions = "drag to draw · Shift snaps"
             case .box: instructions = "drag around what you want to show"
             case .highlight: instructions = "drag across what you want to highlight"
             case .steps: instructions = "click to place step \(steps + 1)"
@@ -1161,9 +1236,9 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
         titleDivider.frame = CGRect(x: saveButton.frame.minX - 8, y: 16, width: 1, height: 26)
         railRule.frame = CGRect(x: 91, y: 0, width: 1, height: workHeight)
         bottomRule.frame = CGRect(x: 0, y: 0, width: width, height: 1)
-        let tile = min(58, (workHeight - 35) / 8)
+        let tile = min(58, (workHeight - 35) / CGFloat(ScreenshotTool.allCases.count))
         for (index, tool) in ScreenshotTool.allCases.enumerated() {
-            toolButtons[tool]?.frame = CGRect(x: 8, y: 7 + CGFloat(index) * (tile + 2) + (index == 7 ? 7 : 0),
+            toolButtons[tool]?.frame = CGRect(x: 8, y: 7 + CGFloat(index) * (tile + 2) + (tool == .crop ? 7 : 0),
                                               width: 76, height: tile)
         }
         cropRule.frame = CGRect(x: 14, y: (toolButtons[.crop]?.frame.minY ?? 0) - 4, width: 64, height: 1)
@@ -1258,6 +1333,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate 
         let colors = swatches.filter { !$0.isHidden }.map { ($0 as NSView, CGFloat(34)) }
         if !colors.isEmpty { groups.append(colors) }
         if !size.isHidden { groups.append([(size, size.naturalWidth)]) }
+        if !thickness.isHidden { groups.append([(thickness, thickness.naturalWidth())]) }
         for button in [earlier, later, edit, delete, cancelCrop, acceptCrop] where !button.isHidden {
             groups.append([(button, button.naturalWidth())])
         }
