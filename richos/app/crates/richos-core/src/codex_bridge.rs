@@ -503,8 +503,12 @@ mod tests {
             });
             // load-bound: hang guard for an OS-lock admission answer; assertions check held results, never measured speed. Our fixture lock is always released before joining.
             let result = rx.recv_timeout(Duration::from_secs(10));
-            drop(writer); // always release our owned lock before asserting/joining
+            // A concurrently forked test can briefly inherit the descriptor. Unlock the
+            // shared file description explicitly before checking the post-release read.
+            let unlocked = unsafe { libc::flock(writer.as_raw_fd(), libc::LOCK_UN) };
+            drop(writer);
             reader.join().unwrap();
+            assert_eq!(unlocked, 0);
             let (accepted, pending) = result.expect("one busy inbox blocked the receiver");
             assert!(accepted.is_err());
             assert!(pending.is_err());
