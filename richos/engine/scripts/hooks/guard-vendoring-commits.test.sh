@@ -122,7 +122,7 @@ case_exit() {
 case_msg() {
     local name="$1" needle="$2" cwd="$3" cmd="$4"
     run "$cwd" "$cmd" || true
-    printf '%s' "$RUN_ERR" | grep -qF "$needle" && ok "$name" \
+    grep -qF -- "$needle" <<< "$RUN_ERR" && ok "$name" \
         || bad "$name" "stderr did not mention \"$needle\""
 }
 
@@ -289,7 +289,7 @@ broken_case() { # <name> <needle> <registry-line...>
         bad "$name" "expected exit 2, got $rc"
         return
     fi
-    printf '%s' "$RUN_ERR" | grep -qF "$needle" && ok "$name" \
+    grep -qF -- "$needle" <<< "$RUN_ERR" && ok "$name" \
         || bad "$name" "refused, but did not say \"$needle\""
 }
 

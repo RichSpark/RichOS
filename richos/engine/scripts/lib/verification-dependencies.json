@@ -8517,8 +8517,8 @@
     },
     "scripts/hooks/guard-vendoring-commits.test.sh": {
       "source": "scripts/hooks/guard-vendoring-commits.test.sh",
-      "sha256": "0df739003abb871a9de16558fa955c082a7ca9bd4b4173275f0860a6cf4fd483",
-      "evidence": "Full suite creates private Git repos and literal vendoring registries with hooks disabled. It explicitly resolves real engine adoption without sourcing config, checks the shipped vendoring declaration and tracked inventory as data and verifies only its own registration. Direct library sourcing uses unsourced defaults. Nested finite mutants repeat these paths, omitting only the shipped-tree data section. Renewed 2026-10-01: C9 (the unparseable payload) is seated on a sandbox copy of the engine's orchestration.config, so its unevaluated-payload log line lands in the sandbox; the same guard and config bytes are read.",
+      "sha256": "098c8a5a24392a34938ffeb1ab59cea1dba4ae6ac408bb7352c673d4ee6ecfc9",
+      "evidence": "Full suite creates private Git repos and literal vendoring registries with hooks disabled. It explicitly resolves real engine adoption without sourcing config, checks the shipped vendoring declaration and tracked inventory as data and verifies only its own registration. Direct library sourcing uses unsourced defaults. Nested finite mutants repeat these paths, omitting only the shipped-tree data section. Renewed 2026-10-01: C9 (the unparseable payload) is seated on a sandbox copy of the engine's orchestration.config, so its unevaluated-payload log line lands in the sandbox; the same guard and config bytes are read. Fixture stderr assertions feed grep directly with a here-string, keeping the same substring check without a pipe producer.",
       "keys": [],
       "edges": [
         {
@@ -18904,7 +18904,7 @@
         "scripts/hooks/guard-vendoring-commits.sh"
       ],
       "sources": {
-        "scripts/hooks/guard-vendoring-commits.test.sh": "0df739003abb871a9de16558fa955c082a7ca9bd4b4173275f0860a6cf4fd483",
+        "scripts/hooks/guard-vendoring-commits.test.sh": "098c8a5a24392a34938ffeb1ab59cea1dba4ae6ac408bb7352c673d4ee6ecfc9",
         "scripts/lib/registered-hooks.sh": "a6cd8c4a7f0a6b40db2640f799c67d3abdda538cff2b111e80db0c33711d8bd5",
         "scripts/hooks/guard-vendoring-commits.sh": "7214a2d8d780c9988eb6a9e4f6ead5fe229b801da73f5548b52d43f041e858ed",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",
@@ -18928,7 +18928,7 @@
         "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
         "scripts/hooks/dispatch-pretooluse.manifest": "5151275bc5a6153a25ab2c28cb9f7820a5af67ba03042fc073cdb48cf3697e38"
       },
-      "evidence": "Only this guard registration is resolved on plugin and seated surfaces. Probe, installer and declaration-resolver source assertions are text data; no other hook registration is executed. Seated observation compares every raw line containing a named guard prefix plus every parsed dispatcher command across all events; this covers the helper direct grep and dispatcher-key lookup without approximating its verdict. The dispatcher manifest is bound as an additional input. Probe is inspected as source only: named registration grep and, where present, rootless-block source assertions. Only unrelated literal BR_EXPECTED rows may differ; all other probe bytes are preserved.",
+      "evidence": "Only this guard registration is resolved on plugin and seated surfaces. Probe, installer and declaration-resolver source assertions are text data; no other hook registration is executed. Seated observation compares every raw line containing a named guard prefix plus every parsed dispatcher command across all events; this covers the helper direct grep and dispatcher-key lookup without approximating its verdict. The dispatcher manifest is bound as an additional input. Probe is inspected as source only: named registration grep and, where present, rootless-block source assertions. Only unrelated literal BR_EXPECTED rows may differ; all other probe bytes are preserved. Fixture stderr assertions feed grep directly with a here-string, keeping the same substring check without a pipe producer.",
       "seated_text_needles": [
         "guard-vendoring-commits"
       ],
