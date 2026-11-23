@@ -16,9 +16,12 @@ final class Viewer {
 
     let window: NSWindow
     var pinImage: ((CGImage) -> Void)?
+    var openEditor: ((ScreenshotDocument) -> Void)?
     private(set) var file: URL?
     private let canvas: Canvas
     var info: GlanceInfoView { canvas.info }
+    var canEditImage: Bool { canvas.pinBitmap != nil }
+    private var imageID = UUID()
     private var folder: [URL]?
     private var folderRequest: Request?
     private var pendingStep = 0
@@ -64,6 +67,19 @@ final class Viewer {
     }
 
     func pinToScreen() { if let image = canvas.pinBitmap { pinImage?(image) } }
+
+    func editImage() {
+        let request = Request()
+        guard let file, let image = canvas.pinBitmap, let openEditor else {
+            request.record(.glanceViewerEdit, .unavailable)
+            return
+        }
+        let document = ScreenshotDocument(original: image, scale: 1, kind: .image, id: imageID,
+                                          name: file.deletingPathExtension().lastPathComponent, sourceFile: file)
+        openEditor(document)
+        // The editor may present its existing leave sheet before installing the image.
+        request.record(.glanceViewerEdit, .complete)
+    }
 
     func show() {
         if window.isMiniaturized { window.deminiaturize(nil) }
@@ -143,6 +159,7 @@ final class Viewer {
     private func load(_ file: URL, request: Request, position: String? = nil) {
         stopDisplay()
         displayRequest = request
+        imageID = request.id
         self.file = file
         window.title = file.lastPathComponent
         canvas.announce(nil)
