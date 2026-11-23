@@ -119,7 +119,7 @@ struct ScreenshotEdits: Codable, Equatable, Sendable {
 }
 
 enum ScreenshotKind: String, Codable, Sendable {
-    case region, window, display, scrolling
+    case region, window, display, scrolling, image
     var title: String { self == .scrolling ? "Scrolling capture" : rawValue.capitalized }
     var symbol: String {
         switch self {
@@ -127,6 +127,7 @@ enum ScreenshotKind: String, Codable, Sendable {
         case .window: "macwindow"
         case .display: "display"
         case .scrolling: "arrow.up.and.down.square"
+        case .image: "photo"
         }
     }
 }
@@ -138,6 +139,7 @@ struct ScreenshotDocument: Sendable {
     let scale: CGFloat
     let kind: ScreenshotKind
     let name: String?
+    let sourceFile: URL?
     var edits: ScreenshotEdits
     var repeatTarget: ScreenshotRepeatTarget?
     var screenRect: CGRect?
@@ -145,13 +147,14 @@ struct ScreenshotDocument: Sendable {
 
     init(original: CGImage, scale: CGFloat, kind: ScreenshotKind = .region,
          id: UUID = UUID(), created: Date = Date(), name: String? = nil, edits: ScreenshotEdits? = nil,
-         redactedGeneration: UUID? = nil) {
+         redactedGeneration: UUID? = nil, sourceFile: URL? = nil) {
         self.id = id
         self.created = created
         self.original = original
         self.scale = max(1, scale)
         self.kind = kind
         self.name = name
+        self.sourceFile = sourceFile
         self.redactedGeneration = redactedGeneration
         self.edits = edits ?? ScreenshotEdits(crop: CGRect(x: 0, y: 0, width: original.width, height: original.height))
     }
@@ -160,6 +163,17 @@ struct ScreenshotDocument: Sendable {
     var crop: CGRect { edits.crop.integral.intersection(bounds) }
     var title: String { name ?? (kind == .scrolling ? "Scrolling screenshot" : "\(kind.title) screenshot") }
     var hasRedactions: Bool { edits.marks.contains { $0.tool == .redact } }
+
+    func isSourceFile(_ url: URL) -> Bool {
+        guard let sourceFile else { return false }
+        if sourceFile.resolvingSymlinksInPath() == url.resolvingSymlinksInPath() { return true }
+        let keys: Set<URLResourceKey> = [.volumeIdentifierKey, .fileResourceIdentifierKey]
+        guard let source = try? sourceFile.resourceValues(forKeys: keys),
+              let target = try? url.resourceValues(forKeys: keys),
+              let volume = source.volumeIdentifier, volume.isEqual(target.volumeIdentifier),
+              let fileID = source.fileResourceIdentifier else { return false }
+        return fileID.isEqual(target.fileResourceIdentifier)
+    }
 }
 
 enum ScreenshotRenderer {

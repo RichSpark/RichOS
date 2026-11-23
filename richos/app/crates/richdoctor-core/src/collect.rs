@@ -884,7 +884,7 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64, gestures: bo
                 | "suiteRestartRunning" | "richFilesSuiteRestart" | "richGlanceSuiteRestart" | "captureHelperSuiteRestart" | "gesturesSuiteRestart"
                 | "windowPlacement" | "transferStall" | "cleanupScan" | "cleanupDuplicates" | "cleanupTrash" | "cleanupDelete"
                 | "openWithDiscovery"
-                | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata"
+                | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata" | "glanceViewerEdit"
                 | "glanceCaptureFrame" | "glanceCaptureOutput" | "glanceCaptureSession" | "glanceScrollCapture" | "glanceCompare" | "glanceOCR" | "glanceSearch" | "glancePin" | "glanceRedactedCopy" | "glanceShare"
                 | "glanceAnnotationDefaults"
                 | "glanceCaptureHelperStart" | "glanceCaptureHelperLogin" | "glanceCaptureHelperMenu" | "glanceCaptureShortcutLaunch" | "glanceCaptureMenuLaunch")
@@ -1283,6 +1283,7 @@ mod tests {
         metadata["note"] = serde_json::json!("Personal RichCleaner note");
         metadata["scrollCaptureFailure"] = serde_json::json!("lostOverlap");
         let captures = [
+            "glanceViewerEdit",
             "glanceCaptureFrame",
             "glanceCaptureSession",
             "glanceCaptureOutput",
@@ -1353,6 +1354,7 @@ mod tests {
         assert!(timing.text.contains("operation=glanceDecode outcome=issues"));
         assert!(timing.text.contains("operation=glanceDefaults"));
         assert!(timing.text.contains("operation=glanceMetadata"));
+        assert!(timing.text.contains("operation=glanceViewerEdit"));
         assert!(timing.text.contains("operation=glanceCaptureFrame"));
         assert!(timing.text.contains("operation=glanceCaptureSession"));
         assert!(timing.text.contains("operation=glanceCaptureOutput"));
