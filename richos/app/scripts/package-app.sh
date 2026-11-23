@@ -1085,6 +1085,11 @@ except Exception: print("")' 2>/dev/null || true)"
   [ -n "$extra_version" ] && target_version="$extra_version"
 fi
 
+suite_provenance=()
+[ "$intent" != release ] || suite_provenance=("$app_dir/nightly-build.json")
+suite_stamp="$(python3 "$here/lib/suite_version.py" resolve "$target_version" "${suite_provenance[@]+"${suite_provenance[@]}"}")" || exit 2
+read -r suite_base suite_build <<< "$suite_stamp"
+
 # ---------------------------------------------------------------------------
 # THE COMPILE RUNS UNDER THE CPU GUARD'S release-build ROLE, BY DEFAULT.
 # ---------------------------------------------------------------------------
@@ -1146,6 +1151,7 @@ if [ -n "$dry_run" ]; then
   say ""
   say "  intent              : $intent"
   say "  version             : $target_version$( [ "$intent" = "dev" ] && printf ' (app/src-tauri/Cargo.toml + this commit; pass --release or --nightly <version> to change that)' )"
+  say "  suite display       : $suite_base ($suite_build)"
   say "  signing mode        : $sign_mode"
   if [ "$sign_mode" = "developer-id" ]; then
     say "  identity            : $wanted"
@@ -1406,6 +1412,7 @@ if [ -n "${RICHOS_EXTRA_TAURI_CONFIG:-}" ]; then
   say "  EXTRA CONFIG OVERLAY IN FORCE — this build is NOT the shipping configuration:"
   say "    $RICHOS_EXTRA_TAURI_CONFIG"
 fi
+build_args+=(--config "{\"bundle\":{\"macOS\":{\"bundleVersion\":\"$suite_build\"}}}")
 
 # Source checkout and public CI can build without media. Published editions require all five.
 chat_sound_args=()
@@ -1438,11 +1445,8 @@ build_args+=(--config "$helpers_overlay")
 # it was built, as the separate download (PRD §3: "the separate download supplies the
 # identical signed app directly").
 #
-# RichDoctor is stamped with RichOS's own version ($target_version, the one source), because the
-# refresh (richdoctor-core bootstrap.rs `refresh_with`) replaces an installed copy only when its
-# version is older than the payload's; a fixed 1.0.0 was never older than 1.0.0, so no RichOS
-# ever replaced the RichDoctor installed first (CEO 2026-11-02: "how do I know that it has
-# actually been updated?"). The installed 1.0.0 is older than every RichOS version.
+# Tauri's About panel uses the compiled version and reads the build from the plist.
+# Keep the full suite identity in CFBundleShortVersionString for installers already in use.
 # RICHOS_WITHOUT_RICHDOCTOR=1 skips it, loudly: that RichOS installs no RichDoctor.
 richdoctor_dir="$app_dir/crates/richdoctor"
 if [ "${RICHOS_WITHOUT_RICHDOCTOR:-}" = "1" ]; then
@@ -1453,7 +1457,8 @@ else
   say "building RichDoctor, the separate support app this RichOS installs beside itself..."
   # The Tauri CLI checks for this directory before build.rs stages the filtered assets.
   mkdir -p "$richdoctor_dir/ui-dist" || exit 4
-  if ! (cd "$richdoctor_dir" && RICHDOCTOR_VERSION="$target_version" ${build_launch[@]+"${build_launch[@]}"} cargo tauri build --no-sign --bundles app --config "{\"version\":\"$target_version\"}"); then
+  doctor_config="{\"version\":\"$suite_base\",\"bundle\":{\"macOS\":{\"bundleVersion\":\"$suite_build\"}}}"
+  if ! (cd "$richdoctor_dir" && RICHDOCTOR_VERSION="$target_version" ${build_launch[@]+"${build_launch[@]}"} cargo tauri build --no-sign --bundles app --config "$doctor_config"); then
     warn ""
     warn "RichDoctor did not build — nothing was packaged. The output above is the reason."
     exit 4
@@ -1464,6 +1469,7 @@ else
     warn "the RichDoctor build exited 0 but $rd_app is not there — refusing to continue."
     exit 1
   fi
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $target_version" "$rd_app/Contents/Info.plist"
   # The same build-machine path check as RichOS's, before the signature.
   if ! python3 "$here/lib/no_host_paths.py" "$rd_app" --reviewed-text && [ "${RICHOS_ALLOW_HOST_PATHS:-}" != "1" ]; then
     warn "RichDoctor carries build-machine paths — refusing to sign it."
@@ -1494,7 +1500,7 @@ else
   rd_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$rd_app/Contents/Info.plist" 2>/dev/null || true)"
   rd_floor="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$rd_app/Contents/Info.plist" 2>/dev/null || true)"
   rd_ui="$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$rd_app/Contents/Info.plist" 2>/dev/null || true)"
-  if [ "$rd_id" != "com.richos.richdoctor" ] || [ -z "$rd_version" ] || [ "$rd_floor" != "13.0" ] || [ "$rd_ui" != "true" ]; then
+  if [ "$rd_id" != "com.richos.richdoctor" ] || [ "$rd_version" != "$target_version" ] || [ "$rd_floor" != "13.0" ] || [ "$rd_ui" != "true" ]; then
     warn "RichDoctor's Info.plist is not what it must be: identifier '$rd_id', version '$rd_version', macOS floor '$rd_floor', menu bar only '$rd_ui'."
     exit 1
   fi
@@ -1504,7 +1510,7 @@ else
   python3 "$here/lib/updater_tar.py" verify "$rd_payload/RichDoctor.app.tar.gz" || exit 1
   printf '%s\n' "$rd_version" > "$rd_payload/version"
   build_args+=(--config "{\"bundle\":{\"resources\":{\"$rd_payload/RichDoctor.app.tar.gz\":\"RichDoctor/RichDoctor.app.tar.gz\",\"$rd_payload/version\":\"RichDoctor/version\"}}}")
-  say "  RichDoctor $rd_version: signed ($sign_mode), verified, carried as Resources/RichDoctor/RichDoctor.app.tar.gz"
+  say "  RichDoctor $suite_base ($suite_build): signed ($sign_mode), verified, carried as Resources/RichDoctor/RichDoctor.app.tar.gz"
   say "  the separate download: $rd_app"
 fi
 
@@ -1613,7 +1619,7 @@ done
 package_richfiles() (
   richfiles_stage="$(mktemp -d "${TMPDIR:?}/richfiles-package.XXXXXX")" || exit 1
   trap 'rm -rf -- "$richfiles_stage"' EXIT
-  RICHOS_SUITE_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_bundle/Contents/Info.plist")" \
+  RICHOS_SUITE_VERSION="$target_version" RICHOS_SUITE_BUILD="$suite_build" \
     bash "$here/package-richfiles.sh" --embedded "$richfiles_stage/payload" &&
     mkdir -p "$app_bundle/Contents/Applications" "$app_bundle/Contents/Frameworks" &&
     ditto "$richfiles_stage/payload/RichFiles.app" "$app_bundle/Contents/Applications/RichFiles.app" &&
@@ -1775,6 +1781,11 @@ codesign --force "${richfiles_sign[@]}" "$glance_app" || exit 1
 codesign --force "${richfiles_sign[@]}" "$richfiles_app/Contents/Library/LoginItems/RichFiles Window Gestures.app" || exit 1
 codesign --force "${richfiles_sign[@]}" "$richfiles_app" || exit 1
 codesign --verify --deep --strict "$richfiles_app" || exit 1
+
+suite_check=()
+[ "${RICHOS_WITHOUT_RICHDOCTOR:-}" != 1 ] || suite_check=(--without-doctor)
+python3 "$here/lib/suite_version.py" verify "$app_bundle" "$target_version" "$suite_base" "$suite_build" \
+  "${suite_check[@]+"${suite_check[@]}"}" || exit 5
 
 if [ "$sign_mode" = "adhoc" ]; then
   say ""

@@ -97,8 +97,8 @@
 # No application window is opened. Signed bundles contain a native fixture
 # that prints a source stamp. The isolation test runs a headless file reader.
 # run-tests: no-host-screen: bundles contain a native fixture; the isolated probe runs only that fixture and the headless compiler
-# run-tests: inputs richos/app/scripts/build-cleaner-resources.py richos/app/scripts/runtime-sources.json richos/app/scripts/package-app.test.sh richos/app/scripts/package-app.sh richos/app/scripts/lib/bundle_invariants.py richos/app/scripts/lib/no_host_paths.py richos/app/scripts/lib/probe_packaged.py richos/app/scripts/lib/probe_packaged.test.py richos/engine/scripts/lib/named-persons.py richos/app/scripts/install-signing-cert.sh richos/app/scripts/nightly-local.py richos/engine/scripts/lib/proc_tree.py richos/app/src-tauri/Cargo.toml richos/app/src-tauri/Info.plist richos/app/src-tauri/Entitlements.plist richos/app/src-tauri/tauri.conf.json
-# run-tests: covers richos/app/scripts/package-app.sh richos/app/scripts/lib/bundle_invariants.py richos/app/scripts/lib/no_host_paths.py richos/app/scripts/lib/probe_packaged.py
+# run-tests: inputs richos/app/scripts/build-cleaner-resources.py richos/app/scripts/runtime-sources.json richos/app/scripts/package-app.test.sh richos/app/scripts/package-app.sh richos/app/scripts/lib/bundle_invariants.py richos/app/scripts/lib/no_host_paths.py richos/app/scripts/lib/probe_packaged.py richos/app/scripts/lib/probe_packaged.test.py richos/engine/scripts/lib/named-persons.py richos/app/scripts/install-signing-cert.sh richos/app/scripts/nightly-local.py richos/engine/scripts/lib/proc_tree.py richos/app/src-tauri/Cargo.toml richos/app/src-tauri/Info.plist richos/app/src-tauri/Entitlements.plist richos/app/src-tauri/tauri.conf.json richos/app/scripts/lib/suite_version.py
+# run-tests: covers richos/app/scripts/package-app.sh richos/app/scripts/lib/bundle_invariants.py richos/app/scripts/lib/no_host_paths.py richos/app/scripts/lib/probe_packaged.py richos/app/scripts/lib/suite_version.py
 set -uo pipefail
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -715,6 +715,16 @@ else
   expect "F14 a -dev. bundle is accepted with no declared intent, and says so" 0 "development build — not a release"
 fi
 
+cat > "$DEV_SB/nightly-build.json" <<'JSON'
+{"channel":"stable","version":"9.9.9","promoted_from":"v9.9.9-nightly.20261123.117","promoted_from_version":"9.9.9-nightly.20261123.117"}
+JSON
+run bash "$DEV_SB/scripts/package-app.sh" --release --dry-run
+expect "F15 stable packaging uses its promoted nightly's build number" 0 "suite display       : 9.9.9 (20261123.117)"
+
+printf '{"channel":"stable","version":"9.9.9","promoted_from_version":"9.9.8-nightly.20261123.117"}\n' > "$DEV_SB/nightly-build.json"
+run bash "$DEV_SB/scripts/package-app.sh" --release --dry-run
+expect "F16 stable packaging refuses a promotion of another version" 2 "does not name the promoted nightly for 9.9.9"
+
 echo ""
 echo "=== E. the operator's environment cannot reach a case ==="
 # The negative control for the isolation above, and the regression test for the
@@ -745,9 +755,11 @@ unset RICHOS_NOTARIZE RICHOS_NOTARY_KEY RICHOS_NOTARY_KEY_ID RICHOS_NOTARY_ISSUE
 unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
 unset TAURI_SIGNING_PRIVATE_KEY_PATH TAURI_SIGNING_PRIVATE_KEY_PASSWORD RICHOS_SIGNING_IDENTITY
 
-# RichDoctor is stamped with RichOS's version, else the refresh never replaces an installed 1.0.0.
+# RichDoctor reports the full version in diagnostics and retains it in the
+# field the installed copy's refresh reads.
 # shellcheck disable=SC2016  # the pattern is the literal text of the script, $ and all
-if grep -F -- 'cargo tauri build --no-sign --bundles app --config "{\"version\":\"$target_version\"}"' "$SCRIPT" >/dev/null; then
+if grep -Fq 'RICHDOCTOR_VERSION="$target_version"' "$SCRIPT" &&
+   grep -Fq 'Set :CFBundleShortVersionString $target_version' "$SCRIPT"; then
   ok "F1 the RichDoctor build is stamped with RichOS's own version (\$target_version)"
 else
   bad "F1 the RichDoctor build is not stamped with RichOS's version" "RichDoctor would stay 1.0.0 and never be refreshed"
