@@ -888,31 +888,36 @@ pub fn cleaner_list(app: AppHandle, query: String, offset: u64) -> Result<Value,
 }
 #[richos_command::command]
 pub fn cleaner_open_window(app: AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("cleaner") {
+    let window = if let Some(window) = app.get_webview_window("cleaner") {
         window.show().map_err(|e| e.to_string())?;
-        return window.set_focus().map_err(|e| e.to_string());
-    }
-    let window = tauri::WebviewWindowBuilder::new(
-        &app,
-        "cleaner",
-        tauri::WebviewUrl::App("cleaner.html".into()),
-    )
-    .title("RichCleaner")
-    .inner_size(900., 580.)
-    .min_inner_size(650., 480.)
-    .focused(false)
-    .build()
-    .map_err(|e| e.to_string())?;
-    #[cfg(target_os = "macos")]
-    window.on_window_event(move |event| {
-        let focused = match event {
-            tauri::WindowEvent::Focused(focused) => *focused,
-            tauri::WindowEvent::Destroyed => false,
-            _ => return,
-        };
-        let _ignored = app.emit_to("main", "rich://cleaner-recording-focus", focused);
-    });
-    window.set_focus().map_err(|e| e.to_string())
+        window
+    } else {
+        let window = tauri::WebviewWindowBuilder::new(
+            &app,
+            "cleaner",
+            tauri::WebviewUrl::App("cleaner.html".into()),
+        )
+        .title("RichCleaner")
+        .inner_size(900., 580.)
+        .min_inner_size(650., 480.)
+        .focused(false)
+        .build()
+        .map_err(|e| e.to_string())?;
+        #[cfg(target_os = "macos")]
+        window.on_window_event(move |event| {
+            let focused = match event {
+                tauri::WindowEvent::Focused(focused) => *focused,
+                tauri::WindowEvent::Destroyed => false,
+                _ => return,
+            };
+            let _ignored = app.emit_to("main", "rich://cleaner-recording-focus", focused);
+        });
+        window
+    };
+    window.set_focus().map_err(|e| e.to_string())?;
+    // The recording listener needs to be installed before the window gets focus.
+    // Focusing the window alone leaves its initially unfocused webview without Escape.
+    window.as_ref().set_focus().map_err(|e| e.to_string())
 }
 #[richos_command::command]
 pub fn cleaner_capture_control(app: AppHandle, id: String, action: String) -> Result<(), String> {
