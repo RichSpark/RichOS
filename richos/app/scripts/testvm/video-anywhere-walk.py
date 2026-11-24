@@ -43,6 +43,11 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65):
   richfiles (not run unless named) start a short recording, switch to the standalone RichFiles
           window, prove its frame reaches RichOS and an untrusted process cannot request one,
           then return to RichOS and save the recording.
+  remember (not run unless named; after seed) both Make a video buttons start with the last video's
+          microphone and pointer after a relaunch: in a chat, Microphone On and pointer Hidden, a few
+          seconds recorded and stopped (the choices are kept only when the recording made a file),
+          the app relaunched, then the home screen's button and the one in Settings each opened and
+          read; each must read On and Hidden (frames r1-sheet, r2-home-choices, r3-settings-choices).
   meter   (not run unless named) round 95: in a chat, Microphone On, one frame of the choices in
           the light theme and one in the dark (meter-light, meter-dark); the colors beside
           Microphone are read from each frame's pixels and must be the unlit and the lit bar's.
@@ -97,7 +102,7 @@ home_video = load('home_video_walk', 'home-video-walk.py')
 standard = home_video.standard
 StepFailed = home_video.StepFailed
 
-STEPS = ['seed', 'button', 'record', 'still', 'meter', 'richfiles']
+STEPS = ['seed', 'button', 'record', 'still', 'meter', 'richfiles', 'remember']
 NAME = r'RichOS-\d{4}-\d\d-\d\d-at-\d\d\.\d\d\.\d\d\.mp4'
 
 
@@ -303,6 +308,56 @@ class Walk(home_video.Walk):
         guest(self.vm, '! pgrep -x RichFiles')
         if self.expect_picture and not result['read_back']['video']:
             raise StepFailed("the guest's MP4 has no video stream")
+        return result
+
+    def read_choices(self):
+        return [c for c in ('Off', 'On', 'Shown', 'Hidden') if str((self.choice(c) or {}).get('value')) == '1']
+
+    def settled_choices(self):
+        """The choices once the microphone has finished starting: while it starts the row says
+        Asking and its choice can still change, so two equal reads with no Asking are the answer."""
+        last, end = None, time.monotonic() + 10
+        while time.monotonic() < end:
+            now = None if self.text('Asking') else self.read_choices()
+            if now is not None and now == last and len(now) == 2:
+                return now
+            last = now
+            time.sleep(0.75)
+        return last or self.read_choices()
+
+    def remember(self):
+        """Both Make a video buttons start with the last video's microphone and pointer after a
+        relaunch (nightly 118's brief). The app keeps the choices only when the recording made a
+        file (`video-anywhere.js` openSheet), so a recording with no file fails here, not later."""
+        self.to_the_conversation()
+        self.choose('On', 'Hidden')
+        time.sleep(2)
+        self.press('--title', 'Start recording', '--role', 'AXButton')
+        self.until(self.recording, 20, 'the button beside the settings button never became Stop')
+        time.sleep(5)
+        self.press('--id', 'video-anywhere-stop')
+        has_file = self.to_the_sheet(30)
+        result = {'sheet_says': self.words(' · '), 'sheet_frame': self.shot('r1-sheet'), 'made_a_file': has_file}
+        if not has_file:
+            raise StepFailed('the recording made no file, so there is nothing for the app to remember: ' + json.dumps(result))
+        self.press('--title', 'Discard', '--role', 'AXButton')
+        time.sleep(1.5)
+        result['relaunched'] = self.launch_with_tone('after the video')
+        self.until(lambda: self.node('--id', 'home-video'), 30, 'Make a video is not on the home screen after the relaunch')
+        self.press('--id', 'home-video')
+        self.until(lambda: self.button('Start recording'), 15, "the home screen's choices did not open")
+        result['home_button'] = self.settled_choices()
+        result['home_frame'] = self.shot('r2-home-choices')
+        self.escape()
+        self.to_the_conversation()
+        self.open_settings()
+        self.press('--id', 'video-anywhere')
+        self.until(lambda: self.button('Start recording'), 15, "the choices in Settings did not open")
+        result['settings_button'] = self.settled_choices()
+        result['settings_frame'] = self.shot('r3-settings-choices')
+        self.escape()
+        if result['home_button'] != ['On', 'Hidden'] or result['settings_button'] != ['On', 'Hidden']:
+            raise StepFailed('after a relaunch the buttons did not start with On and Hidden: ' + json.dumps(result))
         return result
 
     def record(self):
