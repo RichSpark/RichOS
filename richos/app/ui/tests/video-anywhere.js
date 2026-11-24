@@ -629,7 +629,8 @@ async function main() {
     await recorded(page, 2);
     // EVERY PANE THAT REACHES THE TOP RIGHT CORNER, OPENED WHILE IT RECORDS, is clear of the red
     // Stop, which stands above them all: the conversation's heading, the Output panel, the worker
-    // details. A press on a pane's close button closes the pane and the recording goes on.
+    // details and Rich's profile. A press on a pane's close button closes the pane and the
+    // recording goes on.
     const clearOfStop = (sel) =>
       page.evaluate((s) => {
         const c = document.querySelector(s).getBoundingClientRect();
@@ -656,10 +657,20 @@ async function main() {
     gaps.push("the worker details' close " + details.gap + "px");
     await page.click("#inspector-close");
     assertEqual([(await st(page)).state, await shown(page, "#inspector")], ["rec", false], "close on the worker details did not close them alone");
+    await page.locator(".tl-rich-meta").getByRole("button", { name: "Rich Hand: open his profile", exact: true }).first().click();
+    assert(await appears(page, "#rich-profile"), "Rich's profile did not open during a recording");
+    const profileClose = "#rich-profile .op-close";
+    const profile = await clearOfStop(profileClose);
+    assertEqual([profile.underStop, profile.pressed], [false, true], "the profile's close button is under the red Stop: " + JSON.stringify(profile));
+    assert((await clearOfStop("#video-anywhere-stop")).pressed, "the profile covered the red Stop button");
+    gaps.push("the profile's close " + profile.gap + "px");
+    await page.click(profileClose);
+    await page.locator("#rich-profile").waitFor({ state: "hidden" });
+    assertEqual((await st(page)).state, "rec", "closing the profile stopped the recording");
     // and every heading that adds the lane is counted in the shipped stylesheets, so a pane added to
     // that corner sends its author here to open it under a recording too: the conversation's
     // heading twice (its own rule and the one that adds the live lane), the worker details', the
-    // Output panel's
+    // Output panel's and Rich's profile
     const lanes = [];
     for (const file of fs.readdirSync(UI_DIR).filter((f) => f.endsWith(".css"))) {
       const lines = fs.readFileSync(path.join(UI_DIR, file), "utf8").split("\n");
@@ -667,7 +678,7 @@ async function main() {
         if (/^\s*padding-right:.*var\(--chrome-lane\b/.test(line)) lanes.push(file + ":" + (i + 1));
       });
     }
-    assertEqual(lanes.length, 4, "the headings that keep the top right lane clear are not the three this check opens: " + lanes.join(", "));
+    assertEqual(lanes.length, 5, "the headings that keep the top right lane clear differ from the four this check opens: " + lanes.join(", "));
     await page.mouse.move(700, 400, { steps: 12 });
     await page.click("#video-anywhere-stop");
     await until(page, "sheet");

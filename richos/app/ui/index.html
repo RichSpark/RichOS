@@ -22,6 +22,7 @@
          this product that names a typeface (ceo-decisions.md §22). -->
     <link rel="stylesheet" href="fonts/fonts.css" />
     <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="rich-profile.css" />
     <link rel="stylesheet" href="assets/app-icons/richscribe-glyph.css" />
     <link rel="stylesheet" href="chat-list.css" />
     <link rel="stylesheet" href="cleaner.css" />
@@ -681,9 +682,9 @@
              not the ambitious start screen. -->
         <section id="richfiles-page" class="rp-page" hidden aria-labelledby="richfiles-title">
           <div class="rp-col">
-            <div class="rp-ttl">
-              <img class="rf-title-icon" src="assets/app-icons/richfiles-128.png" alt="" />
-              <h1 id="richfiles-title" tabindex="-1">RichFiles</h1>
+            <div class="app-title app-title--page">
+              <img class="app-title-icon" src="assets/app-icons/richfiles-128.png" alt="" />
+              <h1 class="app-title-name" id="richfiles-title" tabindex="-1">RichFiles</h1>
             </div>
             <p class="rp-lede">Your files, with their full names and the keys you already know</p>
             <p class="rp-body">RichFiles is a file browser for your Mac. Its List view shows every file's whole name and extension and its keys work the way they do on Windows: Ctrl+C copies, Ctrl+V pastes, F2 renames, Enter opens.</p>
@@ -725,7 +726,7 @@
 
         <section id="brief-page" class="rp-page" hidden aria-labelledby="bp-title">
           <div class="bp-col">
-            <div class="bp-ttl"><img src="assets/app-icons/richbrief-128.png" alt=""><h1 id="bp-title" tabindex="-1">RichBrief</h1></div>
+            <div class="app-title app-title--page"><img class="app-title-icon" src="assets/app-icons/richbrief-128.png" alt=""><h1 class="app-title-name" id="bp-title" tabindex="-1">RichBrief</h1></div>
             <p class="bp-lede">Meeting notes, written for you after every call</p>
             <p class="bp-body">RichBrief listens to your call on this Mac and, when it ends, Rich hands you the notes: <b>what was decided, what you owe and what everyone else promised.</b> No bot joins the meeting.</p>
 
@@ -765,7 +766,7 @@
           <div class="gp-col">
             <div class="gp-two">
               <div class="gp-about">
-                <div class="gp-ttl"><img src="assets/app-icons/richglance-128.png" alt=""><h1 id="gp-title" tabindex="-1">RichGlance</h1></div>
+                <div class="app-title app-title--page"><img class="app-title-icon" src="assets/app-icons/richglance-128.png" alt=""><h1 class="app-title-name" id="gp-title" tabindex="-1">RichGlance</h1></div>
                 <p class="gp-lede">Capture, mark up and share screenshots and open any picture in an instant</p>
                 <p class="gp-body">RichGlance is the screenshot tool and picture viewer that comes with RichOS. <b>It works from any app:</b> press its shortcut, pick what you want on the screen and the picture is on your clipboard or open in the editor, ready to mark up.</p>
                 <div class="gp-dl">
@@ -841,9 +842,9 @@
         <!-- RichPass page from the navigation rail. Copy and title mark follow round 65.1. -->
         <section id="richpass-page" class="rp-page" hidden aria-labelledby="rp-title">
           <div class="rp-col">
-            <div class="rp-ttl">
-              <span class="rp-mark" aria-hidden="true"><img class="rp-mark-light" src="assets/app-icons/richpass-mark-light.svg" alt="" /><img class="rp-mark-dark" src="assets/app-icons/richpass-mark-dark.svg" alt="" /></span>
-              <h1 id="rp-title" tabindex="-1">RichPass</h1>
+            <div class="app-title app-title--page">
+              <span class="app-title-icon app-title-mark" aria-hidden="true"><img class="rp-mark-light" src="assets/app-icons/richpass-mark-light.svg" alt="" /><img class="rp-mark-dark" src="assets/app-icons/richpass-mark-dark.svg" alt="" /></span>
+              <h1 class="app-title-name" id="rp-title" tabindex="-1">RichPass</h1>
             </div>
             <p class="rp-lede">Safer Than Any Password Manager</p>
             <p class="rp-body">RichPass is a smart and secure way to instantly re-generate unbreakable passwords from scratch <i>without saving any</i>. Yes, it runs offline and <b>never saves generated passwords!</b><br>Its open-source code is easy to read for humans and AI. Easy to trust and verify.<br><br>No cloud account. No password vault to steal.<br>Want a better way to manage unbreakable passwords? Use RichPass and leave "vaults" and password managers to everyone else. More info: <a class="rp-more" id="rp-more" href="#richpass-why-and-how" title="github.com/RichSpark/RichOS/tree/main/richos/tools/richpass" data-rp="why">Why &amp; How<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M7 17 17 7"></path><path d="M7 7h10v10"></path></svg></a></p>
@@ -1527,8 +1528,8 @@
                Loaded at boot, this hidden 40px copy changed how WebKit draws the same picture
                at 18px beside every "Rich" in the conversation, on every screen. -->
           <div id="setup-rich-line" class="setup-rich-line" hidden>
-            <img id="setup-rich-avatar" class="setup-rich-avatar" alt="">
-            <p><span class="setup-rich-who">Rich</span><span id="setup-rich-text"></span></p>
+            <button id="setup-rich-avatar-button" class="rich-profile-trigger" type="button" tabindex="-1" aria-label="Rich Hand: open his profile" title="Rich Hand: open his profile"><img id="setup-rich-avatar" class="setup-rich-avatar" alt=""></button>
+            <p><button id="setup-rich-name" class="setup-rich-who rich-profile-trigger" type="button" aria-label="Rich Hand: open his profile" title="Rich Hand: open his profile">Rich</button><span id="setup-rich-text"></span></p>
           </div>
           <!-- ONE ROW PER MISSING PIECE: its name, and what it is for. Not a checklist of
                packages — a sentence each, because "the program I think with" is what the
@@ -1898,6 +1899,7 @@
          which drives it. -->
     <script src="questions.js"></script>
     <script src="rich-files.js"></script>
+    <script src="rich-profile.js"></script>
     <script src="timeline.js"></script>
     <!-- THE UPDATE SURFACE (RICH-TODOs row 12). It builds no markup of its own here: it
          renders into a row of the UNIVERSAL settings menu, which `settings-button.js`

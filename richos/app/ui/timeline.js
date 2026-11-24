@@ -2261,14 +2261,7 @@
     // change — the name appeared above every run of a single turn.
     if (opts.showIdentity()) {
       const meta = elem("div", "tl-rich-meta");
-      if (opts.showAvatar()) {
-        const avatar = document.createElement("img");
-        avatar.className = "tl-avatar";
-        avatar.src = "assets/rich-hand.png";
-        avatar.alt = "";
-        meta.appendChild(avatar);
-      }
-      meta.appendChild(elem("span", "tl-who", "Rich"));
+      meta.appendChild(window.RichProfile.identity(opts.showAvatar()));
       if (item.phase === "proactive") meta.appendChild(elem("span", "tl-whisper", "reached out"));
       art.appendChild(meta);
     }

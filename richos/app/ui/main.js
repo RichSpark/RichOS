@@ -1133,6 +1133,7 @@ function renderRail() {
     return;
   }
   railNavEl.innerHTML = "";
+  window.RichProfile.renderWork();
 
   const rows = allRows();
   const attention = rows.filter((row) => !row.archived && ["needs", "stopped", "back"].includes(statusFor(row)?.key))
@@ -1175,6 +1176,7 @@ function setMainView(view) {
   // And the Output buttons belong to the conversation on screen: no thread, no button, and a
   // panel that was open closes with the conversation (output side-panel PRD §6.2, §6.7).
   syncOutputThread();
+  if (view !== "conversation" && view !== "opening") window.RichProfile.close({ instant: true, keepFocus: true });
 }
 
 /// The thread whose output the two buttons count and the panel lists: the conversation on
@@ -2485,15 +2487,7 @@ function renderFirstRun() {
   art.appendChild(sr);
   const meta = document.createElement("div");
   meta.className = "tl-rich-meta";
-  const avatar = document.createElement("img");
-  avatar.className = "tl-avatar";
-  avatar.src = "assets/rich-hand.png";
-  avatar.alt = "";
-  meta.appendChild(avatar);
-  const who = document.createElement("span");
-  who.className = "tl-who";
-  who.textContent = "Rich";
-  meta.appendChild(who);
+  meta.appendChild(window.RichProfile.identity(true));
   art.appendChild(meta);
   const body = document.createElement("div");
   body.className = "tl-prose";
@@ -4301,6 +4295,7 @@ if (window.RichOutput) {
     },
     // One right-hand pane at a time (§6.1).
     onOpen: () => {
+      window.RichProfile.close({ instant: true, keepFocus: true });
       closeSlideOver();
       closeWorkerInspector();
     },
@@ -5032,6 +5027,7 @@ Bridge.listen("rich://mock-worker-status", ({ payload }) => {
 // Slide-over — read-only, summoned, never resident (§3.2)
 // ---------------------------------------------------------------------------------------
 function openSlideOver() {
+  window.RichProfile.close({ instant: true, keepFocus: true });
   // Two panes never own the screen at once (§7.2's pane is a sibling, not a second modal).
   closeWorkerInspector();
   // Nor does the Output panel (output side-panel PRD §6.1, "the same courtesy both ways"):
@@ -5163,6 +5159,7 @@ function refreshOpenWorkerInspector(payload) {
 }
 
 function openWorkerInspector(worker) {
+  window.RichProfile.close({ instant: true, keepFocus: true });
   closeSlideOver();
   // One right-hand pane at a time (output side-panel PRD §6.1): the Output panel gives way.
   if (window.RichOutput) window.RichOutput.close({ keepFocus: true });
@@ -5545,6 +5542,7 @@ function setTalkPressed(pressed) {
   talkToggleBtn.dataset.tip = pressed ? "Stop talking" : "Talk to Rich";
   // D21: the inline copies of the icon (greeting, voice row) say what the button says.
   document.querySelectorAll("svg.talk-icon-inline").forEach((i) => i.setAttribute("aria-label", pressed ? "Stop talking" : "Talk to Rich"));
+  window.RichProfile.syncTalk();
 }
 
 async function enterVoiceMode() {
@@ -7889,6 +7887,7 @@ function closeSetupSheet() {
   setupRows = null;
   setupStartShown = false;
   releaseSetupHeight();
+  if (setupSheetEl.contains(el("rich-profile"))) window.RichProfile.close({ instant: true, keepFocus: true });
   setupSheetEl.hidden = true;
   // The question that was held back, asked now rather than never — the same handoff
   // `closeMemorySetup` performs for the company question. Without this line a fresh install
@@ -11775,6 +11774,7 @@ const POPUP_CLOSERS = {
   // One level at a time (output side-panel PRD §6.8): a file back to the list, the list to
   // closed. `RichOutput.escape` reads the panel's own state, so the step is the panel's.
   outpanel: () => window.RichOutput && window.RichOutput.escape(),
+  "rich-profile": () => window.RichProfile.close(),
 };
 
 /// Close the topmost popup. Returns whether one was on screen — NOT whether it went away:
@@ -11919,7 +11919,7 @@ document.addEventListener("keydown", (event) => {
   const q = openQuestion();
   if (!q) return;
   const stops = [...q.querySelectorAll('button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
-    .filter((n) => !n.disabled && n.offsetParent !== null);
+    .filter((n) => !n.disabled && n.tabIndex >= 0 && !n.closest("[inert]") && n.offsetParent !== null);
   if (!stops.length) return;
   // The sheet moves focus itself, so the next stop is the same in every webview setting (WebKit's
   // "Tab highlights each item" off would otherwise skip the buttons) and never the page.
@@ -12287,6 +12287,21 @@ async function hydrateRunningTurn() {
     }
   }
 }
+
+window.RichProfile.init({
+  model: () => MODEL_NAME[modelSaved.rich],
+  launchState: () => Bridge.invoke("launch_state", { utcOffsetMinutes: -new Date().getTimezoneOffset() }),
+  work: () => allRows().filter((row) => !row.archived).flatMap((row) => {
+    const state = statusFor(row)?.key;
+    return state === "working" || state === "stopped" ? [{ id: row.id, title: row.display_title, state }] : [];
+  }).slice(0, 3),
+  openChat: openThread,
+  closeOtherPanes: () => {
+    if (window.RichOutput.isOpen()) window.RichOutput.close({ keepFocus: true });
+    closeSlideOver();
+    closeWorkerInspector();
+  },
+});
 
 const initialized = init();
 

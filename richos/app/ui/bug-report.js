@@ -199,6 +199,7 @@ window.RichBug = (function () {
   // that cover the conversation. This names where the user was; it decides nothing about where
   // the report goes (always the panel).
   var WINDOWS = [
+    ["rich-profile", "profile", "Rich’s profile", "the Rich profile sidebar"],
     ["corrections-overlay", "corrections", "Corrections", "the Corrections window"],
     ["feedback-overlay", "feedback", "Feedback", "the Feedback window"],
     ["search-overlay", "search", "Search", "the Search window"],
@@ -285,7 +286,10 @@ window.RichBug = (function () {
     if (curtainUp())
       return Object.assign(base, { key: "opening", label: "the opening screen", here: "the opening screen", public: "the opening screen RichOS shows as it starts" });
     var w = openWindow();
-    if (w) return Object.assign(base, { key: w[1], label: w[2], here: w[2], public: w[3] });
+    if (w) {
+      var details = w[1] === "profile" ? window.RichProfile.reportDetails() : "";
+      return Object.assign(base, { key: w[1], label: w[2], here: w[2], public: details ? w[3] + " (" + details + ")" : w[3] });
+    }
     var view = host ? host.view() : "conversation";
     var thread = host ? host.activeThread() : null;
     var title = thread && host ? host.threadTitle(thread) : "";

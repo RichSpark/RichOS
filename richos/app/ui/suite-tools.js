@@ -406,13 +406,7 @@
     const art = el("article", "tl-rich suite-note");
     art.appendChild(el("span", "sr-only", "Rich said"));
     const meta = el("div", "tl-rich-meta");
-    if (avatar) {
-      const img = el("img", "tl-avatar");
-      img.src = "assets/rich-hand.png";
-      img.alt = "";
-      meta.appendChild(img);
-    }
-    meta.appendChild(el("span", "tl-who", "Rich"));
+    meta.appendChild(window.RichProfile.identity(avatar));
     art.append(meta, el("p", "tl-prose", declined ? NOTE_DECLINED : NOTE_READING), card());
     return art;
   }

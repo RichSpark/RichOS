@@ -97,6 +97,8 @@ const ROLES = {
   "index.html": { role: "ui", why: "the shell Tauri loads" },
   "chat-list.js": { role: "ui", why: "chat row states, reminders, Undo and notification preferences" },
   "main.js": { role: "ui", why: "the chat surface and the bridge" },
+  "rich-profile.js": { role: "ui", why: "Rich’s identity controls and profile panel" },
+  "rich-profile.css": { role: "style", why: "Rich’s profile layout and motion" },
   "attachments.js": {
     role: "ui",
     why:

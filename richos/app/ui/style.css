@@ -673,21 +673,115 @@ button {
 
 /* THE APP ICON BEFORE A FEATURE'S NAME (CEO 2026-11-06): "when a nav rail opens a page/screen
    that has the name of the feature ... we should show the corresponding app icon there". The
-   icon sets of rounds 52 and 56, their 128px size. Decorative (`alt=""`): the name follows. */
-.feature-title {
-  display: flex;
-  align-items: center;
-  gap: 0.625rem;
-}
+   icon sets of rounds 52 and 56, their 128px size. Decorative (`alt=""`): the name follows.
+   In a header it is the APP TITLE below; this small one is the icon inside RichFinder's
+   checkbox label. */
 .feature-icon {
   flex: none;
-  width: 2.25rem;
-  height: 2.25rem;
   display: block;
 }
 .feature-icon--inline {
   width: 1.25rem;
   height: 1.25rem;
+}
+
+/* =========================================================================================
+   APP TITLE: an app's icon beside its name, centered on the name's letters.
+   Design round 105 (richos-hq design/mockups/rounds/round-105), CEO 2026-11-23:
+   "I would expect the name and the icon to be center-aligned."
+
+   THE RULE. The icon's vertical center and the center of the name's capital letters (the box
+   from the baseline to the top of an "H") sit on the same horizontal line, within 1px.
+   Centering the icon on the name's LINE BOX is not that: a line box carries the font's empty
+   space above the capitals, so its center sits below the letters' center, and the icon sat
+   4 to 8.75px low on the 48px titles and 2.75 to 5.75px low on the 32px ones, growing with
+   the text size, on every screen until this block.
+
+   HOW IT WORKS. The row centers the icon on the name's box (flex, align-items: center), and
+   `top` moves the name's letters by the one number that puts the center of their capitals on
+   the center of that box: `--app-title-lift`, a property of the FONT, measured once per
+   variant. The icon's size, the line height and the gap do not enter into it, so any of them
+   can change without breaking the alignment.
+
+   THE ONLY PLACE THIS GEOMETRY LIVES. Every screen whose header shows an app icon beside the
+   app's name uses this block and nothing else:
+
+     <div class="app-title app-title--page">                    a nav-rail page (48px name)
+       <img class="app-title-icon" src="assets/app-icons/richbrief-128.png" alt="">
+       <h1 class="app-title-name" id="bp-title" tabindex="-1">RichBrief</h1>
+     </div>
+     <h2 class="app-title app-title--sheet" id="dict-title">    a settings sheet (32px name)
+       <img class="app-title-icon" src="assets/app-icons/richscribe-128.png" alt="">
+       <span class="app-title-name">RichScribe</span>
+     </h2>
+     <div class="app-title app-title--bar">                     a window's title bar (17px)
+
+   A screen never sets font, size, line height, margin, padding, top, transform or alignment
+   on these three classes or their elements. Placement of the whole row in its container
+   (justify-self, a margin between the row and the next block on the row's container) is the
+   screen's.
+
+   THE TEST. `app-title-alignment.js` (in the app's ui/tests/, from round 105's check/)
+   renders every one of these headers in light and dark at the app's text sizes and fails
+   when the two centers differ by more than 1px, when a header with an app icon does not use
+   this block, or when another rule sets geometry on it.
+
+   CHANGING THE TYPEFACE OF A VARIANT changes its lift. Run the check with the new face: it
+   prints the measured offset, and the new lift is the old one plus that offset over the font
+   size, in em.
+   ========================================================================================= */
+.app-title {
+  display: flex;
+  align-items: center;
+  gap: var(--app-title-gap);
+  margin: 0;
+  padding: 0;
+  color: var(--ink);
+}
+.app-title > .app-title-icon {
+  flex: none;
+  display: block;
+  width: auto;
+  height: var(--app-title-icon);
+  margin: 0;
+  padding: 0;
+}
+/* A mark drawn edge to edge (RichPass) instead of a tile with its own inset: its own shape,
+   held in a span that swaps a light and a dark picture. */
+.app-title > .app-title-mark { aspect-ratio: 504 / 402; height: var(--app-title-mark, var(--app-title-icon)); }
+.app-title > .app-title-mark > img { display: block; width: 100%; height: 100%; }
+.app-title > .app-title-name {
+  display: block;
+  margin: 0;
+  padding: 0;
+  font: var(--app-title-font);
+  letter-spacing: var(--app-title-tracking, normal);
+  white-space: nowrap;
+  color: inherit;
+  position: relative;
+  top: var(--app-title-lift);
+  outline: none;
+}
+/* The three sizes, each with the lift measured for its typeface. */
+.app-title--page {
+  --app-title-font: 400 3rem/1 var(--font-serif);
+  --app-title-icon: 3.25rem;
+  --app-title-mark: 3rem;
+  --app-title-gap: 0.875rem;
+  --app-title-lift: 0.118em;
+}
+.app-title--sheet {
+  --app-title-font: 400 2rem/1.1 var(--font-serif);
+  --app-title-tracking: -0.01em;
+  --app-title-icon: 2.25rem;
+  --app-title-gap: 0.625rem;
+  --app-title-lift: 0.111em;
+}
+.app-title--bar {
+  --app-title-font: 600 1.0625rem/1.25 var(--font);
+  --app-title-icon: 1.375rem;
+  --app-title-gap: 0.625rem;
+  --app-title-lift: 0em;
 }
 
 /* ---------------------------------------------------------------------------------------
@@ -3840,8 +3934,12 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
 
 /* ---- scope header (§4) ----------------------------------------------------------------- */
 
+:root {
+  --conversation-header-height: 52px;
+}
+
 #stage-header {
-  height: 52px;
+  height: var(--conversation-header-height);
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -12949,10 +13047,9 @@ body.panel-full .op-body.op-native-git { padding-bottom: 0; }
 .dict-panel { --hud-bg: rgba(18, 27, 47, .97); --hud-line: rgba(194, 163, 92, .42);
   width: min(1200px, 94vw); max-width: none; max-height: calc(100vh - 32px); padding: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--surface-raised); border-radius: 16px; }
 :root[data-theme="light"] .dict-panel { --hud-bg: rgba(253, 252, 248, .97); --hud-line: rgba(156, 124, 52, .55); }
-.dict-panel p, .dict-panel h2, .dict-panel h3, .dict-panel h4 { margin: 0; }
+.dict-panel :is(p, h2:where(:not(.app-title)), h3, h4) { margin: 0; }
 .dict-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 24px 32px 0; }
 .dict-eyebrow { font-size: .875rem; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--trim-text); margin-bottom: 4px; } /* 14px caps, declared skippable: the breadcrumb word; the title under it says where you are */
-#dict-title { font: 400 2rem/1.1 var(--font-serif); letter-spacing: -.01em; color: var(--ink); }
 .dict-lede { margin-top: 8px; font-size: 1.0625rem; color: var(--ink-soft); max-width: 74ch; }
 #dict-close { flex: none; width: 36px; height: 36px; display: grid; place-items: center; border-radius: 9px; color: var(--ink-soft); border: 1px solid var(--line-control); background: transparent; margin-top: 2px; cursor: pointer; }
 #dict-close svg { width: 14px; height: 14px; }
@@ -15047,13 +15144,6 @@ body.page-open #out-top {
 .rp-col p {
   margin: 0;
 }
-.rp-ttl {
-  display: flex;
-  align-items: center;
-  gap: 0.875rem;
-}
-.rp-mark { flex: none; display: block; height: 3rem; aspect-ratio: 504 / 402; }
-.rp-mark img { display: block; width: 100%; height: 100%; }
 .rp-mark-dark, [data-theme="dark"] .rp-mark-light { display: none !important; }
 [data-theme="dark"] .rp-mark-dark { display: block !important; }
 .rp-more { color: var(--gold-text); font-weight: 600; text-decoration: underline; text-underline-offset: 3px;
@@ -15061,13 +15151,6 @@ body.page-open #out-top {
 .rp-more:hover { text-decoration-thickness: 2px; }
 .rp-more:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 .rp-more svg { width: 1em; height: 1em; vertical-align: -0.125em; margin-left: 0.15em; }
-#rp-title,
-#richfiles-title {
-  margin: 0;
-  font: 400 3rem/1 var(--font-serif);
-  color: var(--ink);
-  outline: none;
-}
 .rp-lede {
   font-size: 1.375rem;
   line-height: 1.4;
@@ -15521,12 +15604,6 @@ body.home-open :is(#nr-tip, .res-card, .res-menu, .swear-card) {
 .fable-conversation-marker::before, .fable-conversation-marker::after { content: ""; flex: 1 1 24px; border-top: 1px solid var(--line-control); }
 
 /* RichFiles uses the same document layout and theme tokens as RichPass. */
-.rf-title-icon {
-  display: block;
-  flex: none;
-  width: 3.25rem;
-  height: 3.25rem;
-}
 .rf-launch-choice {
   border-color: var(--gold);
 }
@@ -15559,9 +15636,6 @@ body.home-open :is(#nr-tip, .res-card, .res-menu, .swear-card) {
 /* RichBrief, design round 98. */
 #brief-page { flex: 1; min-height: 0; overflow-y: auto; padding: 2.25rem 2.75rem 3.5rem; scrollbar-width: thin; scrollbar-color: var(--line-control) transparent; }
 .bp-col { max-width: 46rem; margin: 0 auto; display: flex; flex-direction: column; gap: 1.375rem; }
-.bp-ttl { display: flex; align-items: center; gap: 0.875rem; }
-.bp-ttl img { width: 3.25rem; height: 3.25rem; display: block; flex: none; }
-#bp-title { font: 400 3rem/1 var(--font-serif); color: var(--ink); outline: none; }
 .bp-lede { font-size: 1.375rem; line-height: 1.4; color: var(--ink); }
 .bp-body { font-size: 1.0625rem; line-height: 1.6; color: var(--ink-soft); }
 .bp-body b { color: var(--ink); font-weight: 600; }
@@ -15603,7 +15677,7 @@ body.home-open :is(#nr-tip, .res-card, .res-menu, .swear-card) {
 .bp-row b { display: block; font-weight: 600; color: var(--ink); }
 .bp-row span { color: var(--ink-soft); }
 #brief-page { font-size: 1rem; }
-.bp-col :is(p, h1) { margin: 0; }
+.bp-col p { margin: 0; }
 .bp-col [hidden] { display: none; }
 .bp-btn:not(:disabled):active { transform: translateY(1px); }
 .bp-btn:focus-visible { outline: 2px solid var(--gold-text); outline-offset: 2px; }
@@ -15617,9 +15691,6 @@ body.home-open :is(#nr-tip, .res-card, .res-menu, .swear-card) {
 /* RichGlance, design round 99. */
 #glance-page { flex: 1; min-height: 0; overflow-y: auto; padding: 1.75rem 2.75rem 1.25rem; scrollbar-width: thin; scrollbar-color: var(--line-control) transparent; container-type: inline-size; }
 .gp-col { max-width: 64rem; margin: 0 auto; display: flex; flex-direction: column; gap: 1.25rem; }
-.gp-ttl { display: flex; align-items: center; gap: 0.875rem; }
-.gp-ttl img { width: 3.25rem; height: 3.25rem; display: block; flex: none; }
-#gp-title { font: 400 3rem/1 var(--font-serif); color: var(--ink); outline: none; }
 .gp-lede { font-size: 1.375rem; line-height: 1.4; color: var(--ink); }
 .gp-two { display: grid; grid-template-columns: minmax(0, 1fr) 30rem; gap: 2.75rem; align-items: start; }
 /* In a narrow RichOS window the settings go under the button, in the RichPass page's one column. */
@@ -15672,7 +15743,7 @@ body.home-open :is(#nr-tip, .res-card, .res-menu, .swear-card) {
 .gp-foot p { flex: 1; color: var(--ink-soft); line-height: 1.45; }
 
 #glance-page { font-size: 1rem; }
-.gp-col :is(p, h1, h2) { margin: 0; }
+.gp-col :is(p, h2) { margin: 0; }
 .gp-col [hidden] { display: none; }
 .gp-btn:not(:disabled):active { transform: translateY(1px); }
 .gp-btn:focus-visible { outline: 2px solid var(--gold-text); outline-offset: 2px; }

@@ -279,7 +279,7 @@
         <header class="dict-heading">
           <div>
             <p class="dict-eyebrow">Settings</p>
-            <h2 id="richglance-capture-title" class="feature-title"><img class="feature-icon" src="assets/app-icons/richglance-128.png" alt="" />RichGlance</h2>
+            <h2 id="richglance-capture-title" class="app-title app-title--sheet"><img class="app-title-icon" src="assets/app-icons/richglance-128.png" alt="" /><span class="app-title-name">RichGlance</span></h2>
             <p class="rf-hint">Capture, mark up and share screenshots.</p>
           </div>
           <button class="dict-close" type="button" aria-label="Close RichGlance settings">×</button>
