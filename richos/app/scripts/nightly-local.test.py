@@ -1979,6 +1979,86 @@ while True: time.sleep(.02)
             publisher.perform("publish", run_id="fixture-run-id")
         self.assertEqual(publisher.command.call_args.args[2], "finish")
 
+    def test_resume_proofs_finishes_only_the_outstanding_proofs_in_build_order(self):
+        passed = [{"step": s, "outcome": "PASS"} for s in m.NEW_USER_WALK_STEPS]
+        failed = [{"step": "setup", "outcome": "FAIL", "detail": "setup failed"}]
+        run = "fixture-run-id"
+        first, _ = self.build_that_walks_as_a_new_user(passed, boot_result="fail:screen-suites")
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(RuntimeError, "ITS BOOT WAS NOT PROVEN"):
+            first.perform("build", no_host_screen=True)
+        out, info = first.load_candidate(run)
+        bundle = out / f"RichOS-{info['version']}-macos-aarch64.zip"
+        earlier = first.state / "releases" / "earlier" / "RichOS-earlier-macos-aarch64.zip"
+        later = first.state / "releases" / "later" / "RichOS-later-macos-aarch64.zip"
+        for index, archive in enumerate((earlier, bundle, later), start=1):
+            archive.parent.mkdir(parents=True, exist_ok=True)
+            archive.touch()
+            os.utime(archive, (index, index))
+        first.source.mkdir(parents=True, exist_ok=True)
+
+        repair, calls = self.build_that_walks_as_a_new_user(failed)
+        repair.restore_build_commit = Mock()
+        repair.require_clean_dedicated_source = Mock()
+        with contextlib.redirect_stdout(io.StringIO()) as output, self.assertRaises(RuntimeError) as error:
+            repair.perform("resume-proofs", run_id=run)
+        self.assertIn("A NEW USER'S FIRST RUN OF IT FAILED", str(error.exception))
+        self.assertNotIn("nightly-local.py publish --run", output.getvalue())
+        self.assertEqual(self.slot_waits(calls), ["gui-proof-in-vm.sh", "run-walk.py"])
+        repair.restore_build_commit.assert_called_once_with(info)
+        boot = repair.gui_proof_path(run)
+        boot_stat = boot.stat()
+
+        repair, calls = self.build_that_walks_as_a_new_user(passed)
+        repair.restore_build_commit = Mock()
+        repair.require_clean_dedicated_source = Mock()
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            repair.perform("resume-proofs", run_id=run)
+        self.assertIn("vm-boot-proof: present", output.getvalue())
+        self.assertEqual(
+            [Path(str(args[args.index("--") + 1])).name for args, _ in calls],
+            ["new-user-walk.py", "launch-speed-walk.py"])
+        speed_args, _ = calls[-1]
+        self.assertEqual(speed_args[speed_args.index("--previous-bundle") + 1], earlier)
+        repair.restore_build_commit.assert_called_once_with(info)
+        self.assertEqual(boot.stat().st_mtime_ns, boot_stat.st_mtime_ns)
+        self.assertTrue(output.getvalue().strip().endswith(f"nightly-local.py publish --run {run}"))
+        self.assertTrue(repair.require_gui_proof(info, None, run))
+        self.assertTrue(repair.require_new_user_walk(info, run))
+        self.assertTrue(repair.require_launch_speed(info, run))
+        self.assertFalse(hasattr(repair, "changelog_prepared"))
+
+        calls.clear()
+        repair.restore_build_commit.reset_mock()
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            repair.perform("resume-proofs", run_id=run)
+        self.assertEqual(calls, [])
+        repair.restore_build_commit.assert_not_called()
+        self.assertTrue(output.getvalue().strip().endswith(f"nightly-local.py publish --run {run}"))
+
+    def test_resume_proofs_dry_run_validates_all_records_without_running_commands(self):
+        passed = [{"step": s, "outcome": "PASS"} for s in m.NEW_USER_WALK_STEPS]
+        run = "fixture-run-id"
+        r, _ = self.build_that_walks_as_a_new_user(passed)
+        with contextlib.redirect_stdout(io.StringIO()):
+            r.perform("build", no_host_screen=True)
+        r.command = Mock(side_effect=AssertionError("dry run started a command"))
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            r.perform("resume-proofs", run_id=run, dry_run=True)
+        for phase in (m.VM_PROOF_PHASE, m.NEW_USER_WALK_PHASE, m.LAUNCH_SPEED_PHASE):
+            self.assertIn(f"{phase}: present", output.getvalue())
+        self.assertTrue(output.getvalue().strip().endswith(f"nightly-local.py publish --run {run}"))
+
+        report = r.new_user_walk_dir(run) / "report.json"
+        wrong = json.loads(report.read_text())
+        wrong["expect_sha"] = "a" * 40
+        report.write_text(json.dumps(wrong))
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            r.perform("resume-proofs", run_id=run, dry_run=True)
+        self.assertIn(f"{m.NEW_USER_WALK_PHASE}: would run", output.getvalue())
+        self.assertIn(f"{m.LAUNCH_SPEED_PHASE}: present", output.getvalue())
+        self.assertNotIn("nightly-local.py publish --run", output.getvalue())
+        r.command.assert_not_called()
+
     # ---- The launch-speed gate, a p95 against 500 ms ----------------------------
     def test_publish_requires_launch_speed_after_an_earlier_proof_is_repaired(self):
         passed = [{"step": s, "outcome": "PASS"} for s in m.NEW_USER_WALK_STEPS]
@@ -2246,7 +2326,8 @@ while True: time.sleep(.02)
         self.assertEqual(self.slot_waits(calls), [], "a shortfall no slot wait can clear never starts one")
         for words in ("Nothing waited for a slot", "kernel leak data.kalloc.1024 holds 4.0 GB; only a restart",
                       "than every process on this Mac holds (600 MB)", "only a restart of this Mac does",
-                      "After a restart, take the proof with richos/app/scripts/gui-proof-in-vm.sh --run fixture-run-id"):
+                      "Restart to free memory for the boot proof",
+                      "Resume with nightly-local.py resume-proofs --run fixture-run-id"):
             self.assertIn(words, str(caught.exception))
         out = buf.getvalue()
         # Asked before the gates as well, and said then, not refused: the build still went on.
@@ -3263,7 +3344,7 @@ while True: time.sleep(.02)
             with contextlib.redirect_stdout(io.StringIO()):
                 r.perform("publish", run_id=self.CANDIDATE_INFO["run_id"])
         self.assertIn("gui-boot", str(caught.exception))
-        self.assertIn("gui-proof-in-vm.sh", str(caught.exception))
+        self.assertIn("nightly-local.py resume-proofs --run fixture-run-id", str(caught.exception))
         # AND NOTHING WAS PUBLISHED. A refusal that still called `finish` would be a
         # warning wearing an exception's clothes.
         r.command.assert_not_called()
