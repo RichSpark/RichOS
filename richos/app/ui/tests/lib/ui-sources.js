@@ -218,6 +218,7 @@ const ROLES = {
   "meeting-panel.css": { role: "style", why: "the meeting panel's stylesheet (round 25.1's `#fl`, ported as drawn)" },
   "dictation-overlay.css": { role: "style", why: "the bar's, the flight's and the menu bar menu's stylesheet" },
   "style.css": { role: "style", why: "the shell's stylesheet" },
+  "assets/app-icons/richscribe-glyph.css": { role: "style", why: "the shared RichScribe glyph for the rail, dropdown and native tray" },
   "chat-list.css": { role: "style", why: "chat list states and controls" },
   "home.css": { role: "style", why: "the home screen's stylesheet" },
   "instructions-update.css": { role: "style", why: "the instructions question's and the before and after's stylesheet" },

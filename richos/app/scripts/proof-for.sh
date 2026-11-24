@@ -669,6 +669,9 @@ while IFS= read -r p; do
 
   # ---- Rust ----
   case "$p" in
+    "$APP_REL"/ui/assets/app-icons/richscribe-glyph.css)
+      printf '%s\t%s\t%s\n' "richos-voice" "unit" "--lib dictation_bar::" >> "$WORK/rust"
+      MATCHED=1; note "source of the RichScribe menu bar pictures" ;;
     "$APP_REL"/crates/*/tests/*.rs)
       c="$(printf '%s' "$p" | sed "s:^$APP_REL/crates/::; s:/tests/.*::")"
       rel="${p#"$APP_REL/crates/$c/tests/"}"

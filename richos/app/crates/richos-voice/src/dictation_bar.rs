@@ -260,66 +260,17 @@ pub fn choice_for_model(model: &str) -> &'static str {
 /// The menu bar item's size in pixels: 18 points at 2x.
 pub const ICON_PX: u32 = 36;
 
-/// **Round 19's microphone (`IC.mic`) as a coverage mask**, `px` by `px`, one byte per pixel.
-///
-/// The glyph in its own 24-unit box, stroke 2.4, round caps: the capsule `rect x=9 y=3 w=6 h=11
-/// rx=3`, the cup `M5 11 a7 7 0 0 0 14 0` (the lower half of a circle of radius 7 about
-/// (12, 11)) and the stem from (12, 18) to (12, 21). Drawn by distance to each stroke's middle
-/// line, 4x4 samples per pixel, so the edges are smooth with no image library.
-pub fn mic_mask(px: u32) -> Vec<u8> {
-    let scale = 24.0 / px as f64;
-    let half = 1.2;
-    let mut out = vec![0u8; (px * px) as usize];
-    for j in 0..px {
-        for i in 0..px {
-            let mut hits = 0u32;
-            for sj in 0..4 {
-                for si in 0..4 {
-                    let x = (i as f64 + (si as f64 + 0.5) / 4.0) * scale;
-                    let y = (j as f64 + (sj as f64 + 0.5) / 4.0) * scale;
-                    if mic_distance(x, y) <= half {
-                        hits += 1;
-                    }
-                }
-            }
-            out[(j * px + i) as usize] = ((hits * 255 + 8) / 16) as u8;
-        }
-    }
-    out
-}
+const LISTENING_INSET: u32 = 5;
+const LISTENING_GLYPH_PX: u32 = ICON_PX - 2 * LISTENING_INSET;
 
-fn segment_distance((px, py): (f64, f64), (ax, ay): (f64, f64), (bx, by): (f64, f64)) -> f64 {
-    let (dx, dy) = (bx - ax, by - ay);
-    let t = (((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
-    ((px - ax - t * dx).powi(2) + (py - ay - t * dy).powi(2)).sqrt()
-}
+const IDLE_MASK: &[u8; (ICON_PX * ICON_PX) as usize] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/richscribe-idle.alpha"));
+const LISTENING_MASK: &[u8; (LISTENING_GLYPH_PX * LISTENING_GLYPH_PX) as usize] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/richscribe-listening.alpha"));
 
-/// Distance from (x, y) to the nearest stroke middle line of the glyph.
-fn mic_distance(x: f64, y: f64) -> f64 {
-    // The capsule: its outline is radius 3 about the segment (12, 6)-(12, 11).
-    let capsule = (segment_distance((x, y), (12.0, 6.0), (12.0, 11.0)) - 3.0).abs();
-    // The cup: the lower half circle, with its two ends.
-    let r = ((x - 12.0).powi(2) + (y - 11.0).powi(2)).sqrt();
-    let cup = if y >= 11.0 {
-        (r - 7.0).abs()
-    } else {
-        let a = ((x - 5.0).powi(2) + (y - 11.0).powi(2)).sqrt();
-        let b = ((x - 19.0).powi(2) + (y - 11.0).powi(2)).sqrt();
-        a.min(b)
-    };
-    let stem = segment_distance((x, y), (12.0, 18.0), (12.0, 21.0));
-    capsule.min(cup).min(stem)
-}
-
-/// **The item while dictation is on and idle**: the microphone in black on clear, which macOS
-/// draws as a template image in the menu bar's own ink (light or dark), as every system item is.
+/// The RichScribe glyph in black on clear so macOS can tint this template for the menu bar.
 pub fn template_icon() -> Vec<u8> {
-    let mask = mic_mask(ICON_PX);
-    let mut rgba = Vec::with_capacity(mask.len() * 4);
-    for a in mask {
-        rgba.extend_from_slice(&[0, 0, 0, a]);
-    }
-    rgba
+    IDLE_MASK.iter().flat_map(|&alpha| [0, 0, 0, alpha]).collect()
 }
 
 /// The gold the item turns while listening: round 19's `--gold`, dark and light
@@ -329,14 +280,14 @@ pub const GOLD_LIGHT: [u8; 3] = [0x9C, 0x7C, 0x34];
 pub const ON_GOLD: [u8; 3] = [0x0C, 0x13, 0x22];
 
 /// **The item while listening** (state 14, "the menu bar item turns gold"): a gold rounded
-/// square, the microphone cut into it in `--on-gold`. `dark_menu_bar` picks the gold for the
+/// square with the RichScribe glyph in `--on-gold`. `dark_menu_bar` picks the gold for the
 /// menu bar's appearance, the way round 19 measured it (7.90:1 dark, 3.52:1 light).
 pub fn listening_icon(dark_menu_bar: bool) -> Vec<u8> {
     let gold = if dark_menu_bar { GOLD_DARK } else { GOLD_LIGHT };
     // The glyph inset so the square has a margin of gold around it, as round 19's 15px glyph in
     // its 24px-high button.
-    let inner = ICON_PX - 10;
-    let glyph = mic_mask(inner);
+    let inner = LISTENING_GLYPH_PX;
+    let inset = LISTENING_INSET;
     let radius = 7.0;
     let n = ICON_PX as f64;
     let mut rgba = Vec::with_capacity((ICON_PX * ICON_PX * 4) as usize);
@@ -348,8 +299,8 @@ pub fn listening_icon(dark_menu_bar: bool) -> Vec<u8> {
             let qy = (y - n / 2.0).abs() - (n / 2.0 - radius);
             let outside = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt() - radius;
             let square = (0.5 - outside).clamp(0.0, 1.0);
-            let g = if i >= 5 && j >= 5 && i < 5 + inner && j < 5 + inner {
-                glyph[((j - 5) * inner + (i - 5)) as usize] as f64 / 255.0
+            let g = if (inset..inset + inner).contains(&i) && (inset..inset + inner).contains(&j) {
+                LISTENING_MASK[((j - inset) * inner + (i - inset)) as usize] as f64 / 255.0
             } else {
                 0.0
             };
@@ -522,43 +473,41 @@ mod tests {
         assert_eq!(choice_for_model("something-else"), "accurate");
     }
 
-    /// INVARIANT: the microphone is drawn: ink on its strokes, clear inside the capsule and
-    /// around the glyph, and symmetric about its stem.
+    /// At the middle of the nav rail glyph's viewBox, the two bands are solid with a clear gap.
     #[test]
-    fn the_microphone_picture() {
-        let m = mic_mask(ICON_PX);
-        assert_eq!(m.len(), 36 * 36);
-        let at = |x: u32, y: u32| m[(y * 36 + x) as usize];
-        // Units to pixels: 1.5 px per unit.
-        assert_eq!(at(18, 1), 0, "above the glyph");
-        assert!(at(17, 5) > 200 || at(18, 5) > 200, "the capsule's top stroke (y = 3 units)");
-        assert_eq!(at(18, 13), 0, "inside the capsule");
-        assert!(at(18, 29) > 200, "the stem (y = 19.5 units)");
-        assert!(at(4, 2) == 0 && at(33, 34) == 0, "the corners are clear");
-        for y in 0..36 {
-            for x in 0..18 {
-                let (a, b) = (at(x, y) as i32, at(35 - x, y) as i32);
-                assert!((a - b).abs() <= 32, "asymmetric at ({x},{y}): {a} vs {b}");
-            }
-        }
-        let t = template_icon();
-        assert_eq!(t.len(), 36 * 36 * 4);
-        assert!(t.chunks(4).all(|p| p[0] == 0 && p[1] == 0 && p[2] == 0), "a template is black, shaped by alpha");
+    fn the_template_picture_uses_the_richscribe_glyph() {
+        let icon = template_icon();
+        let alpha = |x: usize| icon[(18 * 36 + x) * 4 + 3];
+        assert_eq!(icon.len(), 36 * 36 * 4);
+        assert_eq!([alpha(12), alpha(18), alpha(24)], [255, 0, 255], "the two RichScribe bands");
+        assert_eq!(alpha(0), 0, "clear around the glyph");
+        assert!(icon.chunks_exact(4).all(|p| p[..3] == [0, 0, 0]), "a template is black, shaped by alpha");
+        assert_centered(&icon, |pixel| pixel[3] > 0);
     }
 
-    /// INVARIANT: listening is a gold square with the microphone in `--on-gold`: gold at the
-    /// edge, ink on the stem, and the gold follows the menu bar's appearance.
     #[test]
-    fn the_listening_picture_is_gold() {
+    fn the_listening_picture_uses_the_richscribe_glyph_in_gold() {
         for (dark, gold) in [(true, GOLD_DARK), (false, GOLD_LIGHT)] {
-            let p = listening_icon(dark);
-            let px = |x: u32, y: u32| &p[((y * 36 + x) * 4) as usize..((y * 36 + x) * 4 + 4) as usize];
-            assert_eq!(&px(18, 2)[..3], &gold[..], "gold at the top edge");
-            assert_eq!(px(18, 2)[3], 255);
+            let icon = listening_icon(dark);
+            let px = |x: usize, y: usize| &icon[(y * 36 + x) * 4..][..4];
+            assert_eq!(&px(13, 18)[..3], &ON_GOLD, "left RichScribe band");
+            assert_eq!(&px(18, 18)[..3], &gold, "gold between the bands");
+            assert_eq!(&px(22, 18)[..3], &ON_GOLD, "right RichScribe band");
+            assert_eq!(px(18, 2), &[gold[0], gold[1], gold[2], 255], "gold at the top edge");
             assert_eq!(px(0, 0)[3], 0, "the corner is rounded off");
-            // The stem: glyph row 19.5 units of 26 px = 21 px, plus the 5 px inset.
-            let stem = px(18, 26);
-            assert!(stem[0] < 0x40, "on-gold ink on the stem: {stem:?}");
+            assert_centered(&icon, |pixel| pixel[..3] != gold);
+        }
+    }
+
+    fn assert_centered(icon: &[u8], is_ink: impl Fn(&[u8]) -> bool) {
+        let size = ICON_PX as usize;
+        for stride in [1, size] {
+            let ink = icon.chunks_exact(4).enumerate()
+                .filter(|(_, pixel)| is_ink(pixel))
+                .map(|(offset, _)| (offset / stride) % size);
+            let near_margin = ink.clone().min().expect("the glyph paints ink");
+            let far_margin = size - 1 - ink.max().expect("the glyph paints ink");
+            assert!(near_margin.abs_diff(far_margin) <= 1, "the ink margins are {near_margin} and {far_margin}");
         }
     }
 }

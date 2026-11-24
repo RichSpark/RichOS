@@ -43,6 +43,10 @@ tokenizers = { version = "0.22", default-features = false, features = ["fancy-re
 sentencepiece-model = "0.1"
 serde = { version = "1", features = ["derive"] }
 
+[build-dependencies]
+# Rasterize the shared RichScribe SVG at build time. No text or embedded image support is needed.
+resvg = { version = "0.47", default-features = false }
+
 # The end-to-end example wires the REAL spine (stream-json stdio -> Claude). Dev-only, so
 # the shipped crate stays spine-agnostic: richos-voice knows nothing about ledgers or leases.
 [dev-dependencies]
