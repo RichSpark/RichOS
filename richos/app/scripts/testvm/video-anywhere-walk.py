@@ -313,6 +313,18 @@ class Walk(home_video.Walk):
     def read_choices(self):
         return [c for c in ('Off', 'On', 'Shown', 'Hidden') if str((self.choice(c) or {}).get('value')) == '1']
 
+    def settled_choices(self):
+        """The choices once the microphone has finished starting: while it starts the row says
+        Asking and its choice can still change, so two equal reads with no Asking are the answer."""
+        last, end = None, time.monotonic() + 10
+        while time.monotonic() < end:
+            now = None if self.text('Asking') else self.read_choices()
+            if now is not None and now == last and len(now) == 2:
+                return now
+            last = now
+            time.sleep(0.75)
+        return last or self.read_choices()
+
     def remember(self):
         """Both Make a video buttons start with the last video's microphone and pointer after a
         relaunch (nightly 118's brief). The app keeps the choices only when the recording made a
@@ -334,16 +346,14 @@ class Walk(home_video.Walk):
         self.until(lambda: self.node('--id', 'home-video'), 30, 'Make a video is not on the home screen after the relaunch')
         self.press('--id', 'home-video')
         self.until(lambda: self.button('Start recording'), 15, "the home screen's choices did not open")
-        time.sleep(1)
-        result['home_button'] = self.read_choices()
+        result['home_button'] = self.settled_choices()
         result['home_frame'] = self.shot('r2-home-choices')
         self.escape()
         self.to_the_conversation()
         self.open_settings()
         self.press('--id', 'video-anywhere')
         self.until(lambda: self.button('Start recording'), 15, "the choices in Settings did not open")
-        time.sleep(1)
-        result['settings_button'] = self.read_choices()
+        result['settings_button'] = self.settled_choices()
         result['settings_frame'] = self.shot('r3-settings-choices')
         self.escape()
         if result['home_button'] != ['On', 'Hidden'] or result['settings_button'] != ['On', 'Hidden']:
