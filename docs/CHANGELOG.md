@@ -2,6 +2,65 @@
 
 What changed in each stable version of RichOS, newest first; nightly builds are in the [nightly changelog](CHANGELOG-NIGHTLY.md).
 
+## 1.3.7
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.7)
+
+- Added Rich's profile: click his name or picture in a conversation to open it at the side, with what is under way for you right now, the model he thinks with and buttons to message him or talk to him
+- Added RichBrief to the bar on the left: one page to start or stop meeting notes, see how long a recording has run, open the notes once Rich has written them, reconnect a disconnected calendar and pause meeting prompts; its button shows a dot while a meeting is being recorded
+- Added RichGlance to the bar on the left: a page with Capture… and RichGlance's settings, including the capture shortcut, what Return does after a capture, Recent Captures, the menu bar icon and using RichGlance as your default image viewer
+- Added dragging companies in the sidebar into any order; Home, Settings, RichFinder and every other list of companies follow it
+- Added asking Rich how much memory RichOS and its companion apps use: RichDoctor now records it every minute, so Rich can tell you how it changed over the last two days and 90 days and whether one may be leaking
+- Added asking Rich how much Codex usage you have left, including your banked resets and credit balance
+- Added resizing RichFinder's results by dragging any edge or corner; RichFinder keeps that size and grows to it when results appear
+- Added Capture Again and Copy Text to RichGlance, each with its own shortcut: Capture Again takes the same area as your last capture and opens the two side by side, as before and after or with the changed pixels marked; Copy Text copies the words in an area you select
+- Added Copy Text, Pin to Screen, Attach to RichOS Chat and Compare to every capture in the RichGlance editor and in Recent Captures: a pinned picture floats above your other windows with its own opacity and click-through; an attached one waits in that chat's message box until you send it
+- Added a search box to Recent Captures in RichGlance that finds captures by the words in them, leaving out anything you redacted; you can also drag a capture from Recent Captures into another app as one picture with its marks
+- Added Keep Only Redacted Copy… in RichGlance to replace a kept capture with its redacted version so the original is gone
+- Added Capture when RichOS is quit to RichGlance, on unless you turn it off on the RichGlance page: your capture shortcuts work from the moment you log in, even with RichOS closed, with a menu bar icon for Capture…, Capture Again, Copy Text and your pinned pictures that you can hide
+- Added a Line tool to the RichGlance editor (press L and hold Shift to snap it straight) and a Thickness menu from 1 to 16 pixels for lines and boxes
+- Added editing a picture open in the RichGlance viewer: choose Edit, Edit, press Command-E or click the pencil button to mark it up in the editor
+- Added window tiling and a window switcher to RichFiles Window Gestures, each off until you turn it on in RichFiles Settings: drag a window's title bar to an edge or corner of the screen or press Control-Option-Command with an arrow, 1 to 4 or Return to tile or restore it; press Control-Option-Command-W to pick any open window, minimized ones too
+- Added double-clicking a folder on your Mac desktop to open it in RichFiles, on by default in RichFiles Settings, Keyboard, once you allow RichFiles Window Gestures in macOS
+- Added Group by Type to the sort menu in RichFiles, keeping your chosen order inside each kind of file
+- Added Choose App… to Open With in RichFiles to open a file in any app
+- Added Transfer May Be Stalled to the Transfers button in RichFiles when a copy or move has made no progress for 15 seconds
+- Changed the RichGlance screenshot editor to one window with your Recent Captures in a shelf along the bottom that you can hide: click a capture to switch to it with its marks and Undo kept, start a new capture from the editor and zoom in and out
+- Changed marks in the RichGlance editor: arrows are solid with a soft shadow, boxes and redactions have no white border and get a handle on each side to resize them one way; every tool keeps its own color, size and thickness you last used, even after a restart
+- Changed Recent Captures in RichGlance to be on unless you turned it off, with a new choice to keep captures on this Mac for 7 days or until you delete them
+- Changed Disk Usage… in RichFiles into a disk cleanup view in its window: see what takes up space in a 3D picture or in lists of the largest items, large files, old installers and duplicates; add files to a review list and move them to the Trash with Undo Move; then put them back or delete them for good and see how much space you got back
+- Changed New Folder in RichFiles to ask for the name first and create the folder only once you confirm it; if the suggested name is taken, the folder gets a number
+- Changed every RichFiles window to remember its own size, place and pane widths instead of only the first window; a window you left partly on another display stays there as long as you can still reach its title bar
+- Changed the Mac desktop shortcut that moves selected items to the Trash to Forward Delete (Del or Fn-Delete on a Mac laptop) instead of Delete; it now also works when you press it right after clicking an item
+- Changed handing work between Rich and Codex to need no setup: Rich starts a separate Codex chat for each task he hands over and messages from a Codex task you started yourself arrive in a chat called Codex in the company whose project folder the task works in; work in a folder no company has waits until one does
+- Changed Codex work started from a RichOS conversation to run with full access to your Mac instead of only its own folder, so it can finish the whole job
+- Changed RichFiles, RichGlance and Window Gestures to switch to the new version by themselves after a RichOS update, from your next update on: each waits until you are not in the middle of something, such as a copy or unsaved marks, then reopens your windows where they were
+- Changed RichOS to stop using your Claude usage to get a new conversation ready when it opens onto Home; it does that once you choose a company or open a conversation
+- Changed About in RichOS, RichFiles and RichGlance to show the RichOS version and its build number, such as Version 1.3.7 (20261124.118)
+- Changed RichScribe's menu bar icon, its menu and its button on the bar on the left to show the RichScribe symbol instead of a microphone
+- Improved Talk to Rich after you interrupt him while he is speaking: he knows which sentences you actually heard, so if you ask him to go on he picks up at the first one you missed; if you only say okay, he answers briefly and waits
+- Improved SwearMeter to show your count as soon as RichOS opens, from the last saved count, while it reads your Claude and Codex history again in the background once an hour
+- Improved the splash screen to play while RichOS is still getting ready and to give way only once Home is ready
+- Improved the RichOS window to disappear the moment you click its red close button
+- Improved RichFiles to show a folder's first items sooner, open Open With at once while it looks for apps and let you widen each column in column view
+- Improved typing the start of a file's name in RichFiles to land on the right file even while the folder is still loading
+- Improved Make a video to remember your microphone and pointer choices from your last video, from either Make a video button, even after RichOS restarts
+- Improved Codex work that reaches its usage limit: RichOS now uses one of your banked resets by itself, before the work starts or the moment the allowance runs out, starting with the one that expires soonest and says so in the conversation
+- Fixed chats showing Working and Rich saying work was still running when nothing was running anymore, for example after RichOS restarted; when RichOS cannot confirm a job's status it now says so
+- Fixed Codex work that stopped partway ending without a word: the conversation is now told why it stopped; resuming hands Codex the unfinished request again
+- Fixed RichScribe cutting off a dictation in progress when RichOS restarted itself to finish an update; from your next update on, it finishes first
+- Fixed RichOS sometimes failing to come back after it restarted itself to finish an update; this works from your next update on
+- Fixed RichFiles on some Macs that use RichGlance refusing to copy or move files and not keeping Undo after it restarted
+- Fixed the splash screen's sound sometimes starting late, being cut off before its end or not playing the first time you open RichOS after starting your Mac
+- Fixed RichGlance showing Retina screenshots and other high-resolution pictures twice as large as Preview does at their real size
+- Fixed the names that appear when you point at a button looking wrong in Make a video recordings: the screen showed through them, their arrow was missing and the one for Settings was blank
+- Fixed Make a video leaving out the Git view in the Output panel; it now records it as it shows on screen
+- Fixed Escape not closing RichCleaner's window right after it opened
+- Fixed RichCleaner showing RichFiles' icon in its capture panel, Recent files and settings; its search box now says it searches your filed Desktop files
+- Fixed the name beside an app's icon at the top of its page or settings, such as RichPass, not lining up with the middle of the icon
+- [technical] Added a short note to Codex's own instructions on this Mac that points Codex to the RichOS guide, so a Codex task reaches Rich over one connection
+- [technical] Added to RichDoctor's reports, without words, file names or window titles: when Talk to Rich was cut off while speaking, how the splash sound played, whether its memory readings work, how Codex messages and jobs went, including usage limits and banked resets, whether RichFiles, RichGlance and Window Gestures restarted after an update and timings for the new RichFiles and RichGlance features; Bust a bug reports now also carry timings of closing the window and of recording the Output panel's Git view
+
 ## 1.3.6
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.6)
