@@ -910,36 +910,62 @@ drain_first_run 3a || note "a first-run question is still up; C4 below will say 
 # ---------------------------------------------------------------------------------------
 # C4 — THE ROW. The settings menu, opened by its own control, closed by Escape.
 # ---------------------------------------------------------------------------------------
-# THE SETTINGS CONTROL IS LOCATED IN THE CURRENT DUMP, NEVER IN `0-rest`. `0-rest` is the
-# OPENING SCREEN, four states ago; clicking a box read off it is clicking where a control
-# used to be. At 16:30:15Z that put the click under a search overlay that was still up, and
-# C4 reported "the settings menu did not open" about a click that never reached it.
-ax 4b-before-settings
-SET="$(middle_of 4b-before-settings 'Settings' AXPopUpButton)"
-if ! desk_open 4b-before-settings; then
+# The Settings button can have a box while Search still covers it. Take the click
+# coordinates from the same dump that proves the desk is clear and Settings is closed.
+# WKWebView can update the AX tree after input has been posted. Wait for that change
+# before sending Escape, then prove the same live desk returned. Send each event once.
+settings_panel_visible() {
+  on_screen "$1" 'Settings' AXGroup || on_screen "$1" 'Settings' AXMenu
+}
+# shellcheck disable=SC2329 # wait_for_settings_ax calls this predicate by name.
+settings_open() {
+  settings_panel_visible "$1" && on_screen "$1" 'Technical view'
+}
+# shellcheck disable=SC2329 # wait_for_settings_ax calls this predicate by name.
+settings_desk_ready() {
+  desk_open "$1" && ! settings_panel_visible "$1" && ! on_screen "$1" 'Technical view' &&
+    [ -n "$(middle_of "$1" 'Settings' AXPopUpButton)" ]
+}
+wait_for_settings_ax() {
+  local stage="$1" condition="$2" deadline=$((SECONDS + 60)) reads=0
+  # The deadline bounds an unsettled AX tree. The observed window and controls decide the verdict.
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    ax "$stage"
+    reads=$((reads + 1))
+    if [ "$(windows_in "$stage")" = 1 ] &&
+       ! grep -q '^ERR ' "$TMP/ax-$stage.txt" && "$condition" "$stage"; then
+      [ "$reads" -eq 1 ] || note "$stage reached its expected AX state after $reads reads"
+      return 0
+    fi
+    sleep 0.25
+  done
+  note "$stage did not reach its expected AX state after $reads reads"
+  return 1
+}
+
+if ! wait_for_settings_ax 4b-before-settings settings_desk_ready; then
   bad "C4  Settings was unavailable after leaving Search and clearing setup"
-elif [ -z "$SET" ]; then
-  bad "C4  the settings control has no box in the tree, so the menu could not be opened"
-  note "the tree carries $(wc -l < "$TMP/ax-4b-before-settings.txt" | tr -d ' ') nodes; the first-run question is $(on_screen 4b-before-settings "$FIRST_RUN" && echo 'ON SCREEN' || echo 'not up')"
+  note "last AX dump: ax-4b-before-settings.txt"
 else
-  send "c:$SET"
-  sleep 1.5
-  ax 5-setmenu
-  if ! on_screen 5-setmenu 'Technical view'; then
+  SET="$(middle_of 4b-before-settings 'Settings' AXPopUpButton)"
+  if ! send "c:$SET"; then
+    bad "C4  the Settings click could not be sent"
+  elif ! wait_for_settings_ax 5-setmenu settings_open; then
     bad "C4  the settings menu did not open, so Escape was never put to it"
-    note "Technical view measures '$(size_of 5-setmenu 'Technical view')'"
+    note "Technical view measures '$(size_of 5-setmenu 'Technical view')' in ax-5-setmenu.txt"
   else
     OPEN_SIZE="$(size_of 5-setmenu 'Technical view')"
-    send_key 53 Escape
-    sleep 1.5
-    ax 6-setmenu-esc
-    AFTER="$(size_of 6-setmenu-esc 'Technical view')"
-    [ -n "$AFTER" ] || AFTER="absent"
-    if on_screen 6-setmenu-esc 'Technical view'; then
-      bad "C4  the settings menu survived Escape — audit-9 row 2 reproduces"
-      note "Technical view measured $OPEN_SIZE open and $AFTER after Escape"
+    if ! send_key 53 Escape; then
+      bad "C4  Escape could not be sent to the open settings menu"
+    elif wait_for_settings_ax 6-setmenu-esc settings_desk_ready; then
+      AFTER="$(size_of 6-setmenu-esc 'Technical view')"
+      ok "C4  Escape closed the settings menu  (Technical view $OPEN_SIZE -> ${AFTER:-absent})"
+    elif settings_panel_visible 6-setmenu-esc || on_screen 6-setmenu-esc 'Technical view'; then
+      bad "C4  the settings menu survived Escape, reproducing audit-9 row 2"
+      note "Technical view measured $OPEN_SIZE open and '$(size_of 6-setmenu-esc 'Technical view')' after Escape"
     else
-      ok "C4  Escape closed the settings menu  (Technical view $OPEN_SIZE -> $AFTER)"
+      bad "C4  could not verify the live desk after Escape"
+      note "last AX dump: ax-6-setmenu-esc.txt"
     fi
   fi
 fi
