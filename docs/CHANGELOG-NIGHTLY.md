@@ -2,6 +2,32 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.3.7-nightly.20261124.118
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.7-nightly.20261124.118)
+
+- Added Rich's profile: click his name or picture in a conversation to open it at the side, with what is under way for you right now, the model he thinks with and buttons to message him or talk to him
+- Added dragging companies in the sidebar into any order; Home, Settings, RichFinder and every other list of companies follow it
+- Added asking Rich how much memory RichOS and its companion apps use: RichDoctor now records it every minute, so Rich can tell you how it changed over the last two days and 90 days and whether one may be leaking
+- Added resizing RichFinder's results by dragging any edge or corner; RichFinder keeps that size and grows to it when results appear
+- Added double-clicking a folder on your Mac desktop to open it in RichFiles, on by default in RichFiles Settings, Keyboard, once you allow RichFiles Window Gestures in macOS
+- Added a Line tool to the RichGlance editor (press L and hold Shift to snap it straight) and a Thickness menu from 1 to 16 pixels for lines and boxes
+- Added editing a picture open in the RichGlance viewer: choose Edit, Edit, press Command-E or click the pencil button to mark it up in the editor
+- Changed marks in the RichGlance editor: arrows are solid with a soft shadow, boxes and redactions have no white border and get a handle on each side to resize them one way; every tool keeps the color, size and thickness you last used, even after a restart
+- Changed Capture when RichOS is quit in RichGlance to be on unless you turned it off before; it and Show RichGlance in the menu bar now have their own switches on the RichGlance page
+- Changed the Mac desktop shortcut that moves selected items to the Trash to Forward Delete (Del or Fn-Delete on a Mac laptop) instead of Delete; it now also works when you press it right after clicking an item
+- Changed messages from a Codex task you started yourself to arrive in the Codex chat of the company whose project folder the task works in, instead of your current company; work in a folder no company has waits until one does
+- Changed About in RichOS, RichFiles and RichGlance to show the RichOS version and its build number, such as Version 1.3.7 (20261124.118)
+- Changed RichScribe's menu bar icon, its menu and its button on the bar on the left to show the RichScribe symbol instead of a microphone
+- Improved Make a video to remember your microphone and pointer choices from your last video, from either Make a video button, even after RichOS restarts
+- Improved Codex work that runs out of usage partway: RichOS now uses a banked reset the moment the allowance runs out, starting with the one that expires soonest, instead of after the work stops
+- Fixed Make a video leaving out the Git view in the Output panel; it now records it as it shows on screen
+- Fixed Escape not closing RichCleaner's window right after it opened
+- Fixed RichCleaner showing RichFiles' icon in its capture panel, Recent files and settings; its search box now says it searches your filed Desktop files
+- Fixed the name beside an app's icon at the top of its page or settings, such as RichPass, not lining up with the middle of the icon
+- [technical] Fixed the Codex chat for work on the RichOS project itself landing under whichever company was open: when RichOS opens it moves to the company that has the RichOS project, with nothing lost or repeated
+- [technical] Added to RichDoctor's reports whether its memory readings work, how a Codex chat move and a banked reset during a run went, RichFinder results resizing, desktop folder openings, RichGlance viewer edits and saved tool settings; Bust a bug reports now also carry Output panel Git recording timings
+
 ## 1.3.7-nightly.20261123.117
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.7-nightly.20261123.117)
