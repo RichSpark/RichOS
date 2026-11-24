@@ -88,6 +88,8 @@ if [ -n "$RELEASE" ]; then
 fi
 [ -f "$SUITE_PATH" ] || { echo "run-suite.sh: no suite at $SUITE_PATH" >&2; exit 64; }
 NAME="$(basename "$SUITE_PATH")"
+VERDICT_NAME="$NAME"
+[ -z "$RELEASE" ] || VERDICT_NAME="screen suites"
 [ "$(cd "$(dirname "$SUITE_PATH")" && pwd)" = "$SCRIPTS" ] \
   || { echo "run-suite.sh: $SUITE_PATH is not a suite in $SCRIPTS, the directory this runner stages" >&2; exit 64; }
 
@@ -227,14 +229,14 @@ if [ "$WALK_RC" = 4 ]; then
   # come back, and the guest is deleted: a failing verdict still stands as itself, a passing one
   # cannot stand with its evidence missing.
   if [ "$SUITE_RC" != 0 ]; then
-    echo "run-suite.sh: $NAME exited $SUITE_RC in guest $W_VM and its results folder was lost (not brought back to ${RICHOS_TEST_RESULTS_DIR:-the results folder}); $CLEANUP_STATE" >&2
+    echo "run-suite.sh: $VERDICT_NAME exited $SUITE_RC in guest $W_VM and its results folder was lost (not brought back to ${RICHOS_TEST_RESULTS_DIR:-the results folder}); $CLEANUP_STATE" >&2
     exit "$SUITE_RC"
   fi
-  no_guest "$NAME passed in guest $W_VM but its results folder could not be brought back to ${RICHOS_TEST_RESULTS_DIR:-the results folder}; $CLEANUP_STATE"
+  no_guest "$VERDICT_NAME passed in guest $W_VM but its results folder could not be brought back to ${RICHOS_TEST_RESULTS_DIR:-the results folder}; $CLEANUP_STATE"
 fi
 if [ -n "$EXISTING_GUEST" ]; then
-  say "$NAME exited $SUITE_RC in guest $W_VM; caller must stop and delete the guest"
+  say "$VERDICT_NAME exited $SUITE_RC in guest $W_VM; caller must stop and delete the guest"
 else
-  say "$NAME exited $SUITE_RC in guest $W_VM; built here in ${BUILD_S}s, $W_TIMES; the guest was stopped and deleted"
+  say "$VERDICT_NAME exited $SUITE_RC in guest $W_VM; built here in ${BUILD_S}s, $W_TIMES; the guest was stopped and deleted"
 fi
 exit "$SUITE_RC"

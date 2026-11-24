@@ -86,7 +86,10 @@ statuses=("${PIPESTATUS[@]}")
 rc=${statuses[0]}
 [ "$rc" != 0 ] || [ "${statuses[1]}" = 0 ] || rc=2
 echo "$rc" > "$ROOT/results/$SUITE.rc" || rc=2
-# Keep both verdicts, including refusals. Neither screen suite may turn the other's red green.
+# The aggregate result belongs to both suites. Name their individual exits before combining them.
+if [ -d "$ROOT/release" ]; then
+  echo "  [guest screen suites] front-door.test.sh exited $front_rc; $SUITE exited $rc"
+fi
 [ "$front_rc" -eq 0 ] || rc="$front_rc"
 echo "$rc" > "$ROOT/suite.rc" || exit 2
 exit "$rc"

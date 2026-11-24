@@ -5,7 +5,8 @@ Nothing installs a job, watches main or runs on a schedule. `release` builds a
 nightly and queues its notes; the lead publishes after their review. `build` stops at a signed, notarized,
 engine-pinned candidate for QA to walk; only an explicit later `publish --run
 <run-id>` makes that candidate's release installable and moves the update
-channel. `candidate --run <run-id>` prints what a walker needs to open it.
+channel. `resume-proofs --run <run-id>` finishes its outstanding post-build proofs,
+and `candidate --run <run-id>` prints what a walker needs to open it.
 Only `release` and `publish` may publish. Keys remain in the local
 Keychain/private files. A completed build automatically requests its changelog worker
 before publication. A nightly's notes land on QA's READY; a stable's notes land once the stable
@@ -19,6 +20,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import fcntl
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -394,12 +396,14 @@ AMBIENT_NAMES = {
     M.RESOLVED: "the storage reader has already resolved this job's private settings",
     "RICHOS_AGENT_OWNER": "the agent harness's name for the session that started this process",
     "RICHOS_AGENT_SESSION": "the agent harness's session id for this process",
+    "RICHOS_CODEX_DISPATCH_ATTEMPT": "the agent harness's dispatch attempt id",
+    "RICHOS_CODEX_DISPATCH_LOCATOR": "the agent harness's dispatch connection",
 }
 
 
 # The commands that boot what they built in the test VM (Runner.vm_boot_proof), so the guest
 # and test-VM settings the shell gives reach them.
-VM_BOOT_COMMANDS = ("build", "stable")
+VM_BOOT_COMMANDS = ("build", "stable", "resume-proofs")
 
 
 def settings_this_build_drops(environ, command):
@@ -2774,7 +2778,7 @@ class Runner:
                              "did not finish")
         return out, json.loads(candidate.read_text())["info"]
 
-    def print_candidate(self, info, out):
+    def print_candidate(self, info, out, proofs_ready=True):
         # This Mac is Apple Silicon only (see main()'s own precondition), so the
         # first-install archive's arch component is always "aarch64" --
         # make-release.sh's own ARCH mapping (arm64|aarch64 -> aarch64).
@@ -2803,7 +2807,12 @@ class Runner:
             print("This legacy candidate has an engine-only prerelease. The app is not installed", flush=True)
             print("or offered as an update; the update channel has not moved.", flush=True)
         print("", flush=True)
-        print(f"Publish only on a READY verdict:  nightly-local.py publish --run {info['run_id']}", flush=True)
+        if proofs_ready:
+            print(f"Publish only on a READY verdict:  nightly-local.py publish --run {info['run_id']}", flush=True)
+
+    @staticmethod
+    def resume_proofs_line(run_id):
+        return f"nightly-local.py resume-proofs --run {shlex.quote(run_id)}"
 
     @staticmethod
     def gui_boot_state(info):
@@ -2978,8 +2987,7 @@ class Runner:
         short = self.guest_memory_check("on entering the VM boot proof")
         if short:
             return (f"THE CANDIDATE IS BUILT, AND ITS BOOT WAS NOT PROVEN IN THE TEST VM: {short}. "
-                    "Nothing waited for a slot. After a restart, take the proof with "
-                    f"richos/app/scripts/gui-proof-in-vm.sh --run {run_id} (no rebuild needed).")
+                    "Nothing waited for a slot. Restart to free memory for the boot proof.")
         # Written literally for this one step: where the run pointer lives, the testvm settings
         # the operator's shell gave (TESTVM_ROOT, TESTVM_SLOTS, ...), and the name its slot wait
         # holds every other admission under.
@@ -3004,10 +3012,8 @@ class Runner:
                         f"{leftover} and richos/app/scripts/testvm/reap.sh. `publish --run {run_id}` "
                         "still accepts the proof; nothing needs a rebuild or a second boot.")
             return (f"THE CANDIDATE IS BUILT, AND ITS BOOT WAS NOT PROVEN IN THE TEST VM: {error}. "
-                    f"The proof file, if any, is {proof}. `publish` refuses this candidate until a "
-                    f"passing proof exists; take it again with "
-                    f"richos/app/scripts/gui-proof-in-vm.sh --run {run_id} (no rebuild needed).")
-        self.announce(f"VM boot proof PASSED: {proof}. `publish --run {run_id}` uses it without --gui-proof.")
+                    f"The proof file, if any, is {proof}.")
+        self.announce(f"VM boot proof PASSED: {proof}.")
         return None
 
     def new_user_walk_dir(self, run_id):
@@ -3023,8 +3029,7 @@ class Runner:
         short = self.guest_memory_check("on entering the new-user walk")
         if short:
             return (f"THE CANDIDATE IS BUILT, AND A NEW USER'S FIRST RUN OF IT WAS NOT WALKED: {short}. "
-                    "Nothing waited for a slot. `publish` refuses this candidate until the walk passes; "
-                    "after a restart, walk it again (no rebuild needed).")
+                    "Nothing waited for a slot. Restart to free memory for the walk.")
         home = walk.parent / f"{run_id}.home"
         shutil.rmtree(walk, ignore_errors=True)
         shutil.rmtree(home, ignore_errors=True)
@@ -3044,8 +3049,7 @@ class Runner:
         except RuntimeError as error:
             return (f"THE CANDIDATE IS BUILT, AND A NEW USER'S FIRST RUN OF IT FAILED: {error}. "
                     f"Each step's verdict is in {walk / 'report.json'}, with its frames and app.log "
-                    f"beside it. `publish` refuses this candidate until the walk passes; walk it again "
-                    f"with the command above (no rebuild needed).")
+                    "beside it.")
         finally:
             shutil.rmtree(home, ignore_errors=True)
         self.announce(f"New-user walk PASSED: {walk / 'report.json'}.")
@@ -3061,12 +3065,11 @@ class Runner:
         # this Mac built, as a download installed it.
         older = None
         releases = self.state / "releases"
-        if releases.is_dir():
-            for candidate in sorted(releases.glob("*/RichOS-*-macos-aarch64.zip"),
-                                    key=lambda p: p.stat().st_mtime, reverse=True):
-                if candidate.parent.name != info.get("tag"):
-                    older = candidate
-                    break
+        if releases.is_dir() and bundle.is_file():
+            built_at = bundle.stat().st_mtime_ns
+            earlier = (archive for archive in releases.glob("*/RichOS-*-macos-aarch64.zip")
+                       if archive.parent.name != info.get("tag") and archive.stat().st_mtime_ns < built_at)
+            older = max(earlier, key=lambda archive: archive.stat().st_mtime_ns, default=None)
         engine = Path(out) / "richos-engine-1.2.0.tar.gz"
         said, failed = None, None
         for attempt in (1, 2):
@@ -3105,8 +3108,7 @@ class Runner:
             if failed is None:
                 return None
         return (f"THE CANDIDATE IS BUILT, AND ITS LAUNCH SPEED WAS REFUSED OR COULD NOT BE PROVEN, twice: "
-                f"{said or failed}. The evidence is in {self.state / 'launch-speed'}. `publish` refuses "
-                "this candidate until the check passes; take it again without a rebuild.")
+                f"{said or failed}. The evidence is in {self.state / 'launch-speed'}.")
 
     def require_launch_speed(self, info, run_id):
         """Refuse to publish a candidate without a complete, matching launch-speed measurement
@@ -3158,8 +3160,7 @@ class Runner:
         raise ValueError("no complete launch-speed measurement of this candidate shows a p95 at or under "
                          f"{LAUNCH_SPEED_LIMIT_MS} ms "
                          "(scaled by the test VM's fixed ratio on record) "
-                         "from the click to the splash showing: " + "; ".join(problems)
-                         + ". Take the check again without a rebuild (nightly-local.py's launch-speed phase).")
+                         "from the click to the splash showing: " + "; ".join(problems))
 
     def require_new_user_walk(self, info, run_id):
         """Refuse to publish a candidate a new user's first run has not passed on (2026-10-21).
@@ -3171,9 +3172,7 @@ class Runner:
         try:
             walked = json.loads(report.read_text())
         except (OSError, ValueError) as error:
-            raise ValueError(f"no new-user walk of this candidate can be read at {report} ({error}). "
-                             "A new user's first run is a gate: walk it with nightly-local.py's "
-                             "new-user walk (testvm/run-walk.py --new-user ... new-user-walk.py).") from None
+            raise ValueError(f"no new-user walk of this candidate can be read at {report} ({error})") from None
         failed = [s for s in walked.get("steps", []) if s.get("outcome") != "PASS"]
         if failed:
             raise ValueError(f"the new-user walk of this candidate did not pass ({report}): "
@@ -3209,7 +3208,6 @@ class Runner:
             # has to carry its path to this command. It is checked exactly like a given one.
             own = self.gui_proof_path(run_id or info.get("run_id") or "none")
             if own.is_file():
-                print(f"Using the build's own VM boot proof: {own}", flush=True)
                 gui_proof = own
         state = self.gui_boot_state(info)
         stable = info.get("channel") == "stable"
@@ -3232,11 +3230,7 @@ class Runner:
             recorded = state or "nothing at all, from a build that was told --no-host-screen"
             raise ValueError(
                 f"this candidate recorded `{recorded}` for gui-boot.test.sh, so no one has "
-                "seen the app it is about to publish actually boot.\n"
-                "  Take the proof against this exact commit and pass it back:\n"
-                f"    richos/app/scripts/gui-proof-in-vm.sh --run {info['run_id']}\n"
-                f"    nightly-local.py publish --run {info['run_id']} --gui-proof <the file it names>\n"
-                "  Nothing here opens a window on this Mac; the app boots inside a guest.")
+                "seen the app it is about to publish actually boot.")
         fields = self.read_gui_proof(gui_proof)
         # TWO KINDS OF EVIDENCE, AND THEY ARE NOT THE SAME CLAIM, so they are named
         # differently and both are accepted for what each one is:
@@ -3287,6 +3281,54 @@ class Runner:
             raise ValueError("--gui-proof gui-boot source is not this candidate's source or build "
                              "commit, nor a descendant of one that changes only the GUI proof harness")
         return fields
+
+    def post_build_proofs(self, run_id, out, info, *, resume=False, dry_run=False):
+        """Take required proofs in build order, reusing evidence that publish accepts."""
+        proofs = (
+            (VM_PROOF_PHASE, self.needs_gui_proof(info),
+             lambda: self.require_gui_proof(info, None, run_id), lambda: self.vm_boot_proof(run_id)),
+            (NEW_USER_WALK_PHASE, info.get("new_user_walk_required"),
+             lambda: self.require_new_user_walk(info, run_id), lambda: self.new_user_walk(run_id, out, info)),
+            (LAUNCH_SPEED_PHASE, info.get("launch_speed_required"),
+             lambda: self.require_launch_speed(info, run_id), lambda: self.launch_speed_check(run_id, out, info)),
+        )
+        ready = True
+        needs_checkout = resume
+        for phase, required, validate, run in proofs:
+            if not required:
+                if resume:
+                    self.announce(f"{phase}: this candidate does not require it")
+                continue
+            try:
+                validate()
+            except ValueError as error:
+                if dry_run:
+                    self.announce(f"{phase}: would run ({error})")
+                    ready = False
+                    continue
+                self.announce(f"{phase}: taking proof ({error})")
+            else:
+                self.announce(f"{phase}: present")
+                continue
+
+            resume_line = self.resume_proofs_line(run_id)
+            try:
+                if needs_checkout:
+                    bundle = Path(out) / f"RichOS-{info['version']}-macos-aarch64.zip"
+                    if not bundle.is_file():
+                        raise ValueError(f"the candidate archive is missing at {bundle}")
+                    if not self.source.is_dir():
+                        raise ValueError(f"the dedicated nightly source worktree is missing at {self.source}")
+                    self.require_clean_dedicated_source()
+                    self.restore_build_commit(info)
+                    needs_checkout = False
+                failure = run()
+                if failure:
+                    raise RuntimeError(failure)
+                validate()
+            except (OSError, ValueError, RuntimeError) as error:
+                raise RuntimeError(f"{phase}: {error}\nResume with {resume_line}") from error
+        return ready
 
     def only_the_checker_changed(self, sha, accepted):
         """Require candidate ancestry and unchanged product inputs for a fixture retake.
@@ -3676,7 +3718,8 @@ class Runner:
             if not proof_error and info.get("new_user_walk_required"):
                 proof_error = self.new_user_walk(run, out, info)
             if proof_error:
-                raise RuntimeError(f"{info['tag']} IS NOT PUBLISHED. {proof_error}")
+                raise RuntimeError(f"{info['tag']} IS NOT PUBLISHED. {proof_error}\n"
+                                   f"Resume with {self.resume_proofs_line(run)}")
             self.announce(f"{info['tag']} built, not published. The lead will publish run {run} "
                           "after reviewing and landing its changelog.")
             self.summary()
@@ -3684,6 +3727,11 @@ class Runner:
         if command == "candidate":
             out, info = self.load_candidate(run_id)
             self.print_candidate(info, out)
+            return
+        if command == "resume-proofs":
+            out, info = self.load_candidate(run_id)
+            if self.post_build_proofs(run_id, out, info, resume=True, dry_run=dry_run):
+                self.announce(f"nightly-local.py publish --run {shlex.quote(run_id)}")
             return
         if command == "publish":
             out, info = self.load_candidate(run_id)
@@ -3695,15 +3743,18 @@ class Runner:
             self.prepare_changelog(info, out)
             # BEFORE the upload and the channel move: this is a refusal about
             # what was never checked, and it costs nothing to make it first.
-            proof = self.require_gui_proof(info, gui_proof, run_id=run_id)
-            if proof:
-                print(f"gui-boot proof accepted: {proof.get('result')} at {proof.get('where')}, "
-                      f"commit {proof.get('commit')}, taken {proof.get('at')}", flush=True)
-            if self.require_new_user_walk(info, run_id):
-                print(f"New-user walk accepted: every step passed on {info.get('build_commit')}", flush=True)
-            said = self.require_launch_speed(info, run_id)
-            if said:
-                print(f"Launch speed accepted: {said}", flush=True)
+            try:
+                proof = self.require_gui_proof(info, gui_proof, run_id=run_id)
+                if proof:
+                    print(f"gui-boot proof accepted: {proof.get('result')} at {proof.get('where')}, "
+                          f"commit {proof.get('commit')}, taken {proof.get('at')}", flush=True)
+                if self.require_new_user_walk(info, run_id):
+                    print(f"New-user walk accepted: every step passed on {info.get('build_commit')}", flush=True)
+                said = self.require_launch_speed(info, run_id)
+                if said:
+                    print(f"Launch speed accepted: {said}", flush=True)
+            except ValueError as error:
+                raise ValueError(f"{error}\nResume with {self.resume_proofs_line(run_id)}") from error
             # A `check` or another `build` since this candidate was built moved the worktree
             # that `finish` runs from; put its build commit back rather than refuse.
             self.restore_build_commit(info)
@@ -3840,23 +3891,13 @@ class Runner:
                          release_build=True)
         candidate_info = self.completed_build(out)
         self.prepare_changelog(candidate_info, out)
-        # THE SCREEN SUITES' PROOF, TAKEN HERE AND NOT LEFT FOR SOMEBODY TO REMEMBER: a
-        # candidate whose boot nobody watched is booted in the test VM now (see VM_PROOF_PHASE).
-        proof_error = None
-        if self.needs_gui_proof(candidate_info):
-            proof_error = self.vm_boot_proof(self.env["RICHOS_NIGHTLY_RUN_ID"])
-        # Then a new user's first run of the same archive, in its own guest (NEW_USER_WALK_PHASE).
-        if not proof_error and candidate_info.get("new_user_walk_required"):
-            proof_error = self.new_user_walk(self.env["RICHOS_NIGHTLY_RUN_ID"], out, candidate_info)
-        # Then its launch speed: the p95 from the click to the splash showing, against the opening limit
-        # (LAUNCH_SPEED_PHASE), with its install-path check.
-        if not proof_error and candidate_info.get("launch_speed_required"):
-            proof_error = self.launch_speed_check(self.env["RICHOS_NIGHTLY_RUN_ID"], out, candidate_info)
-        self.summary()
-        print("", flush=True)
-        self.print_candidate(candidate_info, out)
-        if proof_error:
-            raise RuntimeError(proof_error)
+        proofs_ready = False
+        try:
+            proofs_ready = self.post_build_proofs(candidate_info["run_id"], out, candidate_info)
+        finally:
+            self.summary()
+            print("", flush=True)
+            self.print_candidate(candidate_info, out, proofs_ready=proofs_ready)
 
 
 def gates_at_once_value(text):
@@ -3936,13 +3977,13 @@ def chosen_by():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["check", "build", "publish", "candidate",
-                                           "release", "stable", "gate-environment"])
+    parser.add_argument("command", choices=["check", "build", "resume-proofs", "publish",
+                                           "candidate", "release", "stable", "gate-environment"])
     parser.add_argument("--repo", type=Path, default=ROOT)
     parser.add_argument("--state-dir", type=Path, default=Path.home() / ".richos-nightly")
     parser.add_argument("--runtime-dir", type=Path, help="existing verified runtime cache")
     parser.add_argument("--force", action="store_true", help="explicitly rebuild a previously released source")
-    parser.add_argument("--run", help="an existing build's run id (required for publish/candidate)")
+    parser.add_argument("--run", help="an existing build's run id (required for resume-proofs, publish and candidate)")
     parser.add_argument("--checks-done-at-land", metavar="SHA",
                         help="skip the gates a land already ran whole on this exact commit "
                              "(cargo test -p richos-core when the land's receipt for SHA's "
@@ -3973,7 +4014,7 @@ def main():
                              "in the stable release's own stable-promotions.json and "
                              "nightly-build.json; no separate commit is needed first")
     parser.add_argument("--dry-run", action="store_true",
-                        help="print exactly what `stable` would build and publish, and stop")
+                        help="preview what `stable` would build or which proofs `resume-proofs` would run")
     parser.add_argument(GATES_AT_ONCE_FLAG, type=gates_at_once_value, metavar="N|all",
                         help="REQUIRED for build and release: how many gates run at the "
                              "same time. 1 runs them one after another; all starts every gate "
@@ -4012,7 +4053,7 @@ def main():
             for name in names:
                 print(f"{kind}\t{name}")
         return
-    if args.command in ("publish", "candidate") and not args.run:
+    if args.command in ("resume-proofs", "publish", "candidate") and not args.run:
         parser.error(f"{args.command} requires --run <run-id> (see the output of a prior `build`)")
     if args.checks_done_at_land and args.command not in ("build", "release"):
         parser.error("--checks-done-at-land only means anything for build or release")
@@ -4039,10 +4080,8 @@ def main():
     if args.ceo_words is not None and args.command != "stable":
         parser.error("--ceo-words is the CEO's decision to promote a nightly to stable; it "
                      "means nothing to any other command")
-    if args.dry_run and args.command != "stable":
-        parser.error("--dry-run is implemented for `stable`. For a nightly, `build` already "
-                     "produces the whole train without publishing anything: nobody's "
-                     "existing install can see or fetch what it makes.")
+    if args.dry_run and args.command not in ("stable", "resume-proofs"):
+        parser.error("--dry-run is available for stable and resume-proofs")
     if args.gui_proof and args.command != "publish":
         parser.error("--gui-proof is evidence `publish` demands; it means nothing to any other "
                      "command")
@@ -4095,7 +4134,14 @@ def main():
         parser.error("local nightly releases currently require an Apple Silicon Mac")
     os.umask(0o077)
     state = args.state_dir.expanduser().absolute()
-    env, credentials = local_environment(args.run if args.command == "build" else None)
+    if args.command == "resume-proofs" and args.dry_run:
+        runner = Runner(args.repo.resolve(), state, {}, io.StringIO())
+        runner.perform(args.command, run_id=args.run, dry_run=True)
+        return
+    if args.command == "resume-proofs":
+        env, credentials = gate_environment(os.environ), {}
+    else:
+        env, credentials = local_environment(args.run if args.command == "build" else None)
     boots = args.command in VM_BOOT_COMMANDS
     vm_settings = {name: value for name, value in os.environ.items()
                    if boots and name.startswith(VM_STEP_PREFIXES)}
