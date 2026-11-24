@@ -926,7 +926,8 @@ SH
        || [ "$(cat "$result/$suite.rc" 2>/dev/null)" != "$gui" ] \
        || [ ! -s "$result/front-door.log" ] || [ ! -s "$result/$suite.log" ] \
        || [ ! -f "$result/front-door/observed" ] \
-       || ! says "guest nightly-owned; caller must stop and delete the guest"; then
+       || ! says "front-door.test.sh exited $front; $suite exited $gui" \
+       || ! says "screen suites exited $expected in guest nightly-owned; caller must stop and delete the guest"; then
       bad "G7 $gcase: both guest screen verdicts survive without booting another guest" \
           "exit $CODE, wanted $expected: $(tail -4 <<<"$OUT" | tr '\n' ' ' | cut -c1-400)"
     else
