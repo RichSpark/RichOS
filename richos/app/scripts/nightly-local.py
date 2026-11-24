@@ -53,7 +53,9 @@ import uuid
 # when the command is admitted to a machine worker token, never while it queues for one.
 GATE_BUDGETS = {
     "gates/release-smoke": 60,   # One-minute startup floor for fixture-only Python work.
-    "gates/core-tests": 300,    # From the first test executable through the doctests.
+    # First test executable through doctests. Measured 278 seconds of tests
+    # during nightly 118 contention, after 109 seconds of compilation.
+    "gates/core-tests": 420,    # 1.5x observed test execution, rounded up.
     "gates/updater-tests": 360, # At least 5x its separate workspace's cold/warm sample.
     # UNVERIFIED SINCE 2026-09-26: this envelope was derived WITH the iPhone simulator suites,
     # which `run-tests.sh --for desktop` no longer runs here (phone-app-suites.tsv), and every
