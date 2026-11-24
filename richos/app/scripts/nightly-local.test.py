@@ -647,6 +647,49 @@ Path(sys.argv[1]).write_text(str(p.pid))
             # load-bound: owned_run is mocked with the controlled-clock refusal above; no wall time is measured.
             runner.command('fixture', timeout=5, nested_wait=3)
 
+    def test_core_gate_excludes_compilation_and_stops_a_hung_test(self):
+        env, _ = self.private_budget()
+        budget = 2
+        state = self.root / "state"
+        cargo = state / "source" / m.SCRIPTS / "bin" / "cargo"
+        cargo.parent.mkdir(parents=True)
+        # Model Cargo doing work longer than the entire test budget, then handing
+        # the test to the actual configured runner. The owned supervisor is real.
+        cargo.write_text(f"""#!{sys.executable}
+import json
+import os
+import sys
+import time
+time.sleep({budget + 1})
+print("Fixture compilation finished.", flush=True)
+runner = json.loads(sys.argv[sys.argv.index("--config") + 1].split("=", 1)[1])
+os.execv(runner[0], runner + ["/bin/sh", "-c", os.environ["FIXTURE_TEST"]])
+""")
+        cargo.chmod(0o700)
+        for hangs in (False, True):
+            with self.subTest(hangs=hangs):
+                log_path = self.root / "core.log"
+                pid_file = self.root / "test.pid"
+                env["FIXTURE_PID_FILE"] = str(pid_file)
+                env["FIXTURE_TEST"] = ('echo $$ > "$FIXTURE_PID_FILE"; exec /bin/sleep 60'
+                                       if hangs else "echo Fixture test passed.")
+                with log_path.open("w") as log:
+                    r = m.Runner(self.root, state, env, log)
+                    with patch.dict(m.GATE_BUDGETS, {m.LAND_PROVEN_GATE: budget}), \
+                            patch.object(r, "run_gates",
+                                         side_effect=lambda gates: dict(gates)[m.LAND_PROVEN_GATE]()):
+                        if hangs:
+                            with self.assertRaisesRegex(m.GateTimedOut, f"timed out after {budget}s"):
+                                r.gates()
+                        else:
+                            r.gates()
+                output = log_path.read_text()
+                self.assertIn("Fixture compilation finished.\nCore test execution started.\n", output)
+                if hangs:
+                    self.assert_pid_gone(int(pid_file.read_text()))
+                else:
+                    self.assertIn("Fixture test passed.", output)
+
     def test_nested_success_without_a_marker_is_not_a_pass(self):
         import owned_command as owned
         for status in (0, 1, 75):

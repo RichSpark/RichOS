@@ -26,6 +26,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 import machine_storage as M
 import github_access
+from owned_command import EXECUTION_MARKER_ENV
 from source_status import STATUS_ARGS, has_source_changes, is_finder_metadata
 import platform
 import pwd
@@ -42,8 +43,8 @@ import threading
 import time
 import uuid
 
-# Gate ceilings include rebuilds, not just reuse of successful receipts. Cargo
-# uses fivefold cold/warm headroom rounded up to a minute. The script envelope
+# Gate ceilings generally include rebuilds. The core gate bounds compilation
+# separately. The updater uses fivefold cold/warm Cargo headroom. The script envelope
 # adds cold Cargo runs and the generated-command integration to a full no-reuse
 # reference before doubling it. Script/UI ceilings round up to five minutes.
 # Measurements and model assumptions are recorded in the private handoff.
@@ -52,7 +53,7 @@ import uuid
 # when the command is admitted to a machine worker token, never while it queues for one.
 GATE_BUDGETS = {
     "gates/release-smoke": 60,   # One-minute startup floor for fixture-only Python work.
-    "gates/core-tests": 300,    # At least 5x the worst cold/warm Cargo sample.
+    "gates/core-tests": 300,    # From the first test executable through the doctests.
     "gates/updater-tests": 360, # At least 5x its separate workspace's cold/warm sample.
     # UNVERIFIED SINCE 2026-09-26: this envelope was derived WITH the iPhone simulator suites,
     # which `run-tests.sh --for desktop` no longer runs here (phone-app-suites.tsv), and every
@@ -254,6 +255,9 @@ DECLARED_GAPS = (
 # `build-info.json` (through the plan, which nightly.py copies into the candidate's
 # provenance), so a candidate can never quietly claim a gate it did not run.
 LAND_PROVEN_GATE = "gates/core-tests"
+# Cargo's lock wait and compilation have their own hang guard, of the same size as
+# the Cargo lock wait guard in lint/rust.py. Neither spends the test execution budget.
+CORE_TEST_START_WAIT = 1800
 # The line proof-for.sh writes, and autocheck.py records in a land receipt's `commands`, when
 # a land runs the whole richos-core crate; any filter after it (`--test`, `--lib m::`) is a
 # subset and does not count. The receipt lives where autocheck.py's `land_receipt` puts it.
@@ -2326,9 +2330,26 @@ class Runner:
                 # RICHOS_CARGO_CACHE_ROOT and no CARGO_TARGET_DIR, which raw cargo ignores, so a
                 # raw `cargo test` here recreated <source>/richos/app/target on the internal disk
                 # (2026-11-10: 40 GB). The dispatcher puts the output in the shared cache.
+                # Cargo calls its target runner after building the test binaries. Keep Cargo
+                # in charge of the complete test selection, including examples and doctests.
+                # The existing nested-start supervisor keeps the same token and process group
+                # through both stages. Only the first test binary opens the execution clock.
+                marker = f"${EXECUTION_MARKER_ENV}"
+                start_test = (
+                    f'if [ ! -e "{marker}" ]; then '
+                    f': > "{marker}" || exit 1; '
+                    'echo "Core test execution started." >&2; fi; '
+                    f'unset {EXECUTION_MARKER_ENV}; exec "$@"'
+                )
+                runner = json.dumps(["/bin/sh", "-c", start_test, "core-test-runner"])
+                budget = GATE_BUDGETS[LAND_PROVEN_GATE]
+                self.announce(f"  {LAND_PROVEN_GATE}: up to {CORE_TEST_START_WAIT}s for Cargo "
+                              f"to start the first test (including lock wait and compilation), "
+                              f"then {budget}s for test execution.")
                 self.command(self.source / SCRIPTS / "bin" / "cargo", "test", "--locked", "--manifest-path",
                              "richos/app/Cargo.toml", "-p", "richos-core",
-                             timeout=GATE_BUDGETS[LAND_PROVEN_GATE])
+                             "--config", f'target."cfg(all())".runner={runner}',
+                             timeout=budget, nested_wait=CORE_TEST_START_WAIT)
 
         def updater_tests():
             with self.phase("gates/updater-tests"):
