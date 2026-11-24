@@ -364,45 +364,50 @@ fn check_socket_dir(dir: &Path) -> Result<(), String> {
 pub fn read(state: &Path) -> Snapshot {
     #[cfg(unix)]
     {
-        use std::{
-            io::{Read, Write},
-            os::unix::net::UnixStream,
-        };
-        let answer = (|| -> Result<Snapshot, String> {
-            let socket = endpoint(state);
-            check_socket_dir(socket.parent().unwrap())?;
-            let mut stream =
-                UnixStream::connect(socket).map_err(|_| "The resource sampler is not running.")?;
-            stream
-                .set_read_timeout(Some(Duration::from_millis(500)))
-                .map_err(|e| format!("Could not bound the resource read: {e}"))?;
-            stream
-                .set_write_timeout(Some(Duration::from_millis(500)))
-                .map_err(|e| e.to_string())?;
-            // The server waits for this byte before replying, so it cannot close the
-            // socket before Darwin has accepted our timeout options (EINVAL race).
-            stream
-                .write_all(b"1")
-                .map_err(|_| "The resource sampler could not be reached.")?;
-            let mut bytes = Vec::new();
-            (&mut stream)
-                .take(MAX_REPLY + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|_| "The resource sampler did not answer promptly.")?;
-            if bytes.len() as u64 > MAX_REPLY {
-                return Err("The resource response is too large.".into());
-            }
-            let value: Snapshot = serde_json::from_slice(&bytes)
-                .map_err(|_| "The resource sampler returned invalid data.")?;
-            if value.version != 1 || value.history.len() > MAX_SAMPLES {
-                return Err("Unsupported resource response.".into());
-            }
-            Ok(value.at(monotonic_ms()))
-        })();
-        answer.unwrap_or_else(Snapshot::unavailable)
+        read_endpoint(state, Some(Duration::from_millis(500)))
     }
     #[cfg(not(unix))]
     Snapshot::unavailable("Live host resources are supported on macOS.")
+}
+
+#[cfg(unix)]
+fn read_endpoint(state: &Path, timeout: Option<Duration>) -> Snapshot {
+    use std::{
+        io::{Read, Write},
+        os::unix::net::UnixStream,
+    };
+    let answer = (|| -> Result<Snapshot, String> {
+        let socket = endpoint(state);
+        check_socket_dir(socket.parent().unwrap())?;
+        let mut stream =
+            UnixStream::connect(socket).map_err(|_| "The resource sampler is not running.")?;
+        stream
+            .set_read_timeout(timeout)
+            .map_err(|e| format!("Could not bound the resource read: {e}"))?;
+        stream
+            .set_write_timeout(timeout)
+            .map_err(|e| e.to_string())?;
+        // The server waits for this byte before replying, so it cannot close the
+        // socket before Darwin has accepted our timeout options (EINVAL race).
+        stream
+            .write_all(b"1")
+            .map_err(|_| "The resource sampler could not be reached.")?;
+        let mut bytes = Vec::new();
+        (&mut stream)
+            .take(MAX_REPLY + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| "The resource sampler did not answer promptly.")?;
+        if bytes.len() as u64 > MAX_REPLY {
+            return Err("The resource response is too large.".into());
+        }
+        let value: Snapshot = serde_json::from_slice(&bytes)
+            .map_err(|_| "The resource sampler returned invalid data.")?;
+        if value.version != 1 || value.history.len() > MAX_SAMPLES {
+            return Err("Unsupported resource response.".into());
+        }
+        Ok(value.at(monotonic_ms()))
+    })();
+    answer.unwrap_or_else(Snapshot::unavailable)
 }
 
 /// Owns the sampler and endpoint. Dropping it stops and joins only its own threads.
@@ -960,12 +965,14 @@ mod tests {
             &uuid::Uuid::new_v4().simple().to_string()[..8]
         ));
         let monitor = Monitor::start(&root).unwrap();
-        let first = read(&root);
-        let second = read(&root);
+        // Each real socket reply proves readiness. The owning test command
+        // catches hangs while the product's short IPC deadline stays in read().
+        let first = read_endpoint(&root, None);
+        let second = read_endpoint(&root, None);
         assert!(!first.instance_id.is_empty());
         assert_eq!(first.instance_id, second.instance_id);
         for _ in 0..200 {
-            let reply = read(&root);
+            let reply = read_endpoint(&root, None);
             assert_eq!(
                 reply.instance_id, first.instance_id,
                 "cached read lost its server: {:?}",
