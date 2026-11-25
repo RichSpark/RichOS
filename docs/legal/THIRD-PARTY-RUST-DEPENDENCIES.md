@@ -15,12 +15,12 @@ Identity is the lockfile, not a date. Regenerate after any dependency change and
 
 | Lockfile | Workspace | sha256 |
 |---|---|---|
-| `richos/app/Cargo.lock` | `richos/app` | `0bcacf24c5a4db13b2120749e22dcaabf42688fdef96bedd564bdc426708edcf` |
+| `richos/app/Cargo.lock` | `richos/app` | `f32f70f8962e83323f1e2623faddc25a0e8602393e5b69aecd73ad71012577e3` |
 | `richos/app/crates/richdoctor-core/Cargo.lock` | `richos/app/crates/richdoctor-core` | `08c06118d356d26cb3073dec1ef85fe45130a6f1ab79b357fcb1587b82ea073f` |
-| `richos/app/crates/richdoctor/Cargo.lock` | `richos/app/crates/richdoctor` | `ee8c8bceae45287dbf73047a46133219d6d89a721c44c7ece676e738c24f8492` |
+| `richos/app/crates/richdoctor/Cargo.lock` | `richos/app/crates/richdoctor` | `20e7dcb29ce50450330f7424554036a931aa852aebf90dcde955c08845514416` |
 | `richos/app/crates/richos-devtools/Cargo.lock` | `richos/app/crates/richos-devtools` | `6c65c04d1dd1fd3a1241bd481140e306e211ad1f05676536d292854f63b5a3ab` |
 | `richos/app/crates/richos-user-update/Cargo.lock` | `richos/app/crates/richos-user-update` | `118ddf8fa6c5ef1494cfa3a8e12aa7b29fc5ef973ef1253f897f8e0f2674b68c` |
-| `richos/app/src-tauri/Cargo.lock` | `richos/app/src-tauri` | `e61dc45291b7d128e8e5e5ad17c4ee30f023df21414d15102c146d6c964771d2` |
+| `richos/app/src-tauri/Cargo.lock` | `richos/app/src-tauri` | `73e9caf64a21649be6c69578e08c7f3178ae757abe4916a048dbf69c565c3188` |
 | `richos/mobile/conformance/verifier/Cargo.lock` | `richos/mobile/conformance/verifier` | `8036e74423f9ef07b0d595dca1b305e4319f85a9ba03b56ffc54c1433034f2f6` |
 | `richos/tools/native-claude-stdio/Cargo.lock` | `richos/tools/native-claude-stdio` | `3f99c5fc84319ab96697e7c2086644362f6d472ebd7825425753e52e0a43380e` |
 | `richos/tools/richfiles/archive/Cargo.lock` | `richos/tools/richfiles/archive` | `9abfc715f8ad400827fb993025c80d012dee7b71fe06792ffd09feb95c82c36f` |
@@ -661,7 +661,7 @@ It is also worth stating what carries the offer-versus-obligation distinction: m
 | `rustix` | 0.38.44 | `Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT` | yes | `richos/app`, `richos/app/src-tauri` |
 | `rustix` | 1.1.4 | `Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT` | yes | `richos/app/crates/richdoctor-core`, `richos/app/crates/richos-user-update`, `richos/app/src-tauri` |
 | `rustix` | 1.1.5 | `Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT` | yes | `richos/app`, `richos/app/crates/richdoctor`, `richos/app/crates/richos-devtools`, `richos/tools/richfiles/archive` |
-| `rustls` | 0.23.45 | `Apache-2.0 OR ISC OR MIT` | yes | `richos/app`, `richos/app/crates/richdoctor`, `richos/app/src-tauri` |
+| `rustls` | 0.23.46 | `Apache-2.0 OR ISC OR MIT` | yes | `richos/app`, `richos/app/crates/richdoctor`, `richos/app/src-tauri` |
 | `rustls-native-certs` | 0.8.4 | `Apache-2.0 OR ISC OR MIT` | no (other targets or tests only) | `richos/app/crates/richdoctor`, `richos/app/src-tauri` |
 | `rustls-pki-types` | 1.15.1 | `MIT OR Apache-2.0` | yes | `richos/app`, `richos/app/crates/richdoctor`, `richos/app/src-tauri` |
 | `rustls-platform-verifier` | 0.7.0 | `MIT OR Apache-2.0` | yes | `richos/app/crates/richdoctor`, `richos/app/src-tauri` |
