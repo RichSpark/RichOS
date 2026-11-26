@@ -109,7 +109,7 @@
 #
 # run-tests: no-host-screen: its only capture/keystroke references are the strings it asserts those two tools REFUSE to act on, and its frames are committed PNG fixtures
 # run-tests: inputs richos/app/scripts/qa.test.sh richos/app/scripts/qa richos/mobile/conformance/vectors/fingerprint.json richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
-# run-tests: covers richos/app/scripts/qa/lib/probe_session.py richos/app/scripts/qa/test/provider-probes.test.py richos/app/scripts/qa/test/stop-probe.test.py richos/app/scripts/qa/usage-shape.sh richos/app/scripts/qa/context-figure-probe.py richos/app/scripts/qa/live-effort-probe.py richos/app/scripts/qa/lease-retention-probe.py richos/app/scripts/qa/stop-probe.py richos/app/scripts/qa/pair-words.py richos/app/scripts/qa/contrast.py richos/app/scripts/qa/frame.py richos/app/scripts/qa/lib/qaimg.py richos/app/scripts/qa/lib/qaocr.py richos/app/scripts/qa/ocr-find.py richos/app/scripts/qa/ocr-find.sh richos/app/scripts/qa/ocr-gate.sh richos/app/scripts/qa/ocr-read.py richos/app/scripts/qa/ocr-watch.sh richos/app/scripts/qa/redact.py richos/app/scripts/qa/timeline.py richos/app/scripts/qa/timeline-bounds.test.py richos/app/scripts/qa/wait-for.sh richos/app/scripts/qa/phone-client.mjs richos/app/scripts/qa/flake-rate.sh richos/app/scripts/qa/phone-android.py richos/app/scripts/qa/lab-ledger.py richos/app/scripts/qa/lab-pause.py richos/app/scripts/qa/step-mark.py richos/app/scripts/qa/ledger-timeline.py richos/app/scripts/qa/native-transcript.py richos/app/scripts/qa/hidden-send-try.py richos/app/scripts/qa/tunnel-requests.py richos/app/scripts/qa/fixtures/make-fixtures.py richos/app/scripts/qa/phone-ios.py richos/app/scripts/qa/stall-run.py richos/app/scripts/qa/under-load.py richos/app/scripts/qa/busy-sample.py richos/app/scripts/qa/lib/busy-sample/sitecustomize.py richos/app/scripts/qa/slow-shutdown.py richos/app/scripts/qa/ocr-cache.test.py richos/app/scripts/qa/child-lifetime.test.py richos/app/scripts/qa/trust-reading.test.py richos/app/scripts/qa/crash-reading.test.py richos/app/scripts/qa/device-launch.test.py richos/app/scripts/qa/lab-pause.test.py richos/app/scripts/qa/tunnel-requests.test.py richos/app/scripts/qa/wait-turn.py richos/app/scripts/qa/wait-turn.test.py richos/app/scripts/qa/rich-reply-probe.py richos/app/scripts/qa/rich-reply-probe.test.py richos/app/scripts/qa/routing-probe.py richos/app/scripts/qa/routing-probe.test.py richos/app/scripts/qa/phone-ios-run.test.py richos/app/scripts/qa/speech-wav.py richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
+# run-tests: covers richos/app/scripts/qa/lib/probe_session.py richos/app/scripts/qa/test/provider-probes.test.py richos/app/scripts/qa/test/stop-probe.test.py richos/app/scripts/qa/usage-shape.sh richos/app/scripts/qa/context-figure-probe.py richos/app/scripts/qa/live-effort-probe.py richos/app/scripts/qa/lease-retention-probe.py richos/app/scripts/qa/stop-probe.py richos/app/scripts/qa/pair-words.py richos/app/scripts/qa/contrast.py richos/app/scripts/qa/beside.py richos/app/scripts/qa/frame.py richos/app/scripts/qa/lib/qaimg.py richos/app/scripts/qa/lib/qaocr.py richos/app/scripts/qa/ocr-find.py richos/app/scripts/qa/ocr-find.sh richos/app/scripts/qa/ocr-gate.sh richos/app/scripts/qa/ocr-read.py richos/app/scripts/qa/ocr-watch.sh richos/app/scripts/qa/redact.py richos/app/scripts/qa/timeline.py richos/app/scripts/qa/timeline-bounds.test.py richos/app/scripts/qa/wait-for.sh richos/app/scripts/qa/phone-client.mjs richos/app/scripts/qa/flake-rate.sh richos/app/scripts/qa/phone-android.py richos/app/scripts/qa/lab-ledger.py richos/app/scripts/qa/lab-pause.py richos/app/scripts/qa/step-mark.py richos/app/scripts/qa/ledger-timeline.py richos/app/scripts/qa/native-transcript.py richos/app/scripts/qa/hidden-send-try.py richos/app/scripts/qa/tunnel-requests.py richos/app/scripts/qa/fixtures/make-fixtures.py richos/app/scripts/qa/phone-ios.py richos/app/scripts/qa/stall-run.py richos/app/scripts/qa/under-load.py richos/app/scripts/qa/busy-sample.py richos/app/scripts/qa/lib/busy-sample/sitecustomize.py richos/app/scripts/qa/slow-shutdown.py richos/app/scripts/qa/ocr-cache.test.py richos/app/scripts/qa/child-lifetime.test.py richos/app/scripts/qa/trust-reading.test.py richos/app/scripts/qa/crash-reading.test.py richos/app/scripts/qa/device-launch.test.py richos/app/scripts/qa/lab-pause.test.py richos/app/scripts/qa/tunnel-requests.test.py richos/app/scripts/qa/wait-turn.py richos/app/scripts/qa/wait-turn.test.py richos/app/scripts/qa/rich-reply-probe.py richos/app/scripts/qa/rich-reply-probe.test.py richos/app/scripts/qa/routing-probe.py richos/app/scripts/qa/routing-probe.test.py richos/app/scripts/qa/phone-ios-run.test.py richos/app/scripts/qa/speech-wav.py richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -157,7 +157,7 @@ python3 -c 'import PIL' >/dev/null 2>&1 && HAVE_PIL=1
 
 echo ""
 echo "=== H. every tool answers for itself ==="
-for t in contrast.py frame.py redact.py timeline.py ocr-gate.sh ocr-find.sh \
+for t in contrast.py beside.py frame.py redact.py timeline.py ocr-gate.sh ocr-find.sh \
          ocr-watch.sh wait-for.sh phone-client.mjs flake-rate.sh phone-android.py lab-ledger.py lab-pause.py step-mark.py ledger-timeline.py wait-turn.py rich-reply-probe.py routing-probe.py native-transcript.py hidden-send-try.py phone-ios.py pair-words.py usage-shape.sh context-figure-probe.py live-effort-probe.py lease-retention-probe.py stop-probe.py speech-wav.py fixtures/make-fixtures.py; do
   if [ ! -x "$QA/$t" ]; then
     bad "H $t is executable" "not present or not executable at $QA/$t"
@@ -172,6 +172,20 @@ for t in contrast.py frame.py redact.py timeline.py ocr-gate.sh ocr-find.sh \
     ok "H $t --help exits 0 and describes the tool"
   fi
 done
+
+echo ""
+echo "=== B. beside: a mockup and the app in one picture ==="
+if [ "$HAVE_PIL" = 1 ]; then
+  python3 -c 'from PIL import Image; import sys; Image.new("RGB", (200, 100), "red").save(sys.argv[1]); Image.new("RGB", (100, 100), "blue").save(sys.argv[2])' \
+    "$TMP/left.png" "$TMP/right.png"
+  run "$QA/beside.py" "$TMP/left.png" "$TMP/right.png" "$TMP/beside.png" --height 50
+  # 100 + 50 wide at 50 px high, a 24 px gap between, a 40 px label strip above.
+  expect "B1 two pictures at one height, side by side" 0 "174 x 90"
+  run "$QA/beside.py" "$TMP/missing.png" "$TMP/right.png" "$TMP/out.png"
+  expect "B2 an unreadable input exits 2 with a sentence" 2 "cannot read"
+else
+  skip "B beside.py" "Pillow is not installed"
+fi
 
 echo ""
 echo "=== C. contrast: the arithmetic, once, for everyone ==="
