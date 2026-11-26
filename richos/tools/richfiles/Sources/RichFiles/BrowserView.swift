@@ -1136,7 +1136,12 @@ struct BrowserView: View {
                     Button("New Terminal at Folder") { openTerminal(at: first, inNewTab: false) }
                     Button("New Terminal Tab at Folder") { openTerminal(at: first, inNewTab: true) }
                 } else {
-                    Button("Open With…") { chooseApplication(first) }
+                    // Catalog entry 3: the apps for this file type, the default first, right in
+                    // the menu, then Choose Another App… for the full list.
+                    Menu("Open With") {
+                        OpenWithMenuItems(file: first.url, open: { app in open(first, with: app) },
+                                          chooseAnother: { chooseApplication(first) })
+                    }
                     Button("Quick Look") { sheet = .preview(first) }
                 }
                 Button("Rename…") { requestRename(first) }.disabled(actions.busy)
@@ -1517,6 +1522,13 @@ struct BrowserView: View {
 
     private func chooseApplication(_ entry: FileEntry) {
         sheet = .openWith(entry)
+    }
+
+    private func open(_ entry: FileEntry, with application: WorkspaceApplication) {
+        Task {
+            do { try await WorkspaceServices.open(entry.url, with: application) }
+            catch { feedback = error.localizedDescription }
+        }
     }
 
     private func requestRename(_ entry: FileEntry) {

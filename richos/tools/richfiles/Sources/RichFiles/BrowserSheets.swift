@@ -859,126 +859,248 @@ struct PropertiesSheet: View {
     }
 }
 
+/// The apps macOS offers for one file, the default first, cached for a few seconds so a menu
+/// built for every visible row asks Launch Services once per file.
+@MainActor
+enum OpenWithApps {
+    private static var cache: [String: (apps: WorkspaceApplications, at: TimeInterval)] = [:]
+
+    static func lookup(_ file: URL) -> WorkspaceApplications? {
+        let now = ProcessInfo.processInfo.systemUptime
+        if let hit = cache[file.path], now - hit.at < 10 { return hit.apps }
+        guard let apps = try? WorkspaceServices.applications(for: file) else { return nil }
+        if cache.count > 256 { cache.removeAll() }
+        cache[file.path] = (apps, now)
+        return apps
+    }
+
+    static func forget(_ file: URL) { cache[file.path] = nil }
+
+    static func icon(_ app: WorkspaceApplication, side: CGFloat) -> NSImage {
+        let image = (NSWorkspace.shared.icon(forFile: app.url.path).copy() as? NSImage) ?? NSImage()
+        image.size = NSSize(width: side, height: side)
+        return image
+    }
+}
+
+/// Catalog entry 3: Open With lists the apps for this file type at once, the default first and
+/// marked Default, then Choose Another App…
+struct OpenWithMenuItems: View {
+    let file: URL
+    let open: (WorkspaceApplication) -> Void
+    let chooseAnother: () -> Void
+
+    var body: some View {
+        let apps = OpenWithApps.lookup(file)
+        if let preferred = apps?.defaultApplication {
+            Button { open(preferred) } label: {
+                Label { Text("\(preferred.name) (Default)") } icon: { Image(nsImage: OpenWithApps.icon(preferred, side: 16)) }
+            }
+        }
+        ForEach(apps?.alternatives ?? []) { app in
+            Button { open(app) } label: {
+                Label { Text(app.name) } icon: { Image(nsImage: OpenWithApps.icon(app, side: 16)) }
+            }
+        }
+        Divider()
+        Button("Choose Another App…") { chooseAnother() }
+    }
+}
+
+/// "How do you want to open this file?": the suggested apps with the default selected, the other
+/// apps on this Mac, Find an app on this Mac…, and Always open .ext files with this app.
+/// Arrow keys move, Enter opens, Esc closes and leaves the folder as it was.
 struct OpenWithSheet: View {
     let entry: FileEntry
     @Environment(\.dismiss) private var dismiss
-    @State private var applications: [WorkspaceApplication] = []
+    @Environment(\.colorScheme) private var scheme
+    @AppStorage("richfiles.textSize") private var textSize = BrowserTextSize.standard
+    @State private var suggested: [WorkspaceApplication] = []
+    @State private var others: [WorkspaceApplication] = []
     @State private var problem = ""
     @State private var selected: WorkspaceApplication?
     @State private var preferred: WorkspaceApplication?
-    @State private var confirmDefault = false
-    @State private var changingDefault = false
+    @State private var always = false
+    @State private var working = false
     @State private var discovering = true
     @State private var choosingApplication = false
+    @FocusState private var listFocused: Bool
+
+    private var fileExtension: String { entry.url.pathExtension }
+    private var everyApp: [WorkspaceApplication] { suggested + others }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Open With").font(.headline)
-            Text(entry.name).lineLimit(1).help(entry.name)
-            List {
-                if let preferred { applicationRow(preferred, preferred: true) }
-                ForEach(applications.filter { $0.id != preferred?.id }) { applicationRow($0, preferred: false) }
-                if discovering {
-                    ProgressView("Looking for apps…").controlSize(.small)
-                } else if applications.isEmpty {
-                    Text("macOS found no associated apps.").foregroundStyle(.secondary)
+        let palette = BrowserPalette(scheme)
+        VStack(alignment: .leading, spacing: 0) {
+            Text("How do you want to open this file?")
+                .font(BrowserTypography.reading(18 * textSize.scale).weight(.semibold))
+                .padding(.bottom, 4)
+            Label(entry.name, systemImage: "doc")
+                .foregroundStyle(palette.muted).lineLimit(1).truncationMode(.middle)
+                .padding(.bottom, 12)
+            ScrollViewReader { scroll in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        heading("Suggested for this file", palette)
+                        ForEach(suggested) { row($0, palette) }
+                        if discovering {
+                            ProgressView("Looking for apps…").controlSize(.small).padding(8)
+                        } else if suggested.isEmpty {
+                            Text("macOS found no apps for this file type.").foregroundStyle(palette.muted).padding(8)
+                        }
+                        if !others.isEmpty {
+                            heading("Other apps", palette)
+                            ForEach(others) { row($0, palette) }
+                        }
+                        Button { choosingApplication = true } label: {
+                            Label("Find an app on this Mac…", systemImage: "magnifyingglass")
+                                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                                .padding(.horizontal, 9)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(4)
                 }
-            }.frame(minHeight: 125).disabled(changingDefault)
-            if !problem.isEmpty { Text(problem).foregroundStyle(.secondary) }
-            HStack {
-                Button("Choose App…") { choosingApplication = true }.disabled(changingDefault)
-                Button("Set Default App…") { confirmDefault = true }
-                    .disabled(changingDefault || selected == nil)
+                .frame(height: 330)
+                .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(palette.line, lineWidth: 1).allowsHitTesting(false))
+                .focusable()
+                .modifier(NoFocusRing())
+                .focused($listFocused)
+                .onMoveCommand { direction in
+                    guard direction == .up || direction == .down, !everyApp.isEmpty else { return }
+                    let index = selected.flatMap { app in everyApp.firstIndex { $0.id == app.id } } ?? -1
+                    let next = max(0, min(everyApp.count - 1, index + (direction == .down ? 1 : -1)))
+                    selected = everyApp[next]
+                    scroll.scrollTo(everyApp[next].id)
+                }
+            }
+            Toggle(fileExtension.isEmpty ? "Always open files of this type with this app"
+                                         : "Always open .\(fileExtension) files with this app", isOn: $always)
+                .toggleStyle(.checkbox)
+                .padding(.top, 14).padding(.bottom, problem.isEmpty ? 16 : 8)
+            if !problem.isEmpty {
+                Text(problem).foregroundStyle(palette.hint).padding(.bottom, 12)
+            }
+            HStack(spacing: 8) {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Open") { open() }.keyboardShortcut(.defaultAction).disabled(changingDefault || selected == nil)
+                Button("Open") { open() }.keyboardShortcut(.defaultAction).disabled(working || selected == nil)
             }
-        }.padding(15).frame(width: 450, height: 330)
-            .task { await discover() }
-            .fileImporter(isPresented: $choosingApplication, allowedContentTypes: [.applicationBundle]) { result in
-                do {
-                    let app = try WorkspaceServices.application(at: result.get())
-                    if !applications.contains(where: { $0.id == app.id }) { applications.append(app) }
-                    selected = app
-                    problem = ""
-                } catch { problem = error.localizedDescription }
-            }
-            .alert("Change the Default App for This File Type?", isPresented: $confirmDefault) {
-                Button("Cancel", role: .cancel) {}
-                Button("Change Default") { setDefault() }
-            } message: { Text("macOS may ask for consent. The choice applies to other files of this type.") }
+        }
+        .padding(18)
+        .frame(width: 480)
+        .task { await discover() }
+        .onAppear { listFocused = true }
+        .fileImporter(isPresented: $choosingApplication, allowedContentTypes: [.applicationBundle]) { result in
+            do {
+                let app = try WorkspaceServices.application(at: result.get())
+                if !everyApp.contains(where: { $0.id == app.id }) { others.insert(app, at: 0) }
+                selected = everyApp.first { $0.id == app.id }
+                problem = ""
+            } catch { problem = error.localizedDescription }
+        }
+    }
+
+    private func heading(_ title: String, _ palette: BrowserPalette) -> some View {
+        Text(title).fontWeight(.semibold).foregroundStyle(palette.muted)
+            .padding(.horizontal, 8).padding(.top, 8).padding(.bottom, 4)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    private func row(_ app: WorkspaceApplication, _ palette: BrowserPalette) -> some View {
+        let chosen = selected?.id == app.id
+        return HStack(spacing: 11) {
+            Image(nsImage: OpenWithApps.icon(app, side: 32)).accessibilityHidden(true)
+            Text(app.name).lineLimit(1)
+            Spacer(minLength: 4)
+            if app.id == preferred?.id { Text("Default").foregroundStyle(palette.muted) }
+        }
+        .padding(.horizontal, 9)
+        .frame(height: 44)
+        .background(chosen ? palette.selectionFill : .clear, in: RoundedRectangle(cornerRadius: 6))
+        .overlay {
+            if chosen { RoundedRectangle(cornerRadius: 6).strokeBorder(palette.selectionEdge, lineWidth: 1) }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) { selected = app; open() }
+        .simultaneousGesture(TapGesture().onEnded { selected = app; listFocused = true })
+        .id(app.id)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(app.id == preferred?.id ? "\(app.name), Default" : app.name)
+        .accessibilityAddTraits(chosen ? [.isSelected, .isButton] : .isButton)
+        .accessibilityAction { selected = app }
     }
 
     private func discover() async {
         let started = ProcessInfo.processInfo.systemUptime
         let id = UUID()
         let file = entry.url
-        let worker = Task.detached { try WorkspaceServices.applications(for: file) }
+        let worker = Task.detached { () -> (WorkspaceApplications, [WorkspaceApplication]) in
+            (try WorkspaceServices.applications(for: file), Self.installedApplications())
+        }
         do {
-            let apps = try await worker.value
+            let (apps, installed) = try await worker.value
             try Task.checkCancellation()
             let discovered = [apps.defaultApplication].compactMap { $0 } + apps.alternatives
-            let chosen = applications.filter { app in !discovered.contains(where: { $0.id == app.id }) }
-            applications = discovered + chosen
+            let resolved = Set(discovered.map { $0.url.resolvingSymlinksInPath() })
+            suggested = discovered
+            others = installed.filter { !resolved.contains($0.url.resolvingSymlinksInPath()) }
             preferred = apps.defaultApplication
-            if selected == nil { selected = applications.first }
+            if selected == nil { selected = discovered.first }
             discovering = false
             RichFilesDiagnostics.record(.openWithDiscovery, id: id, outcome: .complete,
                                         started: started, total: discovered.count, confirmed: discovered.count)
         } catch {
-            let cancelled = Task.isCancelled
-            if !cancelled {
+            let stopped = Task.isCancelled
+            if !stopped {
                 discovering = false
                 problem = error.localizedDescription
             }
-            RichFilesDiagnostics.record(.openWithDiscovery, id: id, outcome: cancelled ? .cancelled : .unavailable,
+            let outcome: RichFilesDiagnostics.Outcome = stopped ? .cancelled : .unavailable // dialect-exempt: existing enum case name, a code identifier
+            RichFilesDiagnostics.record(.openWithDiscovery, id: id, outcome: outcome,
                                         started: started, total: 0, confirmed: 0)
         }
     }
 
-    private func applicationRow(_ app: WorkspaceApplication, preferred: Bool) -> some View {
-        Button {
-            selected = app
-        } label: {
-            HStack {
-                Text(app.name)
-                if preferred { Text("Default").font(.caption).foregroundStyle(.secondary) }
-                Spacer()
-                if selected?.id == app.id { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
-            }.contentShape(Rectangle())
-        }.buttonStyle(.plain)
-            .accessibilityLabel(preferred ? "\(app.name), Default" : app.name)
+    /// The apps in the Applications folders, by name, for the "Other apps" list.
+    nonisolated private static func installedApplications() -> [WorkspaceApplication] {
+        let folders = ["/Applications", "/System/Applications", "/System/Applications/Utilities",
+                       FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications").path]
+        var seen = Set<URL>()
+        let apps = folders.flatMap { folder -> [WorkspaceApplication] in
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? []
+            return names.filter { $0.hasSuffix(".app") }.compactMap { name in
+                let url = URL(fileURLWithPath: folder).appendingPathComponent(name)
+                guard seen.insert(url.resolvingSymlinksInPath()).inserted else { return nil }
+                return try? WorkspaceServices.application(at: url)
+            }
+        }
+        return apps.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
     private func open() {
-        guard let selected else { return }
+        guard let selected, !working else { return }
+        working = true
         Task {
-            do { try await WorkspaceServices.open(entry.url, with: selected); dismiss() }
-            catch { problem = error.localizedDescription }
+            defer { working = false }
+            if always { await setDefault(selected) }
+            do {
+                try await WorkspaceServices.open(entry.url, with: selected)
+                OpenWithApps.forget(entry.url)
+                dismiss()
+            } catch { problem = error.localizedDescription }
         }
     }
 
-    private func setDefault() {
-        guard let selected, !changingDefault else { return }
-        changingDefault = true
-        Task {
-            defer { changingDefault = false }
-            do {
-                guard let type = try entry.url.resourceValues(forKeys: [.contentTypeKey]).contentType else {
-                    problem = "macOS did not identify this file type."
-                    return
-                }
-                try await NSWorkspace.shared.setDefaultApplication(at: selected.url, toOpen: type)
-                let actual = NSWorkspace.shared.urlForApplication(toOpen: type)?.resolvingSymlinksInPath()
-                if actual == selected.url.resolvingSymlinksInPath() {
-                    let defaultForFile = NSWorkspace.shared.urlForApplication(toOpen: entry.url)?.resolvingSymlinksInPath()
-                    preferred = applications.first { $0.url.resolvingSymlinksInPath() == defaultForFile }
-                    problem = "Default app updated."
-                } else {
-                    problem = "macOS did not confirm the change."
-                }
-            } catch { problem = error.localizedDescription }
-        }
+    private func setDefault(_ app: WorkspaceApplication) async {
+        do {
+            guard let type = try entry.url.resourceValues(forKeys: [.contentTypeKey]).contentType else {
+                problem = "macOS did not identify this file type."
+                return
+            }
+            try await NSWorkspace.shared.setDefaultApplication(at: app.url, toOpen: type)
+        } catch { problem = error.localizedDescription }
     }
 }
 
