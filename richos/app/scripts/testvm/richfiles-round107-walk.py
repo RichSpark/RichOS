@@ -318,8 +318,14 @@ class Walk:
         names = self.ls()
         self.record(f"{t}: Ctrl+C, Ctrl+V, Ctrl+V makes - Copy and - Copy (2)",
                     {"yet another test file - Copy.txt", "yet another test file - Copy (2).txt"} <= names)
-        self.record(f"{t}: the new copy is in the list (its selected look is in the screenshot)",
-                    bool(self.node("yet another test file - Copy (2).txt")))
+        # The list reloads after the file appears on disk, so its row is waited for too.
+        listed = False
+        for _ in range(10):
+            listed = bool(self.node("yet another test file - Copy (2).txt"))
+            if listed:
+                break
+            time.sleep(0.5)
+        self.record(f"{t}: the new copy is in the list (its selected look is in the screenshot)", listed)
         self.shot(f"{t}-01-duplicate-copy-2")
         self.keystroke("z", CONTROL)
         time.sleep(1.5)
