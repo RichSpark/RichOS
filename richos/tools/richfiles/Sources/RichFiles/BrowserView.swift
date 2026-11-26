@@ -2115,6 +2115,8 @@ private struct RowHighlight: NSViewRepresentable {
         override func mouseEntered(with event: NSEvent) {
             pointed = true
             paint()
+            // A pointer that lands on the item in one move sends no mouseMoved first.
+            if let url { quickInfo?.moved(over: url, at: NSEvent.mouseLocation) }
         }
 
         override func mouseMoved(with event: NSEvent) {
