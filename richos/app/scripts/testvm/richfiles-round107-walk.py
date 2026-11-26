@@ -166,7 +166,9 @@ class Walk:
             + ["printf 'fixture %s\\n' " + shlex.quote(f) + " > " + shlex.quote(f) for f in FILES])
         self.guest(script, 180)
         self.guest("printf 'inside\\n' > " + shlex.quote(FIXTURE + "/Projects/plan.txt"))
-        desktop = "cd /Users/admin/Desktop && " + " && ".join("mkdir -p " + shlex.quote(p) for p in TREE)
+        # The Desktop tree is rebuilt too: the previous theme renamed a folder in it.
+        desktop = ("cd /Users/admin/Desktop && rm -rf 'AI book' 'landing pages' 'to sort' && "
+                   + " && ".join("mkdir -p " + shlex.quote(p) for p in TREE))
         self.guest(desktop + " && printf 'notes\\n' > 'AI book/research/notes.txt'")
         # The mockup's Music is empty; the guest's ships with a folder inside, which the walk moves
         # to the guest's Trash so the no-arrow case is the one the CEO saw (the guest is disposable).
@@ -445,6 +447,25 @@ class Walk:
                 self.record(f"{t}: a click on the name shows its files on the right",
                             bool(self.node("spring launch", "--role", "AXButton")) or "landing pages" in self.window_title(),
                             self.window_title())
+            # Renaming an open folder keeps it and what is open inside it open in the sidebar.
+            ai_book = self.node("AI book")
+            if ai_book:
+                self.click(*self.center(ai_book))
+                time.sleep(2.0)
+                rows = [n for n in self.nodes("--title", "cover design") if n["x"] > 270]
+                if rows:
+                    self.click(*self.name_point(rows[0]))
+                    time.sleep(0.6)
+                    self.key(120)
+                    time.sleep(1.0)
+                    self.keystroke("cover art")
+                    self.key(36)
+                    time.sleep(2.5)
+                    self.shot(f"{t}-15-rename-keeps-branches-open")
+                    self.record(f"{t}: after renaming an open folder its branches stay open in the sidebar",
+                                bool(self.node("Close cover art in the sidebar")) and bool(self.node("white paper")))
+                else:
+                    self.record(f"{t}: cover design is listed on the right", False)
         if not self.quit():
             self.record(f"{t}: RichFiles quit", False)
 
