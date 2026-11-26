@@ -2574,6 +2574,9 @@ class DesktopWork(unittest.TestCase):
                         'printf "%%s" "$RICHOS_WORKSPACES_DIR" > "$d/partition"\nmv "$d" "%s/"\nexec sleep 30\n'
                         % (writing,calls))
         state=self.root/"engine-state";claude=self.root/"claude";claude.write_text("#!/bin/sh\n");claude.chmod(0o755)
+        # The user's turn started this job in this run, so the app's one rule has let a turn
+        # through in this chat (richos-core turn_gate.rs writes this record).
+        (state/"turn-gate.json").write_text(json.dumps({"version":1,"since_ms":0,"open":[{"entity_id":"depot","thread_id":"thread-a"}]}))
         os.environ.update({"REVIEW_WATCH_SECOND_REVIEW":str(fake)})
         accounts=self.root/"claude-accounts.json"
         a=type("A",(),{"app_state":str(state),"claude":str(claude),"accounts":str(accounts),"codex_reviews":"","status":False,"tick":True})

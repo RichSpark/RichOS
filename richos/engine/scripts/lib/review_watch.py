@@ -1545,8 +1545,10 @@ class Watcher(object):
 
     def start(self, item, trigger, now, attempt, supersede=None, rows=()):
         # THE ONE PLACE A REVIEW PROCESS IS STARTED (spawn has no other caller): the app's one
-        # rule first, before a lock or a record is written (AppWorld.may_start).
-        if not self.world.may_start(item):
+        # rule first, before a lock or a record is written (AppWorld.may_start). A world with no
+        # such rule (the terminal's, a test's stand-in) starts as before.
+        may_start = getattr(self.world, "may_start", None)
+        if may_start is not None and not may_start(item):
             return None
         if supersede:
             if self.stop(supersede):

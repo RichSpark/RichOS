@@ -252,7 +252,8 @@ fn the_review_watchers_one_start_reads_the_rules_record() {
     assert_eq!(watch.matches("self.spawn(").count(), 1, "a second place starts a review process");
     let start = watch.find("    def start(self, item, trigger, now, attempt").expect("Watcher.start");
     let spawn = watch.find("self.spawn(").unwrap();
-    let gate = watch[start..].find("if not self.world.may_start(item):").map(|at| start + at).expect("Watcher.start asks may_start");
+    let gate = watch[start..].find("if may_start is not None and not may_start(item):").map(|at| start + at).expect("Watcher.start asks may_start");
+    assert!(watch.contains("    def may_start(self, item):\n        \"\"\"Every review the app's watcher starts"), "the app's world has no rule to ask");
     assert!(gate < spawn && watch[start..spawn].matches("\n    def ").count() == 0, "the start is not inside Watcher.start, after the rule");
     assert!(watch.contains(&format!("\"{}\"", richos_core::turn_gate::RECORD)), "the watcher reads another record than the gate writes");
     assert!(watch.contains("if not self.chat_open(endpoint):"), "a shut chat's Codex journal is read");
