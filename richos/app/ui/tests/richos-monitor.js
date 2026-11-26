@@ -487,6 +487,34 @@ async function main() {
     return out.join("; ");
   });
 
+  // The second review at c49c010d5 (finding 938f#3, still open at cbb69f6ab): at the supported
+  // 120% and 150% text sizes the card's app names and readings needed 346px and 427px of the
+  // 306px a fixed card left them, and ran past its edge. Every text size the app offers from the
+  // default up (theme-boot.js STEPS) keeps every reading inside the card, with no sideways scroll.
+  await run.check("the card's readings stay inside it at every larger text size, 120% and 150% included", async () => {
+    const out = [];
+    const p = await openApp(context);
+    try {
+      await switchTo(p, true);
+      await p.waitForFunction(() => window.RichosMonitor.state().rail);
+      for (const scale of [100, 110, 120, 135, 150]) {
+        await p.mouse.move(700, 300);
+        await p.waitForFunction(() => !window.RichosMonitor.state().card);
+        await p.evaluate((sc) => document.documentElement.style.setProperty("--app-font-scale", String(sc / 100)), scale);
+        await p.hover("#rom-square");
+        await p.waitForSelector("#rom-card.is-open");
+        await p.waitForFunction(() => document.querySelector('#rom-card [data-k="apps"]').children.length > 0);
+        await p.evaluate(() => window.RichosMonitor.repaint());
+        const fit = await cutOff(p, "#rom-card", "#rom-card");
+        assertEqual(fit.cut, [], scale + "%: readings past the card's edge (" + fit.left + ".." + fit.right + ")");
+        assert(fit.sideways <= 1, scale + "%: the card needs a sideways scroll of " + fit.sideways + "px");
+        out.push(scale + "% " + (fit.right - fit.left) + "px");
+      }
+      assertEqual(p.errors, [], "page errors");
+    } finally { await p.close(); }
+    return "card content width: " + out.join(", ");
+  });
+
   await run.check("contrast, dark: the rail's figure, the card and the details clear WCAG AA", async () => {
     const out = {};
     out.speed = await contrastOf(page, '#rom-square [data-k="speed"]');

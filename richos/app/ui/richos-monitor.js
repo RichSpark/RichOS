@@ -286,7 +286,8 @@
     $("hero").textContent = tokens(R.m1);
     $("hero-unit").textContent = R.active ? "tokens a minute" : R.m1 > 0 ? "in the last minute, stopped now" : "tokens a minute";
     const cardSeries = (T && T.card) || null;
-    paintBars($("tok-graph"), 306, 56, cardSeries ? cardSeries.bars : [], P, -1, unrecorded(cardSeries));
+    // as wide as the card makes it: 306px at the default text size, wider at a larger one
+    paintBars($("tok-graph"), $("tok-graph").clientWidth || 306, 56, cardSeries ? cardSeries.bars : [], P, -1, unrecorded(cardSeries));
     const row = (name, total, mins) =>
       "<span>" + name + "</span><b>" + tokens(total / mins) + "/min</b><span>" + tokens(total) + "</span>";
     const wins =
