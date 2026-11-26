@@ -2402,7 +2402,8 @@ impl NativeClient {
             args[position] = "--resume".into();
             args[position+1] = path.to_string_lossy().into_owned();
         }
-        // The selected model, with low effort for replies and high effort for work.
+        // The selected model, at the effort chosen for its row on that model (its recommended
+        // level when nobody chose one).
         args.extend(lease_model_args(role, profile));
         let search_endpoint = if role == LeaseRole::Conversation && onboarding.is_some() {
             profile.and_then(|profile| profile.search_binding.as_ref()

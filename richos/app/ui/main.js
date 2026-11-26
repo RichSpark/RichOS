@@ -5954,7 +5954,10 @@ async function syncAssertivenessFromBackend() {
 // and then implement those defaults as well."): Rich on Fable at low effort when he talks with
 // you, and on Fable at medium effort when he directs your team. Opus keeps today's levels as its
 // own (low and high), so choosing Opus in a row runs it exactly as the app does today. Until this
-// round both rows defaulted to Opus, low and high. The levels are stored per row and per model
+// round both rows defaulted to Opus, low and high. CEO 2026-11-26: "for Rich let's change our
+// recommendation (and default setting) to "High" when the user selects Opus instead of Fable for
+// Rich." So Opus is at high in both rows now (`EffortLevel::recommended` in config.rs holds the
+// same four levels, for a level nobody chose). The levels are stored per row and per model
 // (`config.rs`'s `EffortLevel`), each lease is started with its row's level (`--effort`), and a
 // level saved while a session runs is sent to it (`set_lease_models` in src-tauri).
 // Held while Settings is open and saved on close, exactly like the model.
@@ -5967,7 +5970,7 @@ const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
 const EFFORT_NAME = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max" };
 const MODEL_DEFAULT = { rich: "fable", stu: "fable" };
 const EFFORT_DEFAULT = {
-  rich: { opus: "low", fable: "low" },
+  rich: { opus: "high", fable: "low" },
   stu: { opus: "high", fable: "medium" },
 };
 // What each level means, in the row's own terms: replies for the conversation, work for the team.

@@ -17,6 +17,9 @@
 // five levels under each row, each model keeping its own level; the defaults are the recommended
 // levels (Fable at Low and Medium, Opus at Low and High); choosing Max opens a warning.
 //
+// CEO 2026-11-26: "for Rich let's change our recommendation (and default setting) to "High" when the
+// user selects Opus instead of Fable for Rich." So Opus is at High in both rows.
+//
 // WHAT THIS SUITE PROVES is the browser half, through the real renderer and mock.js's stand-in
 // for config.rs:
 //   1. the rows show the stored choice, first under "Working with Rich" in the one Settings
@@ -107,7 +110,7 @@ const stored = (page) =>
     return { rich: c.rich_model || "fable", stu: c.stu_model || "fable" };
   }, STORE);
 /// The four levels the recommended ones are, as `set_lease_models` carries them.
-const RECOMMENDED = { rich: { opus: "low", fable: "low" }, stu: { opus: "high", fable: "medium" } };
+const RECOMMENDED = { rich: { opus: "high", fable: "low" }, stu: { opus: "high", fable: "medium" } };
 const withEffort = (effort) => ({ rich: { ...RECOMMENDED.rich, ...(effort.rich || {}) }, stu: { ...RECOMMENDED.stu, ...(effort.stu || {}) } });
 /// What one row's effort control shows.
 async function effort(page, who) {
@@ -254,7 +257,11 @@ async function main() {
     await rowsShow(page, { rich: "opus", stu: "fable" });
     const r = await rows(page);
     assertEqual([r.rich, r.stu], [{ chosen: "opus", state: "" }, { chosen: "fable", state: "default" }], "stored rich=opus");
-    assert(r.note.startsWith("Rich talks with you on Opus at low effort."), "the line names the change first: " + r.note);
+    assert(r.note.startsWith("Rich talks with you on Opus at high effort."), "the line names the change first: " + r.note);
+    // CEO 2026-11-26: "for Rich let's change our recommendation (and default setting) to "High" when
+    // the user selects Opus instead of Fable for Rich." Nobody chose a level here, so it is High.
+    const ro = await effort(page, "rich");
+    assertEqual([ro.level, ro.head, ro.recommendedUnder], ["high", "Effort on OpusHigh · recommended for Opus", "high"], "Rich on Opus: High, chosen and recommended");
     assertEqual(page.__errors, [], "no page errors");
     await page.close();
     return "fresh: fable/fable default; stored opus: shown";
@@ -274,7 +281,7 @@ async function main() {
     await rowsShow(page, { rich: "opus", stu: "opus" });
     const r = await rows(page);
     assertEqual([r.rich.chosen, r.stu.chosen], ["opus", "opus"], "the popover shows both picks");
-    assert(r.note.startsWith("Rich talks with you on Opus at low effort. Rich directs your team on Opus at high effort."), "and says what they would mean: " + r.note);
+    assert(r.note.startsWith("Rich talks with you on Opus at high effort. Rich directs your team on Opus at high effort."), "and says what they would mean: " + r.note);
     assert(await isOpen(page), "Settings is still open");
     assertEqual(await calls(page, "set_lease_models"), [], "a command went out while Settings was open");
     assertEqual(await stored(page), { rich: "fable", stu: "fable" }, "the store changed while Settings was open");
@@ -291,12 +298,12 @@ async function main() {
     await rowsShow(page, { rich: "fable", stu: "fable" });
     await page.click('#md-rich .seg-opt[data-v="opus"]');
     await page.click("#set-btn");
-    await toastSays(page, "Rich now talks with you on Opus at low effort.");
+    await toastSays(page, "Rich now talks with you on Opus at high effort.");
     assertEqual(await isOpen(page), false, "the Settings button closed Settings");
     const sent = await calls(page, "set_lease_models");
     assertEqual(sent.map((c) => c.args), [{ rich: "opus", stu: "fable", effort: RECOMMENDED, chosen: ["rich_model"] }], "one save, both rows and their levels, on close");
     assertEqual(await stored(page), { rich: "opus", stu: "fable" }, "the store after close");
-    assertEqual(await toastText(page), "Rich now talks with you on Opus at low effort.", "the toast says what is now true");
+    assertEqual(await toastText(page), "Rich now talks with you on Opus at high effort.", "the toast says what is now true");
 
     // (b) Escape, both rows changed at once: one save, one toast with both sentences.
     await openPrefs(page);
@@ -414,7 +421,7 @@ async function main() {
     const readsBefore = await page.evaluate(() => window.__readsDone);
     await openPrefs(page); // reopen: its read starts while the save is held
     await page.evaluate(() => window.__releaseSave());
-    await toastSays(page, "Rich now talks with you on Opus at low effort.");
+    await toastSays(page, "Rich now talks with you on Opus at high effort.");
     await page.waitForFunction((n) => window.__readsDone > n, readsBefore).catch(() => {});
     assertEqual(await stored(page), { rich: "opus", stu: "fable" }, "the save landed");
     const r = await rows(page);
@@ -525,8 +532,8 @@ async function main() {
     assertEqual([(await effort(page, "rich")).level, (await rows(page)).rich.state], ["xhigh", ""], "Extra high chosen");
     // Each model keeps its own level.
     await page.click('#md-rich .seg-opt[data-v="opus"]');
-    await levelIs(page, "rich", "low");
-    assertEqual((await effort(page, "rich")).head, "Effort on OpusLow · recommended for Opus", "Opus has its own level");
+    await levelIs(page, "rich", "high");
+    assertEqual((await effort(page, "rich")).head, "Effort on OpusHigh · recommended for Opus", "Opus has its own level");
     await page.click('#ef-rich .ef-step[data-l="medium"]');
     await page.click('#md-rich .seg-opt[data-v="fable"]');
     await levelIs(page, "rich", "xhigh");

@@ -318,15 +318,19 @@ impl EffortLevel {
             .find(|level| level.as_str() == s)
     }
 
-    /// **The recommended level**, which is the default. The conversation only answers or hands
-    /// work over, so it is at low effort on either model (CEO 2026-10-14: instant replies
-    /// before effort). The work is at medium effort on Fable (CEO 2026-11-17: *"for Stu, Fable
-    /// at medium effort might be the best new default"*) and keeps high effort on Opus (§119),
-    /// so a user who picks Opus for the work gets what Opus users had before.
+    /// **The recommended level**, which is the default. The conversation is at low effort on
+    /// Fable (CEO 2026-10-14: instant replies before effort; 2026-11-17: *"Fable at low effort
+    /// might actually be a good new default for Rich"*) and at high effort on Opus (CEO
+    /// 2026-11-26: *"for Rich let's change our recommendation (and default setting) to "High"
+    /// when the user selects Opus instead of Fable for Rich"*). The work is at medium effort on
+    /// Fable (CEO 2026-11-17: *"for Stu, Fable at medium effort might be the best new
+    /// default"*) and keeps high effort on Opus (§119), so a user who picks Opus for the work
+    /// gets what Opus users had before. Settings shows the same four levels as "Recommended"
+    /// (`EFFORT_DEFAULT` in `ui/main.js`).
     pub fn recommended(work: bool, model: ModelChoice) -> Self {
         match (work, model) {
+            (_, ModelChoice::Opus) => EffortLevel::High,
             (false, _) => EffortLevel::Low,
-            (true, ModelChoice::Opus) => EffortLevel::High,
             (true, _) => EffortLevel::Medium,
         }
     }
@@ -2161,11 +2165,11 @@ mod tests {
     fn each_row_keeps_a_level_per_model_and_only_a_chosen_level_is_written() {
         // Round 86.1 (CEO 2026-11-17): an effort control under each model row, each model
         // keeping its own level. Defaults: Fable at low for the conversation and at medium for
-        // the work; Opus keeps low and high.
+        // the work; Opus at high for both (the conversation's since CEO 2026-11-26).
         let path = tmp_path("efforts");
         let mut store = ConfigStore::open(&path).unwrap();
         let recommended = EffortChoices {
-            rich_opus: EffortLevel::Low, rich_fable: EffortLevel::Low,
+            rich_opus: EffortLevel::High, rich_fable: EffortLevel::Low,
             stu_opus: EffortLevel::High, stu_fable: EffortLevel::Medium,
         };
         assert_eq!(store.effort_choices(), recommended);
