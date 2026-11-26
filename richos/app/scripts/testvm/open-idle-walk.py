@@ -20,6 +20,17 @@ WHAT IT DOES, in the guest, on fixture data, never on the host's screen (CEO rul
   first-run  adopt-walk.py's: company "Acme" with a folder that is a Git repository
   connect    a Codex connection of the first-run conversation, made with the engine's own helper
              (codex_channels.py connect --scope), no model involved
+  paused     the app quit; in that conversation, while it is closed: the Stop the app saves for the
+             team when a job is stopped, a report in Rich's inbox of a job paused for the usage
+             limit, and a READY TO LAND handover Codex wrote whose review the last run had taken up
+             and Quit stopped (seeded with the engine's own review watcher, as the app's watcher
+             records it). The app opened; Settings opened by its button; both rows switched (the
+             conversation's to Opus, the team's to Opus and back to Fable); Settings closed with
+             Escape. Then --idle-seconds pass. PASS needs: not one new answer from any model; the
+             Stop not taken from the team's inbox; the paused report not filed as a turn in the
+             conversation ledger (a turn there would show the chat as working); no review lock,
+             review log, review ledger row or second-review process; and the app's
+             own record of the chats a turn was let through in (turn-gate.json) empty
   closed     the app quit, then a report written on the connection while it is closed
   open       the app opened again; Settings opened by its button; the conversation's row set to
              Opus; Settings closed with Escape, which saves. Then --idle-seconds pass. PASS needs
@@ -67,8 +78,86 @@ def load(name, filename):
 
 codex = load('open_idle_codex', 'codex-watch-walk.py')
 StepFailed = codex.StepFailed
-STEPS = ['identity', 'first-run', 'connect', 'closed', 'open', 'window', 'ask', 'live', 'behind']
-WAITS = 'nothing newer was written since RichOS opened'
+STEPS = ['identity', 'first-run', 'connect', 'paused', 'closed', 'open', 'window', 'ask', 'live', 'behind']
+WAITS = 'written before RichOS opened'
+
+# An agent's message filed as a turn in this conversation (PromptReceived, source agent).
+AGENT_TURNS = r"""import json,sys
+ledger,thread=sys.argv[1:3]
+n=0
+for line in open(ledger,errors='replace'):
+    try: row=json.loads(line)
+    except ValueError: continue
+    if row.get('event')=='PromptReceived' and row.get('thread_id')==thread and row.get('source')=='agent': n+=1
+print(json.dumps(n))
+"""
+
+# The app's saved messages, as the app itself writes them (session_tools.rs append: one JSON
+# object per line), appended to the conversation's two inboxes. Prints where each now ends.
+SAVE = r"""import json,os,sys
+folder,stop,pause=sys.argv[1:4]
+os.makedirs(folder,exist_ok=True)
+out={}
+for role,row in (('stu',stop),('rich',pause)):
+    path=os.path.join(folder,role+'.jsonl')
+    with open(path,'a') as f: f.write(json.dumps(json.loads(row),separators=(',',':'))+'\n')
+    out[role]=os.path.getsize(path)
+print(json.dumps(out))
+"""
+
+# A review the last run took up and Quit stopped: the app's own review watcher reads the READY
+# with the chat open (the last run), and Quit's record of the review is `stopped`
+# (review_watch.py stop_own). The chat is open only for this seeding; the app writes its own
+# record (turn-gate.json) empty at launch.
+SEED_REVIEW = r"""import json,os,sys,time
+lib,state,coordination,home,entity,thread=sys.argv[1:7]
+os.environ.update(REVIEW_WATCH_STATE_DIR=state+'/review-watch',SECOND_REVIEW_STATE_DIR=state+'/second-review',
+                  RICHOS_APP_STATE=state,CODEX_COORDINATION_ROOT=coordination,HOME=home,RICHOS_ENTITY_ROOT='')
+sys.path.insert(0,lib)
+import review_watch as rw
+gate=state+'/turn-gate.json'
+saved=open(gate).read() if os.path.exists(gate) else None
+open(gate,'w').write(json.dumps({'version':1,'since_ms':0,'open':[{'entity_id':entity,'thread_id':thread}]}))
+try:
+    world=rw.AppWorld(os.path.dirname(os.path.dirname(lib)),state)
+    shared=rw.stall_watch._read_json(rw._p('shared.json'))
+    codex=shared.setdefault('codex',{})
+    now=time.time()
+    items,problems=world.codex_items(now-30,codex)
+    rw.stall_watch._write_json(rw._p('shared.json'),shared)
+    for it in items:
+        rw.append_jsonl(rw._p('attempts.jsonl'),dict(work=it.work,repo=it.repo,tip=it.tip,trigger='handover',
+                        channel=it.channel,outcome='stopped',ended_at=now-20))
+    print(json.dumps({'items':len(items),'problems':problems,'pending':len(codex.get('channel_pending',[])),
+                      'tips':[it.tip for it in items]}))
+finally:
+    if saved is None: os.remove(gate)
+    else: open(gate,'w').write(saved)
+"""
+
+# The seeded review is taken back out while the app is closed again, its reading position kept,
+# so the later steps (where he types in this chat, which opens it) start no real review of it.
+UNSEED = r"""import json,os,sys
+path=sys.argv[1]+'/review-watch/shared.json'
+shared=json.load(open(path))
+shared.get('codex',{})['channel_pending']=[]
+open(path,'w').write(json.dumps(shared))
+print(json.dumps({'pending':0}))
+"""
+
+# What the app's review watcher has started or recorded, and whether a second-review runs.
+REVIEWS = r"""import glob,json,os,subprocess,sys
+state=sys.argv[1]
+def lines(p):
+    try: return sum(1 for _ in open(p))
+    except OSError: return 0
+ps=subprocess.run(['ps','-axo','command'],capture_output=True,text=True).stdout
+print(json.dumps({'locks':sorted(os.path.basename(p) for p in glob.glob(state+'/review-watch/locks/*')),
+                  'logs':sorted(os.path.basename(p) for p in glob.glob(state+'/review-watch/logs/*')),
+                  'attempts':lines(state+'/review-watch/attempts.jsonl'),
+                  'ledger':lines(state+'/second-review/reviews.jsonl'),
+                  'second_review_running':[l for l in ps.splitlines() if 'second-review' in l and 'grep' not in l]}))
+"""
 
 # Every answer a model gave, in every Claude Code transcript of this home, by model.
 ANSWERS = r"""import glob,json,sys
@@ -216,8 +305,77 @@ class OpenIdleWalk(codex.CodexWatchWalk):
         return {'held_until_a_new_report': before, 'new_report': new, 'log_said_it_waits': said[:1],
                 'inbox_order': rows, 'typed_by_the_user': 0, 'answers_once_quiet': after}
 
+    def reviews(self):
+        return self.run_python(REVIEWS, self.data + '/engine-state')
+
+    def paused(self):
+        thread, entity = self.facts['thread'], self.facts['entity']
+        state = self.data + '/engine-state'
+        self.close_app()
+        # A job stopped and a job paused when the app quit, as the app saves them for later.
+        stop = {'from': 'user-control', 'text': json.dumps({'event': 'user_stop', 'assignment_id': 'open-idle-fixture',
+                                                             'obligation_id': 'open-idle-fixture', 'requested_at_ms': 1})}
+        pause = {'from': 'stu', 'text': 'The open-idle fixture job is paused for the usage limit and waits for the reset. '
+                                        'Nothing is requested.'}
+        ends = self.run_python(SAVE, '%s/messages/%s/%s' % (state, entity, thread), json.dumps(stop), json.dumps(pause))
+        # A handover on a branch of the company's repository, written by Codex while the app is closed.
+        branch = 'codex/open-idle-' + uuid.uuid4().hex[:8]
+        sha = guest(self.vm, 'cd {c} && git checkout -q -b {b} && printf "fixture\\n" > open-idle.txt && git add open-idle.txt '
+                             '&& git -c user.name=QA -c user.email=qa@example.invalid commit -q -m fixture && git rev-parse HEAD '
+                             '&& git checkout -q -'.format(c=shlex.quote(self.company), b=shlex.quote(branch)), 60).strip().splitlines()[0]
+        ready = 'ready-' + uuid.uuid4().hex[:12]
+        self.channel('send', '--locator', self.facts['locator'], '--id', ready, '--text',
+                     '## READY TO LAND: %s\nRepository: %s\nCommit: %s\nClaims: a fixture file, open-idle.txt.' % (
+                         branch, os.path.basename(self.company), sha))
+        seeded = self.run_python(SEED_REVIEW, os.path.dirname(self.helper), state, self.coordination, self.home, entity, thread)
+        if seeded['pending'] < 1 or sha not in seeded['tips']:
+            raise StepFailed('the engine took up no review of the READY to stop: ' + json.dumps(seeded))
+        self.facts['review_seeded'] = True
+        self.save()
+        before, reviews_before = self.answers(), self.reviews()
+        launch = relaunch(self.vm)
+        self.after_relaunch()
+        self.open_settings()
+        self.model_row(0, 'Opus')
+        self.model_row(1, 'Opus')
+        self.model_row(1, 'Fable')
+        self.shot('paused-settings.png')
+        codex.stu.command_walk.adopt_walk.command([HERE / 'ax.sh', self.vm, '--key', '53'], 60)  # Escape closes Settings, which saves
+        self.until('config.json to hold rich_model=opus', lambda: self.config().get('rich_model') == 'opus', 60)
+        time.sleep(self.a.idle_seconds)
+        after, reviews_after = self.answers(), self.reviews()
+        log = guest(self.vm, 'cat %s 2>/dev/null || true' % shlex.quote(launch['log']), 60)
+        (self.out / 'app-after-paused.log').write_text(log)
+        cursor = guest(self.vm, 'cat %s 2>/dev/null || true' % shlex.quote(
+            '%s/messages/%s/%s/stu.cursor' % (state, entity, thread)), 60)
+        cursor = json.loads(cursor) if cursor.strip() else {}
+        gate = json.loads(guest(self.vm, 'cat %s' % shlex.quote(state + '/turn-gate.json'), 60))
+        taken = cursor.get('through', 0) >= ends['stu'] or str(ends['stu']) in (cursor.get('accepted') or {})
+        filed = self.run_python(AGENT_TURNS, self.data + '/conversation-ledger.jsonl', thread)
+        evidence = {'saved_inbox_ends': ends, 'review_seeded': seeded, 'answers_before': before, 'answers_after': after,
+                    'reviews_before': reviews_before, 'reviews_after': reviews_after, 'stu_cursor': cursor,
+                    'stop_taken_by_the_team': taken, 'agent_turns_filed_in_the_ledger': filed,
+                    'turn_gate_record': gate, 'config': {k: v for k, v in self.config().items() if 'model' in k}}
+        (self.out / 'paused.json').write_text(json.dumps(evidence, indent=2) + '\n')
+        if after != before:
+            raise StepFailed('a model answered after the app was only opened and Settings changed: see paused.json')
+        if taken:
+            raise StepFailed('the saved Stop was taken from the team\'s inbox with nothing asked: see paused.json')
+        if filed:
+            raise StepFailed('the paused report was filed as a turn, which shows the chat as working: see paused.json')
+        if (reviews_after['locks'] or reviews_after['logs'] != reviews_before['logs'] or reviews_after['ledger'] != reviews_before['ledger']
+                or reviews_after['attempts'] != reviews_before['attempts'] or reviews_after['second_review_running']):
+            raise StepFailed('a review started or was recorded after the app was only opened: see paused.json')
+        if gate.get('open'):
+            raise StepFailed('the app let a turn through after it was only opened: ' + json.dumps(gate))
+        if self.config().get('stu_model') != 'fable':
+            raise StepFailed("the team's row did not go back to Fable: " + json.dumps(evidence['config']))
+        return evidence
+
     def closed(self):
         self.close_app()
+        if self.facts.get('review_seeded'):
+            self.run_python(UNSEED, self.data + '/engine-state')
         marker = 'closed-' + uuid.uuid4().hex[:12]
         self.report(marker)
         before = self.answers()
