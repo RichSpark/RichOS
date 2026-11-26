@@ -510,8 +510,7 @@ static CODEX_SINK: std::sync::OnceLock<richos_core::codex_watch::Sink> = std::sy
 /// nothing since, is not handed to Stu. It waits in its journal
 /// (`codex_bridge::accept_when_asked`).
 fn codex_sink(app: AppHandle) -> richos_core::codex_watch::Sink {
-    let asked: std::sync::OnceLock<richos_core::codex_bridge::Asked> = std::sync::OnceLock::new();
-    let opened_at = richos_core::util::now_millis();
+    let asked = richos_core::codex_bridge::Asked::at_launch(&richos_core::codex_bridge::root());
     Arc::new(move |line:&str| {
         let state=app.try_state::<AppState>().ok_or("the app is still starting")?;
         let event:serde_json::Value=serde_json::from_str(line).map_err(|e|e.to_string())?;
@@ -559,9 +558,7 @@ fn codex_sink(app: AppHandle) -> richos_core::codex_watch::Sink {
         }
         let binding=view.ledger().thread_binding(thread).map_err(|e|e.to_string())?;
         if !view.entity_registry().contains(binding.entity_id()) {return Err("channel company is no longer registered".into())}
-        let asked = asked.get_or_init(|| richos_core::codex_bridge::Asked::since(
-            state.data_dir.join("conversation-ledger.jsonl"), opened_at));
-        richos_core::codex_bridge::accept_when_asked(&state_root,&binding,&event,&coordination,asked)
+        richos_core::codex_bridge::accept_when_asked(&state_root,&binding,&event,&coordination,&asked)
     })
 }
 

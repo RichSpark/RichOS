@@ -170,68 +170,64 @@ pub fn accept(
     Ok(())
 }
 
-/// **Which conversations the user has asked something in since the app opened**, read from the
-/// conversation ledger: a `PromptReceived` row written at or after `since_ms` whose source is
+/// **What the app knew when it opened, and which conversations the user has asked something in
+/// since**, read from the conversation ledger: a `PromptReceived` row written after that whose source is
 /// his own words (`text` or `jam`), by whichever road they came (the composer, the phone,
 /// voice). An agent's message, a re-prime and Rich speaking unprompted are not his asking.
 ///
 /// The first look reads the ledger once; every later one reads only what was appended since, so
 /// a look costs nothing while nothing was written. Once a conversation is in, it stays in.
 pub struct Asked {
-    ledger: PathBuf,
     since_ms: u64,
     read: std::sync::Mutex<(u64, std::collections::HashSet<String>)>,
     /// How long each connection's journal was when the app opened ([`Self::written_before`]).
-    journals: std::sync::Mutex<Option<std::collections::HashMap<PathBuf, u64>>>,
+    journals: std::collections::HashMap<PathBuf, u64>,
 }
 
 impl Asked {
-    /// `since_ms` is when the app opened.
-    pub fn since(ledger: PathBuf, since_ms: u64) -> Self {
-        Self { ledger, since_ms, read: std::sync::Mutex::new((0, Default::default())), journals: Default::default() }
+    /// **The app is opening now.** The journals carry no clock, so how long each one is at this
+    /// moment is what tells a report from before from one written while the app is open: a few
+    /// dozen `stat` calls, once.
+    pub fn at_launch(coordination: &Path) -> Self {
+        let mut journals = std::collections::HashMap::new();
+        let mut folders = vec![coordination.join("connections")];
+        // connections/<company>/<conversation>/<connection>/to-rich.jsonl
+        for _ in 0..3 {
+            folders = folders.iter().filter_map(|folder| std::fs::read_dir(folder).ok())
+                .flat_map(|entries| entries.flatten().map(|entry| entry.path())).collect();
+        }
+        for folder in folders {
+            let journal = folder.join(JOURNAL);
+            if let (Ok(length), Ok(journal)) = (std::fs::metadata(&journal).map(|file| file.len()), journal.canonicalize()) {
+                journals.insert(journal, length);
+            }
+        }
+        Self { since_ms: crate::util::now_millis(), read: std::sync::Mutex::new((0, Default::default())), journals }
     }
 
-    /// **Was this report already in its journal when the app opened?** The journals carry no
-    /// clock, so their lengths are read once, at the watcher's first offer after launch (its
-    /// first scan), and a report that ends within that length was written before. A journal
-    /// that did not exist then, and the old Markdown channels' spool, hold nothing from before.
-    fn written_before(&self, coordination: &Path, event: &Value) -> bool {
-        let mut journals = self.journals.lock().unwrap();
-        let lengths = journals.get_or_insert_with(|| {
-            let mut lengths = std::collections::HashMap::new();
-            let mut folders = vec![coordination.join("connections")];
-            // connections/<company>/<conversation>/<connection>/to-rich.jsonl
-            for _ in 0..3 {
-                folders = folders.iter().filter_map(|folder| std::fs::read_dir(folder).ok())
-                    .flat_map(|entries| entries.flatten().map(|entry| entry.path())).collect();
-            }
-            for folder in folders {
-                let journal = folder.join(JOURNAL);
-                if let (Ok(length), Ok(journal)) = (std::fs::metadata(&journal).map(|file| file.len()), journal.canonicalize()) {
-                    lengths.insert(journal, length);
-                }
-            }
-            lengths
-        });
+    /// **Was this report already in its journal when the app opened?** One that ends within the
+    /// journal's length at that moment was. A journal that did not exist then, and the old
+    /// Markdown channels' spool, hold nothing from before.
+    fn written_before(&self, event: &Value) -> bool {
         if event["record"]["kind"].as_str().is_some_and(|kind| kind.starts_with("legacy_")) {
             return false;
         }
         let Some(journal) = event["locator"].as_str().and_then(|locator| Path::new(locator).join(JOURNAL).canonicalize().ok())
         else { return false };
-        match (lengths.get(&journal), event["through"].as_u64()) {
+        match (self.journals.get(&journal), event["through"].as_u64()) {
             (Some(length), Some(through)) => through <= *length,
             _ => false,
         }
     }
 
     /// An unreadable ledger answers no: the report waits and stays in its journal.
-    pub fn in_thread(&self, thread: &str) -> bool {
+    pub fn in_thread(&self, ledger: &Path, thread: &str) -> bool {
         use std::io::{BufRead, Seek, SeekFrom};
         let mut read = self.read.lock().unwrap();
         if read.1.contains(thread) {
             return true;
         }
-        let Ok(mut file) = std::fs::File::open(&self.ledger) else { return false };
+        let Ok(mut file) = std::fs::File::open(ledger) else { return false };
         let length = file.metadata().map(|file| file.len()).unwrap_or(0);
         // A ledger shorter than what was read was rewritten: read it again from its start.
         if length < read.0 {
@@ -291,7 +287,8 @@ fn has_open_job(state: &Path, binding: &crate::entity::ThreadBinding) -> bool {
 /// its journal when the app opened, for a conversation with no open job, in which the user has
 /// asked nothing since, is refused here and stays in that journal, where it already waited
 /// while the app was closed. The watcher offers it again at every scan, and the first offer
-/// after the user's next message in that conversation accepts it, in order.
+/// after the user's next message in that conversation accepts it, in order. `coordination` is
+/// the folder `asked` was made from.
 ///
 /// Nothing else changes: a report written while the app is open reaches Stu by itself, and so
 /// does one from before for a conversation whose job has not ended.
@@ -302,7 +299,9 @@ pub fn accept_when_asked(
     coordination: &Path,
     asked: &Asked,
 ) -> Result<(), String> {
-    if asked.written_before(coordination, event) && !asked.in_thread(binding.thread_id()) && !has_open_job(state, binding) {
+    // The app's conversation ledger sits beside its engine state (`work_host::verified_instruction`).
+    let ledger = state.parent().unwrap_or(state).join("conversation-ledger.jsonl");
+    if asked.written_before(event) && !asked.in_thread(&ledger, binding.thread_id()) && !has_open_job(state, binding) {
         return Err(WAITS_FOR_THE_USER.into());
     }
     accept(state, binding, event, coordination)
@@ -442,7 +441,7 @@ mod tests {
                 std::env::temp_dir().join(format!("richos-channel-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&root).unwrap();
             let root = root.canonicalize().unwrap();
-            let mut ledger = crate::ledger::Ledger::open(root.join("ledger.jsonl")).unwrap();
+            let mut ledger = crate::ledger::Ledger::open(root.join("conversation-ledger.jsonl")).unwrap();
             let thread = ledger
                 .create_thread("Same title", &crate::EntityId::parse("company-a").unwrap())
                 .unwrap();
@@ -525,11 +524,11 @@ mod tests {
         std::fs::write(Path::new(f.event["locator"].as_str().unwrap()).join(JOURNAL), [b'\n'; 100]).unwrap();
         // The ledger's clock is in milliseconds: what was written before is strictly earlier.
         std::thread::sleep(std::time::Duration::from_millis(3));
-        Asked::since(f.root.join("ledger.jsonl"), crate::util::now_millis())
+        Asked::at_launch(&f.coord)
     }
 
     fn prompt(f: &Fixture, text: &str, source: crate::ledger::Source) {
-        let mut ledger = crate::ledger::Ledger::open(f.root.join("ledger.jsonl")).unwrap();
+        let mut ledger = crate::ledger::Ledger::open(f.root.join("conversation-ledger.jsonl")).unwrap();
         ledger.record_prompt_received(&f.binding, text, source).unwrap();
     }
 
@@ -568,12 +567,12 @@ mod tests {
     fn asking_in_one_chat_releases_no_other_chats_reports() {
         let f = Fixture::new();
         let asked = opened(&f);
-        let mut ledger = crate::ledger::Ledger::open(f.root.join("ledger.jsonl")).unwrap();
+        let mut ledger = crate::ledger::Ledger::open(f.root.join("conversation-ledger.jsonl")).unwrap();
         let other = ledger.create_thread("Another chat", &crate::EntityId::parse("company-a").unwrap()).unwrap();
         let other = ledger.thread_binding(&other).unwrap();
         ledger.record_prompt_received(&other, "Hello", crate::ledger::Source::Jam).unwrap();
         drop(ledger);
-        assert!(asked.in_thread(other.thread_id()), "his spoken words were not read as asking");
+        assert!(asked.in_thread(&f.root.join("conversation-ledger.jsonl"), other.thread_id()), "his spoken words were not read as asking");
         assert_eq!(
             accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap_err(),
             WAITS_FOR_THE_USER
@@ -808,7 +807,7 @@ mod tests {
         let root = PathBuf::from(root);
         let event: Value =
             serde_json::from_slice(&std::fs::read(root.join("event.json")).unwrap()).unwrap();
-        let ledger = crate::ledger::Ledger::open(root.join("ledger.jsonl")).unwrap();
+        let ledger = crate::ledger::Ledger::open(root.join("conversation-ledger.jsonl")).unwrap();
         let binding = ledger
             .thread_binding(event["connection"]["thread_id"].as_str().unwrap())
             .unwrap();
