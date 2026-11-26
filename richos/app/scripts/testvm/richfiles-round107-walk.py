@@ -4,7 +4,7 @@
 Run it as the command of run-walk.py --no-app with a packaged standalone RichFiles zip:
 
   run-walk.py --no-app --home EMPTY_DIR --engine NONE --report REPORT.json -- \\
-      richfiles-round107-walk.py --standalone-zip RichFiles.zip --out DIR [--themes daybreak,sovereign]
+      richfiles-round107-walk.py --standalone-zip RichFiles.zip --out DIR [--themes daybreak,sovereign] [--fixes]
 
 It installs the app in the guest, builds a fixture folder with the mockup's names (129 items, so
 the List view scrolls sideways) and a seven-level folder tree on the guest's Desktop, then for
@@ -14,9 +14,16 @@ accessibility tree. Every check is recorded in DIR/checks.json and every look in
 a failed check is recorded and the walk goes on, so one guest gives the whole picture. The
 app is quit by its own Apple Event at the end and the walk confirms the process is gone.
 Nothing plays sound and nothing runs on this Mac's screen.
+
+--fixes walks only the handover review's fixes instead (2026-11-26): clicking another file to
+finish a rename leaves that file selected, Down cancels a pending click, pause, click rename,
+Undo Rename keeps the open sidebar branches open, the Open With submenu shows app icons, and the
+chooser's Open button and the selected line under the pointer clear their contrast floors,
+measured from the guest's own screen pixels.
 """
 import argparse
 import json
+from statistics import median
 from pathlib import Path
 import shlex
 import subprocess
@@ -475,6 +482,188 @@ class Walk:
         if not self.quit():
             self.record(f"{t}: RichFiles quit", False)
 
+    # -- the handover review's fixes (--fixes) ------------------------------------------------
+    def image(self, name):
+        from PIL import Image
+        with Image.open(self.out / f"{name}.png") as picture:
+            picture = picture.convert("RGB")
+        # The accessibility tree is in points; the capture may be at a higher scale. The screen's
+        # width in points comes from AppKit (JXA), which needs no Apple Event to another app.
+        code, text = self.guest("osascript -l JavaScript -e " + shlex.quote(
+            'ObjC.import("AppKit"); $.NSScreen.mainScreen.frame.size.width'))
+        try:
+            width = float(text.strip().splitlines()[-1]) if code == 0 else picture.width
+        except (ValueError, IndexError):
+            width = picture.width
+        return picture, picture.width / width
+
+    @staticmethod
+    def luminance(rgb):
+        linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in (v / 255 for v in rgb)]
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+    @classmethod
+    def contrast(cls, a, b):
+        high, low = sorted((cls.luminance(a), cls.luminance(b)), reverse=True)
+        return (high + 0.05) / (low + 0.05)
+
+    @staticmethod
+    def median_color(picture, box):
+        pixels = list(picture.crop(tuple(round(v) for v in box)).getdata())
+        return tuple(round(median(channel)) for channel in zip(*pixels))
+
+    def selected_copy(self):
+        """Ctrl+C, Ctrl+V duplicates whatever is selected: the new copy's name says which item that is."""
+        before = {n for n in self.ls() if " - Copy" in n}
+        self.keystroke("c", CONTROL)
+        time.sleep(0.4)
+        self.keystroke("v", CONTROL)
+        for _ in range(30):
+            made = {n for n in self.ls() if " - Copy" in n} - before
+            if made:
+                return made
+            time.sleep(0.5)
+        return set()
+
+    def fixes(self, theme):
+        t = theme
+        self.launch(theme)
+
+        # Fix 1: clicking another file finishes an inline rename and leaves THAT file selected.
+        self.click(*self.name_point(self.node("test1.txt")))
+        time.sleep(0.6)
+        self.key(120)
+        time.sleep(1.0)
+        self.keystroke("renamed-one")
+        time.sleep(0.4)
+        self.click(*self.name_point(self.node("todo.txt")))
+        time.sleep(2.0)
+        self.shot(f"{t}-fix1-click-finishes-rename")
+        self.record(f"{t}: clicking todo.txt saved the rename", "renamed-one.txt" in self.ls())
+        made = self.selected_copy()
+        self.record(f"{t}: the clicked file (todo.txt) stays selected after the rename is saved",
+                    made == {"todo - Copy.txt"}, "Ctrl+C, Ctrl+V made " + (", ".join(sorted(made)) or "nothing"))
+
+        # Fix 2: click, pause, click, then Down before the box opens: no box, the selection moved.
+        # The box opens one double-click interval (0.5 s) after the second click. A key sent by a
+        # separate command lands later than that, so Down is pressed 0.1 s after the button comes
+        # up by the same guest process (pointer-drag.sh --then-key). An open box would take
+        # Ctrl+C, Ctrl+V as text, so a file copy proves there is none.
+        readme = self.node("readme.txt")
+        x, y = self.name_point(readme)
+        self.click(x, y)
+        time.sleep(1.5)
+        self.pointer(f"{x},{y}", f"{x},{y}", "--then-key", "125", "--then-after", "0.1")
+        time.sleep(2.0)
+        self.shot(f"{t}-fix2-down-cancels-pending-rename")
+        made = self.selected_copy()
+        self.record(f"{t}: Down before the name box opened canceled it and the selection stayed moved",
+                    len(made) == 1 and "readme - Copy.txt" not in made,
+                    "Down 0.1 s after the second click; Ctrl+C, Ctrl+V made " + (", ".join(sorted(made)) or "nothing"))
+
+        # Fix 5: the Open With submenu shows each app's icon beside its name.
+        html = self.node("landing-page-v1.html")
+        self.right(*self.name_point(html))
+        time.sleep(1.0)
+        open_with = self.node("Open With", "--role", "AXMenuItem")
+        if open_with:
+            self.pointer("%d,%d" % self.center(open_with), "--hover")
+            time.sleep(1.2)
+            # The icons are a look, judged on this screenshot: app icons vary too much (a white
+            # TextEdit page, a dark Safari compass) for a pixel rule to tell an icon from a name.
+            self.shot(f"{t}-fix5-open-with-icons")
+            another = self.node("Choose Another App…", "--role", "AXMenuItem")
+            apps = [n.get("title") for n in self.nodes("--role", "AXMenuItem")
+                    if another and abs(n["x"] - another["x"]) < 4 and n["y"] < another["y"] - 4 and n.get("title")]
+            self.record(f"{t}: Open With lists the apps (their icons are in the screenshot)", bool(apps), ", ".join(apps))
+            # Fix 4: the chooser's Open button clears 4.5:1 for its label.
+            if another:
+                self.pointer("%d,%d" % (another["x"] + 10, another["y"] + another["h"] // 2), "--hover")
+                time.sleep(0.4)
+                self.click(*self.center(another))
+                time.sleep(2.5)
+                # Open is enabled once the chooser has found the apps and selected the default
+                # one; disabled, it is drawn at half strength (an exempt, inactive control).
+                button = None
+                for _ in range(20):
+                    button = self.node("Open", "--role", "AXButton")
+                    if button and button.get("enabled") is True:
+                        break
+                    time.sleep(1)
+                self.shot(f"{t}-fix4-chooser-open-button")
+                if button and button.get("enabled") is not True:
+                    self.record(f"{t}: the chooser's Open button became enabled", False, repr(button.get("enabled")))
+                if button:
+                    picture, scale = self.image(f"{t}-fix4-chooser-open-button")
+                    x, y, w, h = (button[k] * scale for k in ("x", "y", "w", "h"))
+                    fill = self.median_color(picture, (x + 4, y + 4, x + 12, y + h - 4))
+                    label = picture.crop(tuple(round(v) for v in (x + 14, y + 6, x + w - 14, y + h - 6))).getdata()
+                    ink = max(label, key=lambda p: self.contrast(p, fill))
+                    ratio = self.contrast(ink, fill)
+                    self.record(f"{t}: the chooser's Open label clears 4.5:1 on its fill", ratio >= 4.5,
+                                f"fill {fill}, label {ink}, {ratio:.2f}:1")
+                else:
+                    self.record(f"{t}: the chooser's Open button was found", False)
+                self.key(53)
+                time.sleep(0.8)
+        else:
+            self.record(f"{t}: the right-click menu has Open With", False)
+            self.key(53)
+
+        # Fix 6: the selected item's 1 px line under the pointer clears 3:1 against its fill.
+        item = self.node("yet another test file.txt")
+        self.click(*self.name_point(item))
+        time.sleep(0.6)
+        self.hover(*self.name_point(item))
+        time.sleep(0.3)
+        self.shot(f"{t}-fix6-selected-under-pointer")
+        picture, scale = self.image(f"{t}-fix6-selected-under-pointer")
+        x, y, w, h = (item[k] * scale for k in ("x", "y", "w", "h"))
+        inside = x + w - 10 * scale
+        fill = self.median_color(picture, (inside - 4 * scale, y + h / 2 - 2 * scale, inside, y + h / 2 + 2 * scale))
+        scan = [picture.getpixel((round(inside), round(y + h + d))) for d in range(-4, 5)] \
+            + [picture.getpixel((round(inside), round(y + d))) for d in range(-4, 5)]
+        line = max(scan, key=lambda p: self.contrast(p, fill))
+        ratio = self.contrast(line, fill)
+        self.record(f"{t}: the selected line under the pointer clears 3:1 against its fill", ratio >= 3,
+                    f"fill {fill}, line {line}, {ratio:.2f}:1")
+
+        # Fix 3: Undo Rename keeps the open sidebar branches open.
+        desktop = self.node("Open Desktop in the sidebar")
+        if desktop:
+            self.click(*self.center(desktop))
+            time.sleep(1.5)
+            for name in ("AI book", "cover design"):
+                arrow = self.node(f"Open {name} in the sidebar")
+                if arrow:
+                    self.click(*self.center(arrow))
+                    time.sleep(1.2)
+            self.click(*self.center(self.node("AI book")))
+            time.sleep(2.0)
+            rows = [n for n in self.nodes("--title", "cover design") if n["x"] > 270]
+            if rows:
+                self.click(*self.name_point(rows[0]))
+                time.sleep(0.6)
+                self.key(120)
+                time.sleep(1.0)
+                self.keystroke("cover art")
+                self.key(36)
+                time.sleep(2.5)
+                renamed = bool(self.node("Close cover art in the sidebar"))
+                self.keystroke("z", CONTROL)
+                time.sleep(2.5)
+                self.shot(f"{t}-fix3-undo-rename-keeps-branches-open")
+                self.record(f"{t}: after Undo Rename the folder and what is open inside stay open in the sidebar",
+                            renamed and bool(self.node("Close cover design in the sidebar"))
+                            and bool(self.node("book cover complete set")),
+                            f"open after rename {renamed}")
+            else:
+                self.record(f"{t}: cover design is listed on the right", False)
+        else:
+            self.record(f"{t}: Desktop has an arrow", False)
+        if not self.quit():
+            self.record(f"{t}: RichFiles quit", False)
+
     def window_title(self):
         code, text = self.guest("osascript -e " + shlex.quote(
             'tell application "System Events" to tell process "RichFiles" to get name of window 1'))
@@ -494,6 +683,7 @@ def main():
     parser.add_argument("--standalone-zip", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--themes", default="daybreak,sovereign", help="RichFiles themes to walk, in order")
+    parser.add_argument("--fixes", action="store_true", help="walk only the handover review's fixes")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     walk = Walk(args.vm, args.out)
@@ -501,7 +691,7 @@ def main():
         walk.prepare(args.standalone_zip)
         for theme in args.themes.split(","):
             try:
-                walk.walk(theme)
+                (walk.fixes if args.fixes else walk.walk)(theme)
             except Exception as error:  # record and go on to the next theme
                 walk.record(f"{theme}: walk step raised", False, repr(error)[:300])
                 walk.quit()
