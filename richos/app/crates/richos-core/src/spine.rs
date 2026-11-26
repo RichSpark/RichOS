@@ -3184,9 +3184,12 @@ impl Spine {
                     // THE ONE RULE: an agent's message filed before the app opened stays in the
                     // intake log, not yet a turn in the ledger (where it would show its chat as
                     // working), until the user is active in its chat; this drain runs again at
-                    // every turn boundary. `deliver` asks the same rule of every turn.
+                    // every turn boundary. `deliver` asks the same rule of every turn. While it
+                    // waits, no later intake is marked drained: the mark covers every earlier
+                    // intake, in every chat, and would drop this one (as for a deferred Stop).
                     if source == Source::Agent && self.turn_gate.get().is_some_and(|gate| at < gate.since_ms()
                         && !gate.may_start(&binding, crate::turn_gate::Origin::FromBefore)) {
+                        deferred_stop = true;
                         continue;
                     }
                     let kept = (self.keep_intake_channel || source == Source::Agent).then_some(channel.as_str());

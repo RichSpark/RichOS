@@ -90,6 +90,48 @@ fn an_agents_message_left_in_the_intake_is_no_turn_until_the_user_speaks() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// **A held message is never lost** (review rv-20261126T151735Z-c45967b1-2484, finding 2): a
+/// report filed after it, while the app is open, is delivered by itself, and marking that one
+/// drained must not drop the held one, in memory or in the intake log on disk.
+#[test]
+fn a_report_delivered_while_open_never_drops_the_held_one_before_it() {
+    let (root, path) = opened();
+    let intake = root.join("intake.jsonl");
+    let mut ledger = Ledger::open(&path).unwrap();
+    let entity = EntityId::parse("femcboost").unwrap();
+    let thread = ledger.create_thread("fixture", &entity).unwrap();
+    drop(ledger);
+    let control = TurnControl::open(&intake).unwrap();
+    control.submit_agent_message(&thread, Some(entity.clone()), "{\"from\":\"stu\",\"text\":\"held from yesterday\"}", "stu", "peer:fixture:1").unwrap();
+    drop(control);
+    // load-bound: this only moves the millisecond clock past what was saved; host load makes the gap larger, never smaller.
+    std::thread::sleep(std::time::Duration::from_millis(3));
+
+    let mut spine = support::spine(Ledger::open(&path).unwrap());
+    let control = TurnControl::open(&intake).unwrap();
+    spine.set_turn_control(control.clone());
+    spine.set_turn_gate(Arc::new(TurnGate::at_launch(&root.join("engine-state"))));
+    let mock = MockCognition::new("after-launch", vec!["Seen", "Answered", "Noted"]);
+    let prompts = mock.prompts.clone();
+    spine.switch_thread(&thread).unwrap();
+    spine.attach_lease(Box::new(mock));
+    control.submit_agent_message(&thread, Some(entity), "{\"from\":\"stu\",\"text\":\"written while open\"}", "stu", "peer:fixture:2").unwrap();
+    spine.reconcile_intake().unwrap();
+    assert_eq!(prompts.lock().unwrap().len(), 1, "the report written while open did not go by itself");
+    assert!(prompts.lock().unwrap()[0].contains("written while open"));
+    let held = |records: Vec<richos_core::steering::IntakeRecord>| records.iter().any(|record| matches!(record,
+        richos_core::steering::IntakeRecord::Channel { text, .. } if text.contains("held from yesterday")));
+    assert!(held(control.pending_intake()), "the held report was dropped from the intake in memory");
+    assert!(held(TurnControl::open(&intake).unwrap().pending_intake()), "the held report was dropped from the intake log on disk");
+
+    spine.submit_prompt("Anything from yesterday?", Source::Text).unwrap();
+    let sent = prompts.lock().unwrap().clone();
+    assert_eq!(sent.len(), 3, "after his words the held report did not follow: {sent:?}");
+    assert!(sent[2].contains("held from yesterday"));
+    drop(spine);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// The user's own turn that was running when the app ended (an update restart, a crash, a
 /// quit mid-turn) is a job actually running: it is picked up again at launch, as before.
 #[test]
