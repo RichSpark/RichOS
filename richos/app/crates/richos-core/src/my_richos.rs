@@ -80,20 +80,30 @@ pub fn record(source: &Source, worker: Option<&str>, from_result: bool, uses: &[
     lock(&shared().tokens).record(source, worker, from_result, uses, now);
 }
 
-/// The suite apps that run inside RichOS's own processes, by pid, as the host last found them
-/// (`suite_memory::Hosted`): read with the rest every two seconds while this is on.
-pub fn set_hosted(hosted: Vec<crate::suite_memory::Hosted>) {
-    if on() {
-        *lock(&shared().hosted) = hosted;
+/// How the host finds the suite apps that run inside RichOS's own processes, by pid
+/// (`suite_memory::Hosted`): given once as the app starts. The memory reader asks it itself, at
+/// most every [`HOSTED_EVERY_MS`], so the list stays current while the window is hidden and the
+/// page asks nothing (the second review, at c49c010d5: a RichBrief capture that started and ended
+/// with the chat window hidden was missing from its row and the total). Nothing asks it while
+/// the monitor is off.
+pub fn find_hosted_with(find: impl Fn() -> Vec<crate::suite_memory::Hosted> + Send + Sync + 'static) {
+    if HOSTED_FINDER.set(Box::new(find)).is_err() {
+        eprintln!("[richos] My RichOS was given a second way to find the hosted apps; the first is kept.");
     }
 }
+
+/// How often the memory reader finds the hosted apps' processes again: a panel or a capture that
+/// opens is in its row within this, and finding them costs a call on the main thread.
+const HOSTED_EVERY_MS: u64 = if cfg!(test) { 50 } else { 10_000 };
+
+type HostedFinder = Box<dyn Fn() -> Vec<crate::suite_memory::Hosted> + Send + Sync>;
+static HOSTED_FINDER: OnceLock<HostedFinder> = OnceLock::new();
 
 // ---- turning it on and off -------------------------------------------------------------------
 
 struct Shared {
     tokens: Mutex<Tokens>,
     memory: Mutex<Memory>,
-    hosted: Mutex<Vec<crate::suite_memory::Hosted>>,
     /// The sampler's generation: a thread whose generation is no longer this one ends.
     sampler: Mutex<u64>,
     wake: Condvar,
@@ -104,7 +114,6 @@ fn shared() -> &'static Shared {
     SHARED.get_or_init(|| Shared {
         tokens: Mutex::new(Tokens::default()),
         memory: Mutex::new(Memory::default()),
-        hosted: Mutex::new(Vec::new()),
         sampler: Mutex::new(0),
         wake: Condvar::new(),
     })
@@ -128,7 +137,6 @@ pub fn set_on(next: bool, state_root: &Path) {
     let now = crate::util::now_millis();
     *lock(&s.tokens) = Tokens { since: now, ..Tokens::default() };
     *lock(&s.memory) = Memory::default();
-    lock(&s.hosted).clear();
     s.wake.notify_all();
     if next {
         start_sampler(*generation, state_root.to_path_buf());
@@ -152,9 +160,16 @@ fn start_sampler(generation: u64, state_root: PathBuf) {
         let s = shared();
         let mut live = crate::suite_memory::Live::new(&state_root);
         let total = crate::system_resources::memory_total_bytes();
+        let mut hosted = Vec::new();
+        let mut hosted_at: Option<u64> = None;
         loop {
             let now = crate::util::now_millis();
-            let hosted = lock(&s.hosted).clone();
+            if hosted_at.is_none_or(|at| now.saturating_sub(at) >= HOSTED_EVERY_MS) {
+                hosted_at = Some(now);
+                if let Some(find) = HOSTED_FINDER.get() {
+                    hosted = find();
+                }
+            }
             let reading = live.sample(now as i64, &hosted);
             {
                 // Published only by the generation that took it: a reading taken just before the
@@ -950,6 +965,26 @@ mod tests {
         assert_eq!(*lock(&shared().sampler), 0, "no sampler was ever started while off");
         assert!(lock(&shared().tokens).recent.is_empty(), "a frame was counted while off");
 
+        // The host's finder for the hosted apps: a RichBrief capture whose helper is this
+        // process, open while `CAPTURING` holds. Nobody asks the host's command for a view of it
+        // (the window is hidden): the memory reader finds the processes itself.
+        static CAPTURING: AtomicBool = AtomicBool::new(true);
+        static ASKED: AtomicUsize = AtomicUsize::new(0);
+        static ASKED_ELSEWHERE: AtomicUsize = AtomicUsize::new(0);
+        find_hosted_with(|| {
+            ASKED.fetch_add(1, Ordering::SeqCst);
+            if std::thread::current().name() != Some("my-richos-memory") {
+                ASKED_ELSEWHERE.fetch_add(1, Ordering::SeqCst);
+            }
+            let helpers = if CAPTURING.load(Ordering::SeqCst) { vec![std::process::id() as i32] } else { Vec::new() };
+            vec![crate::suite_memory::Hosted { id: "richbrief", web: Vec::new(), helpers }]
+        });
+        assert_eq!(ASKED.load(Ordering::SeqCst), 0, "the hosted apps were looked for while off");
+        let brief = || {
+            let i = crate::suite_memory::apps().iter().position(|(id, _)| *id == "richbrief").unwrap();
+            lock(&shared().memory).readings.back().map(|r| r.processes[i])
+        };
+
         set_on(true, &root);
         record(&source, None, false, &[use_of("on_1", "claude-fable-5-1", 100, 0, 0)]);
         let v = view(true, None);
@@ -959,6 +994,13 @@ mod tests {
         // the sampler takes its first reading at once: waited for as a fact, never a time
         wait_until(|| view(true, None).memory.unwrap().status != "measuring");
         assert_eq!(SAMPLERS.load(Ordering::SeqCst), 1, "one memory reader while on");
+        // #memory: a capture open while the window is hidden is in its row, and one that ends is
+        // gone from it, from the reader's own lookups (the second review, at c49c010d5).
+        wait_until(|| brief().is_some_and(|n| n > 0));
+        CAPTURING.store(false, Ordering::SeqCst);
+        wait_until(|| brief() == Some(0));
+        assert!(ASKED.load(Ordering::SeqCst) >= 2, "the hosted apps were not looked for again");
+        assert_eq!(ASKED_ELSEWHERE.load(Ordering::SeqCst), 0, "the hosted apps were looked for outside the memory reader");
 
         set_on(false, &root);
         assert!(!view(true, None).on);
@@ -969,6 +1011,10 @@ mod tests {
         // the sampler thread ends, and nothing it read after off was kept
         wait_until(|| SAMPLERS.load(Ordering::SeqCst) == 0);
         assert!(lock(&shared().memory).readings.is_empty(), "the sampler kept a reading after off");
+        let asked = ASKED.load(Ordering::SeqCst);
+        record(&source, None, false, &[use_of("off_3", "claude-fable-5-1", 100, 0, 0)]);
+        assert!(!view(true, None).on);
+        assert_eq!(ASKED.load(Ordering::SeqCst), asked, "the hosted apps were looked for after off");
         assert!(!root.exists(), "the monitor wrote to the engine state");
     }
 

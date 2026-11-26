@@ -4321,6 +4321,7 @@ fn main() {
                 question_host::start(app.clone());
                 swearmeter_host::start(app.clone());
                 rich_files_host::start(app.clone());
+                my_richos_host::start(app.clone());
                 #[cfg(target_os = "macos")]
                 {
                     app.manage(Arc::new(writing_host::Host::default()));

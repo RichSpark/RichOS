@@ -24,31 +24,17 @@ pub fn set_richos_monitor(state: State<crate::AppState>, show: bool) -> Result<(
 /// once a second while it is on and the window is visible). Answers `on: false` and nothing else
 /// while it is off.
 #[richos_command::command]
-pub fn richos_monitor(app: tauri::AppHandle, card: Option<bool>, detail: Option<Detail>) -> View {
-    let view = my_richos::view(card.unwrap_or(false), detail);
-    if view.on {
-        refresh_hosted(&app);
-    }
-    view
+pub fn richos_monitor(card: Option<bool>, detail: Option<Detail>) -> View {
+    my_richos::view(card.unwrap_or(false), detail)
 }
 
-/// The suite apps that run inside RichOS's processes, found again at most every
-/// [`HOSTED_EVERY_MS`]: RichCleaner's and RichBrief's panels have web processes of their own (when
-/// one shares the conversation window's, it is RichOS's and is not moved), and RichBrief's capture
-/// companion its own processes. The memory reader reads them with the rest.
-const HOSTED_EVERY_MS: u64 = 10_000;
-
-fn refresh_hosted(app: &tauri::AppHandle) {
-    static LAST: Mutex<u64> = Mutex::new(0);
-    let now = richos_core::util::now_millis();
-    {
-        let mut last = LAST.lock().unwrap_or_else(|p| p.into_inner());
-        if now.saturating_sub(*last) < HOSTED_EVERY_MS {
-            return;
-        }
-        *last = now;
-    }
-    my_richos::set_hosted(hosted(app));
+/// Tell the memory reader how to find the suite apps that run inside RichOS's processes:
+/// RichCleaner's and RichBrief's panels have web processes of their own (when one shares the
+/// conversation window's, it is RichOS's and is not moved), and RichBrief's capture companion its
+/// own processes. The reader asks while it runs, also while the window is hidden and the page
+/// asks nothing, and never while the monitor is off.
+pub fn start(app: tauri::AppHandle) {
+    my_richos::find_hosted_with(move || hosted(&app));
 }
 
 #[cfg(target_os = "macos")]
