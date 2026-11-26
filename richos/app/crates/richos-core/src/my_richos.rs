@@ -581,9 +581,19 @@ impl Memory {
         Some(sum)
     }
 
+    /// The last two minutes on their own clock: one place per reading interval, oldest first, the
+    /// newest reading last. A stretch with no reading (before the switch was on, or a missed one)
+    /// stays `None`, so a short history sits at the right-hand end of the two minutes instead of
+    /// being stretched across them, the way the all-together graph draws it.
     fn line(&self, now: u64, value: impl Fn(&Reading) -> Option<i64>) -> AppLine {
-        let hist: Vec<Option<i64>> = self.readings.iter().filter(|r| now.saturating_sub(r.at) < MEMORY_WINDOW_MS).map(&value).collect();
-        let known: Vec<i64> = hist.iter().flatten().copied().collect();
+        const SLOTS: u64 = MEMORY_WINDOW_MS / MEMORY_EVERY_MS;
+        let mut hist: Vec<Option<i64>> = vec![None; SLOTS as usize];
+        let mut known: Vec<i64> = Vec::new();
+        for r in self.readings.iter().filter(|r| now.saturating_sub(r.at) < MEMORY_WINDOW_MS) {
+            let v = value(r);
+            hist[(SLOTS - 1 - now.saturating_sub(r.at) / MEMORY_EVERY_MS) as usize] = v;
+            known.extend(v);
+        }
         AppLine {
             now: self.readings.back().and_then(&value),
             avg: (!known.is_empty()).then(|| known.iter().sum::<i64>() / known.len() as i64),
@@ -901,9 +911,31 @@ mod tests {
         // three minutes on, the 2-minute figures hold only the last two minutes
         m.push(T0 + 184_000, Ok(apps(Some(4_000), 200)), None);
         let v = m.view(T0 + 184_000, None);
-        assert_eq!((v.all.now, v.all.avg, v.all.hist.len()), (Some(4_200), Some(4_200), 1));
+        assert_eq!((v.all.now, v.all.avg, v.all.hist.len()), (Some(4_200), Some(4_200), 60));
+        assert_eq!((v.all.hist[59], v.all.hist.iter().flatten().count()), (Some(4_200), 1));
         m.push(T0 + 186_000, Err("process list unavailable".into()), None);
         assert_eq!(m.view(T0 + 186_000, None).status, "unavailable");
+    }
+
+    /// Half a minute of readings is the last half minute of the two-minute line, never stretched
+    /// across the whole of it (each app's graph and the all-together one keep one time scale).
+    #[test]
+    fn an_apps_short_history_sits_at_the_end_of_its_two_minutes() {
+        let mut m = Memory::default();
+        let apps = |bytes: i64| -> Vec<crate::suite_memory::LiveApp> {
+            crate::suite_memory::apps()
+                .iter()
+                .map(|(id, app)| crate::suite_memory::LiveApp { id, app, bytes: Some(bytes), processes: i64::from(*id == "richos"), within: None })
+                .collect()
+        };
+        for k in 0..15u64 {
+            m.push(T0 + k * MEMORY_EVERY_MS, Ok(apps(100 + k as i64)), None);
+        }
+        let now = T0 + 14 * MEMORY_EVERY_MS;
+        let hist = &m.view(now, None).apps[0].line.hist;
+        assert_eq!(hist.len(), 60, "two minutes, one place every two seconds");
+        assert!(hist[..45].iter().all(Option::is_none), "nothing drawn before the switch was on");
+        assert_eq!((hist[45], hist[59]), (Some(100), Some(114)));
     }
 
     /// The one test of the process-wide switch (the others use their own stores).
