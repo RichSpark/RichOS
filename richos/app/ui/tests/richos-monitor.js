@@ -312,6 +312,31 @@ async function main() {
     await page.click("#nr-finder");
     await page.waitForFunction(() => window.RichosMonitor.state().sheet === null);
     await page.keyboard.press("Escape");
+    // ... for My Mac, and for Command-K
+    await page.evaluate(() => window.RichosMonitor.openSheet("memory"));
+    await page.waitForFunction(() => window.RichosMonitor.state().sheet === "memory");
+    await page.click("#res-square");
+    await page.waitForFunction(() => window.RichosMonitor.state().sheet === null);
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => window.RichosMonitor.openSheet("tokens"));
+    await page.waitForFunction(() => window.RichosMonitor.state().sheet === "tokens");
+    await page.keyboard.press("Meta+K");
+    await page.waitForFunction(() => window.RichosMonitor.state().sheet === null);
+    await page.keyboard.press("Escape");
+    // Bust a bug reports the screen as it is: the details are still there when the report starts
+    await page.evaluate(() => window.RichosMonitor.openSheet("tokens"));
+    await page.waitForFunction(() => window.RichosMonitor.state().sheet === "tokens");
+    const seen = await page.evaluate(() => {
+      const real = window.RichSettings.bustABug;
+      let at = "not started";
+      window.RichSettings.bustABug = () => { at = String(window.RichosMonitor.state().sheet); };
+      document.getElementById("nr-bug").click();
+      window.RichSettings.bustABug = real;
+      return at;
+    });
+    assertEqual(seen, "tokens", "Bust a bug started after the details were closed, so its picture loses them");
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => window.RichosMonitor.state().sheet === null);
   });
 
   await run.check("contrast, dark: the rail's figure, the card and the details clear WCAG AA", async () => {

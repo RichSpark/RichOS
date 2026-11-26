@@ -641,10 +641,17 @@
     });
     window.addEventListener("resize", () => { if (cardOpen()) place(); if (sheetOpen()) paintSheet(); });
     for (const sec of card.querySelectorAll(".rom-sec")) sec.addEventListener("click", () => openSheet(sec.dataset.go));
-    // A press on any rail item goes where the item goes: the details step aside first (RichFinder
-    // opens behind their scrim otherwise). Capture, so it runs before the item's own handler.
+    // A press on a rail item or My Mac goes where it goes: the details step aside first (what it
+    // opens would sit behind their scrim otherwise). Capture, so it runs before the item's own
+    // handler. As nav-rail.js's clearForRail: Bust a bug reports the screen as it is, Settings
+    // opens over anything and RichCleaner is another window, so the details stay for those.
     btn.closest("nav").addEventListener("click", (e) => {
-      if (sheetOpen() && e.target.closest(".nr-item")) closeSheet();
+      const hit = sheetOpen() && e.target.closest(".nr-item, #res-square");
+      if (hit && !["bug", "me", "cleaner"].includes(hit.dataset.item)) closeSheet();
+    }, true);
+    // Command-K opens RichFinder from anywhere: the details step aside for it too.
+    document.addEventListener("keydown", (e) => {
+      if (sheetOpen() && (e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) closeSheet();
     }, true);
 
     scrim.addEventListener("click", closeSheet);
