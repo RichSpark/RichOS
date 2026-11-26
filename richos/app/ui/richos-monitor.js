@@ -250,10 +250,11 @@
     el.textContent = R.active ? "Using tokens" : "Idle";
   }
   /// RichFinder and RichPass are pages in RichOS's own window: their memory is in RichOS's figure.
-  const IN_RICHOS = "In RichOS";
+  /// RichPass is a document in his browser: its memory is the browser's, which RichOS does not read.
+  const within = (a) => (a.within === "browser" ? "In your browser" : "In RichOS");
   /// Each suite app as the memory reading names it, open or not.
   function apps() {
-    return ((M && M.apps) || []).map((a) => ({ id: a.id, name: a.name, open: a.processes > 0 || !!a.within, within: a.within || null, now: a.now, avg: a.avg, peak: a.peak, hist: a.hist || [] }));
+    return ((M && M.apps) || []).map((a) => ({ id: a.id, name: a.name, open: a.processes > 0 || a.within === "richos", within: a.within || null, now: a.now, avg: a.avg, peak: a.peak, hist: a.hist || [] }));
   }
   let lastWins = "", lastApps = "";
   function paintCard() {
@@ -267,6 +268,9 @@
     const wins =
       '<i></i><i>Speed</i><i>Used</i>' + row("Last minute", R.m1, 1) + row("Last 5 minutes", R.m5, 5) + row("Last 15 minutes", R.m15, 15);
     if (wins !== lastWins) { $("wins").innerHTML = wins; lastWins = wins; }
+    // What the token half shows, in its name, for VoiceOver (the figures sit inside the button).
+    speak(card.querySelector('[data-go="tokens"]'), "Tokens: " + tokens(R.m1) + " tokens a minute. Last minute " + tokens(R.m1) + " used, last 5 minutes " +
+      tokens(R.m5) + ", last 15 minutes " + tokens(R.m15) + ". Open the details");
     $("age").textContent = R.active ? "Updated just now" : ago(R.idleFor);
     if (!M) return;
     $("mem-now").textContent = ram(M.all.now);
@@ -277,13 +281,18 @@
     const html = list
       .map((a) =>
         a.within
-          ? '<span>' + esc(a.name) + '</span><span></span><span class="is-off">' + IN_RICHOS + "</span>"
+          ? '<span>' + esc(a.name) + '</span><span></span><span class="is-off">' + within(a) + "</span>"
           : a.open
           ? "<span>" + esc(a.name) + '</span><span class="rom-bar"><i style="width:' + Math.max(2, ((a.now || 0) / top) * 100).toFixed(1) + '%"></i></span><b>' + ram(a.now) + "</b>"
           : '<span class="is-off">' + esc(a.name) + '</span><span></span><span class="is-off">Not open</span>'
       )
       .join("");
     if (html !== lastApps) { $("apps").innerHTML = html; lastApps = html; }
+    speak(card.querySelector('[data-go="memory"]'), "Memory, all RichOS apps: " + ram(M.all.now) + " now, 2-minute average " + ram(M.all.avg) + ". " +
+      list.map((a) => a.name + " " + (a.within ? within(a) : a.open ? ram(a.now) : "not open")).join(", ") + ". Open the details");
+  }
+  function speak(el, words) {
+    if (el.getAttribute("aria-label") !== words) el.setAttribute("aria-label", words);
   }
 
   // open, pin, close: the Mac square's own behavior (`resources.js`), with SwearMeter's card rules
@@ -293,6 +302,11 @@
     card.style.left = Math.round(r.right + 14) + "px";
     card.style.top = "auto";
     card.style.bottom = Math.round(window.innerHeight - foot) + "px";
+    // Never taller than the window above its foot: in a short window it scrolls inside.
+    const room = Math.max(160, foot - 10);
+    card.style.maxHeight = room + "px";
+    // Scrolling only when it has to: a scrolling card clips its arrow, which a card that fits keeps.
+    card.style.overflowY = card.scrollHeight > room ? "auto" : "";
     card.style.setProperty("--res-arrow", Math.round(Math.max(10, foot - (r.top + r.height / 2) - 6)) + "px");
   }
   function sync() {
@@ -334,10 +348,21 @@
   const ICONS = { richscribe: "richscribe", richbrief: "richbrief", richfiles: "richfiles", richglance: "richglance", richfinder: "richfinder", richpass: "richpass", richcleaner: "richcleaner", "richglance-capture": "richglance", "window-gestures": "richfiles" };
   const ICON = (id) =>
     id === "richos"
-      ? '<svg class="rom-ico rom-ico-r" viewBox="-130 -125 1004 1004" aria-hidden="true"><use href="#R" fill="currentColor"/><use href="#arrow"/></svg>'
+      ? '<svg class="rom-ico rom-ico-r" viewBox="-130 -125 1004 1004" aria-hidden="true">' + markPaths() + "</svg>"
       : ICONS[id]
         ? '<img class="rom-ico" src="assets/app-icons/' + ICONS[id] + '-128.png" alt="" />'
         : '<span class="rom-ico" aria-hidden="true"></span>';
+  /// The page's own R mark (index.html's #R and #arrow), copied as paths rather than referenced
+  /// with <use>, which Make a video's painter does not draw.
+  function markPaths() {
+    return ["R", "arrow"].map((id) => {
+      const n = document.getElementById(id);
+      if (!n) return "";
+      const c = n.cloneNode(true);
+      c.removeAttribute("id");
+      return c.outerHTML;
+    }).join("");
+  }
   /// A chat's name and company, as the sidebar names them (`main.js`), never made up.
   function named(r) {
     const row = r.thread && typeof threadRow === "function" ? threadRow(r.thread) : null;
@@ -468,7 +493,7 @@
       if (a.within || (a.open === false && !recent)) {
         sizeCanvas(cv, 150, 26);
         rowEl.classList.toggle("is-off", true);
-        rowEl.querySelector('[data-c="now"]').textContent = a.within ? IN_RICHOS : "Not open";
+        rowEl.querySelector('[data-c="now"]').textContent = a.within ? within(a) : "Not open";
         rowEl.querySelector('[data-c="avg"]').textContent = "";
         rowEl.querySelector('[data-c="peak"]').textContent = "";
         return;
@@ -652,6 +677,9 @@
     // Escape: the details first, then the card, before the window's own Escape sees it.
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
+      // Settings open over My RichOS: the Escape is its own (settings-button.js closes it).
+      const settings = document.getElementById("set-btn");
+      if (settings && settings.getAttribute("aria-expanded") === "true") return;
       if (sheetOpen()) { e.preventDefault(); e.stopPropagation(); closeSheet(); return; }
       if (!cardOpen()) return;
       e.preventDefault();
@@ -695,7 +723,7 @@
     if (!on) return;
     if (answer && answer.on) absorb(answer);
     paintRail();
-    if (cardOpen()) paintCard();
+    if (cardOpen()) { paintCard(); place(); }
     if (sheetOpen()) paintSheet();
     if (again) { again = false; tick(); }
   }

@@ -31,7 +31,7 @@ function installFixture({ scene, failSave }) {
   const APPS = [
     ["richos", "RichOS", 2, 1320, 30], ["richscribe", "RichScribe", 1, 604, 10], ["richbrief", "RichBrief", 1, 142, 3],
     ["richfiles", "RichFiles", 1, 118, 4], ["richglance", "RichGlance", 1, 93, 2], ["richfinder", "RichFinder", 0, 0, 0, "richos"],
-    ["richpass", "RichPass", 0, 0, 0, "richos"], ["richcleaner", "RichCleaner", 0, 0, 0], ["richglance-capture", "RichGlance Capture", 0, 0, 0],
+    ["richpass", "RichPass", 0, 0, 0, "browser"], ["richcleaner", "RichCleaner", 0, 0, 0], ["richglance-capture", "RichGlance Capture", 0, 0, 0],
     ["window-gestures", "Window Gestures", 1, 21, 0], ["richdoctor", "RichDoctor", 1, 46, 1], ["claude-code", "Claude Code", 6, 1480, 60],
     ["codex", "Codex", 0, 0, 0],
   ];
@@ -250,6 +250,10 @@ async function main() {
     assertEqual(card.apps.slice(0, 4), ["RichOS", "1.3 GB", "RichScribe", "612 MB"], "the first apps");
     assert(card.apps.includes("RichGlance Capture") && card.apps.includes("Not open"), "an app that is not open: " + card.apps.join(" | "));
     assert(card.apps.includes("RichFinder") && card.apps.includes("In RichOS"), "a page in RichOS's window: " + card.apps.join(" | "));
+    assert(card.apps.includes("RichPass") && card.apps.includes("In your browser"), "RichPass, a document in his browser: " + card.apps.join(" | "));
+    const names = await page.evaluate(() => Array.from(document.querySelectorAll("#rom-card .rom-sec"), (b) => b.getAttribute("aria-label")));
+    assertEqual(names[0], "Tokens: 1.26M tokens a minute. Last minute 1.26M used, last 5 minutes 4.13M, last 15 minutes 5.23M. Open the details", "what VoiceOver reads of the token half");
+    assert(names[1].startsWith("Memory, all RichOS apps: 3.8 GB now, 2-minute average") && names[1].includes("RichOS 1.3 GB") && names[1].endsWith("Open the details"), "what VoiceOver reads of the memory half: " + names[1]);
     const asked = await page.evaluate(() => window.calls.filter((c) => c[0] === "richos_monitor").pop()[1]);
     assertEqual(asked.card, true, "the open card did not ask for its graph and the memory");
   });
@@ -285,12 +289,19 @@ async function main() {
       share: document.querySelector('#rom-sheet [data-s="m-ledger"]').textContent,
     }));
     assertEqual(m.big, "3.8 GB", "all apps now");
-    assertEqual(m.line, "All RichOS apps together. 10 of 13 are open.", "the line under it");
+    assertEqual(m.line, "All RichOS apps together. 9 of 13 are open.", "the line under it");
     assertEqual(m.rows, ["RichOS", "RichScribe", "RichBrief", "RichFiles", "RichGlance", "RichFinder", "RichPass", "RichCleaner", "RichGlance Capture", "Window Gestures", "RichDoctor", "Claude Code", "Codex", "All together"], "each app");
     assert(/Share of this Mac11% of 36 GB/.test(m.share), "the share of the Mac: " + m.share);
     const capture = await page.evaluate(() => Array.from(document.querySelectorAll('#rom-sheet [data-app="richglance-capture"] [data-c]'), (n) => n.textContent));
     assertEqual(capture, ["Not open", "100 MB", "200 MB"], "an app closed within the two minutes keeps its figures");
     assertEqual(await page.evaluate(() => document.getElementById("rom-sheet").getAttribute("aria-modal")), null, "the details claim aria-modal, which leaves Settings out of the accessibility tree");
+    // Settings over the details: Escape closes Settings, and the details stay
+    await page.click("#set-btn");
+    await page.waitForSelector("#set-richosmon");
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => document.getElementById("set-btn").getAttribute("aria-expanded") !== "true");
+    assertEqual(await page.evaluate(() => window.RichosMonitor.state().sheet), "memory", "Escape on Settings closed the details under it");
+    assertEqual(await page.evaluate(() => document.querySelectorAll("#rom-sheet .rom-ico-r use").length + "/" + document.querySelectorAll("#rom-sheet .rom-ico-r path").length), "0/2", "the RichOS mark is drawn from <use>, which a recording does not draw");
     await page.keyboard.press("Escape");
     await page.waitForFunction(() => window.RichosMonitor.state().sheet === null);
     assertEqual(await page.evaluate(() => document.activeElement && document.activeElement.id), "rom-square", "closing the details from Memory left focus nowhere");
@@ -313,6 +324,27 @@ async function main() {
     await page.keyboard.press("Escape");
     for (const [k, v] of Object.entries(out)) assert(v >= (k === "bars" ? 3 : 4.5), k + " is " + v.toFixed(2));
     return Object.entries(out).map(([k, v]) => k + " " + v.toFixed(2)).join(", ");
+  });
+
+  await run.check("in a 700-pixel window the whole card can be reached: it stays inside the window and scrolls", async () => {
+    await page.setViewportSize({ width: 1000, height: 700 });
+    await page.mouse.move(600, 300);
+    await page.waitForFunction(() => !window.RichosMonitor.state().card);
+    await page.hover("#rom-square");
+    await page.waitForSelector("#rom-card.is-open");
+    await page.waitForFunction(() => document.querySelector('#rom-card [data-k="apps"]').children.length > 0);
+    const box = await page.evaluate(() => {
+      const c = document.getElementById("rom-card");
+      const r = c.getBoundingClientRect();
+      c.scrollTop = c.scrollHeight;
+      const foot = c.querySelector(".res-foot").getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom, scrolls: c.scrollHeight > c.clientHeight, footShown: foot.bottom <= r.bottom + 1 && foot.top >= r.top - 1 };
+    });
+    assert(box.top >= 0 && box.bottom <= 700, "the card leaves the window: " + JSON.stringify(box));
+    assert(box.scrolls && box.footShown, "the card's foot cannot be scrolled to: " + JSON.stringify(box));
+    await page.mouse.move(600, 300);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    return JSON.stringify(box);
   });
 
   await run.check("idle: the rail says Idle, the card says when tokens were last used", async () => {

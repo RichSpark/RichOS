@@ -424,7 +424,7 @@ function myRichosRecording(theme) {
     const MB = 1048576;
     const line = (mb) => ({ now: mb * MB, avg: mb * MB, peak: mb * MB, hist: Array.from({ length: 60 }, (_, i) => Math.round((mb + 20 * Math.sin(i / 6)) * MB)) });
     const apps = [["richos", "RichOS", 2, 1320], ["richscribe", "RichScribe", 1, 604], ["richbrief", "RichBrief", 1, 142], ["richfiles", "RichFiles", 1, 118],
-      ["richglance", "RichGlance", 1, 93], ["richfinder", "RichFinder", 0, 0, "richos"], ["richpass", "RichPass", 0, 0, "richos"], ["richcleaner", "RichCleaner", 0, 0],
+      ["richglance", "RichGlance", 1, 93], ["richfinder", "RichFinder", 0, 0, "richos"], ["richpass", "RichPass", 0, 0, "browser"], ["richcleaner", "RichCleaner", 0, 0],
       ["richglance-capture", "RichGlance Capture", 0, 0], ["window-gestures", "Window Gestures", 1, 21], ["richdoctor", "RichDoctor", 1, 46],
       ["claude-code", "Claude Code", 6, 1480], ["codex", "Codex", 0, 0]];
     window.__RICHOS_MOCK_MONITOR__ = (args) => {
