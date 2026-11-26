@@ -689,6 +689,12 @@ struct StoredConfig {
     /// whether or not they are shown (`chat_cache.rs`). An absent key reads as off.
     #[serde(default)]
     show_context_meter: bool,
+    /// **My RichOS** (CEO, 2026-11-26, round 109): "This whole feature would be off by default,
+    /// but if turned on in the settings ... would sit on the navigation rail". Unlike the meter
+    /// above it is not display only: while it is off nothing of it runs (`my_richos.rs`). An
+    /// absent key reads as off.
+    #[serde(default)]
+    show_richos_monitor: bool,
     /// How the Mac resources square is drawn. An absent value reads as Ink,
     /// including on installations from before the square existed.
     ///
@@ -760,6 +766,7 @@ impl Default for StoredConfig {
             oxford_comma: false,
             show_swearmeter: false,
             show_context_meter: false,
+            show_richos_monitor: false,
             resources_view: None,
             cleaner_on: false,
             cleaner_inbox_first: false,
@@ -1426,6 +1433,14 @@ impl ConfigStore {
     pub fn set_show_context_meter(&mut self, show: bool) -> io::Result<()> {
         self.config.show_context_meter = show;
         self.persist_choice(&["show_context_meter"])
+    }
+
+    /// Whether My RichOS is on the navigation rail (and so running). Off until switched on.
+    pub fn show_richos_monitor(&self) -> bool { self.config.show_richos_monitor }
+
+    pub fn set_show_richos_monitor(&mut self, show: bool) -> io::Result<()> {
+        self.config.show_richos_monitor = show;
+        self.persist_choice(&["show_richos_monitor"])
     }
 
     // ---- the Mac resources square (round 47) ---------------------------------------
