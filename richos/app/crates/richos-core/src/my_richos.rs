@@ -87,9 +87,8 @@ pub fn record(source: &Source, worker: Option<&str>, from_result: bool, uses: &[
 /// with the chat window hidden was missing from its row and the total). Nothing asks it while
 /// the monitor is off.
 pub fn find_hosted_with(find: impl Fn() -> Vec<crate::suite_memory::Hosted> + Send + Sync + 'static) {
-    if HOSTED_FINDER.set(Box::new(find)).is_err() {
-        eprintln!("[richos] My RichOS was given a second way to find the hosted apps; the first is kept.");
-    }
+    // given once, as the app starts; were it given again, the first would be kept
+    HOSTED_FINDER.get_or_init(|| Box::new(find));
 }
 
 /// How often the memory reader finds the hosted apps' processes again: a panel or a capture that
