@@ -40,6 +40,13 @@ final class GestureController {
     private var selection: Preferences.Selection = []
     private var reportedStatus: Preferences.Status?
     private let desktopFolder = DesktopFolderClick()
+    private var desktopMenuOrigin: CGPoint?
+    private struct NewDesktopFolder {
+        let finder: pid_t
+        var foreground: NSRunningApplication?
+        let chosenAt: Date
+    }
+    private var newDesktopFolder: NewDesktopFolder?
     private var press: Press?
     private var pointerRevision: UInt64 = 0
     private var firstTitleClick: AXUIElement?
@@ -50,6 +57,7 @@ final class GestureController {
     private var dockMinimized: [pid_t: AXUIElement] = [:]
     private var observers: [pid_t: AXObserver] = [:]
     private var appTermination: NSObjectProtocol?
+    private var appDeactivation: NSObjectProtocol?
     private var accessibilityChanges: NSObjectProtocol?
     private var recheckingPermissions = false
     private var permissionCheckQueued = false
@@ -62,6 +70,13 @@ final class GestureController {
         ) { [weak self] notification in
             guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
             self?.forget(process: app.processIdentifier)
+        }
+        appDeactivation = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didDeactivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                  self?.newDesktopFolder?.foreground == app else { return }
+            self?.newDesktopFolder?.foreground = nil
         }
         // HIServices can hold its trust verdict for the lifetime of a process.
         // A privacy change must invalidate the tap before we use that verdict again.
@@ -169,6 +184,9 @@ final class GestureController {
         if !selection.intersection([.titleBar, .dock, .tiling, .desktopFolder]).isEmpty {
             types = [.leftMouseDown, .leftMouseUp, .leftMouseDragged, .rightMouseDown, .otherMouseDown]
         }
+        if selection.contains(.desktopDelete) {
+            types += [.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown]
+        }
         if !selection.intersection([.desktopDelete, .tiling, .switcher]).isEmpty { types.append(.keyDown) }
         let mask = types.reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
         // Observe input before Finder and the Dock can act on a desktop gesture.
@@ -177,14 +195,12 @@ final class GestureController {
             if let context {
                 let controller = Unmanaged<GestureController>.fromOpaque(context).takeUnretainedValue()
                 if type == .keyDown {
-                    if controller.handleWindowShortcut(event) { return nil }
-                    switch controller.desktopFileKey(for: event) {
-                    case .ignoreBackspace: return nil
-                    case let .moveToTrash(replacement):
-                        // Quartz releases a newly supplied event after dispatch.
-                        return Unmanaged.passRetained(replacement)
-                    case .passThrough: break
+                    controller.desktopMenuOrigin = nil
+                    if controller.handleWindowShortcut(event) {
+                        controller.newDesktopFolder = nil
+                        return nil
                     }
+                    return controller.desktopKeyEvent(event)
                 } else {
                     controller.receive(type, event)
                 }
@@ -202,6 +218,8 @@ final class GestureController {
     private func stopTap(keepingWindows: Bool = false) {
         if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         if let tap { CFMachPortInvalidate(tap) }
+        desktopMenuOrigin = nil
+        newDesktopFolder = nil
         self.source = nil
         tap = nil
         desktopFolder.reset()
@@ -223,9 +241,12 @@ final class GestureController {
             press = nil
             firstTitleClick = nil
             tileDrag = nil
+            desktopMenuOrigin = nil
+            newDesktopFolder = nil
             if let tap, AXIsProcessTrusted() { CGEvent.tapEnable(tap: tap, enable: true) }
             return
         }
+        if selection.contains(.desktopDelete) { trackDesktopMenu(type, event) }
         let modifiers: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift, .maskSecondaryFn]
         guard event.flags.intersection(modifiers).isEmpty else {
             pointerRevision &+= 1
@@ -408,24 +429,125 @@ final class GestureController {
         record(.windowGestureTileRestore, restored ? .complete : .issues, started: started)
     }
 
-    private func desktopFileKey(for event: CGEvent) -> DesktopFileKey {
+    // Finder starts editing the name as soon as its New Folder menu command runs.
+    // Remember that command only until the user interacts with the new editor.
+    private func trackDesktopMenu(_ type: CGEventType, _ event: CGEvent) {
+        let contextClick = type == .rightMouseDown || (type == .leftMouseDown && event.flags.contains(.maskControl))
+        if contextClick {
+            newDesktopFolder = nil
+            desktopMenuOrigin = DesktopFolderClick.isDesktopWindow(at: event.unflippedLocation) ? event.location : nil
+            return
+        }
+        switch type {
+        case .leftMouseDown, .otherMouseDown:
+            newDesktopFolder = nil
+        case .leftMouseUp, .rightMouseUp:
+            // A press-drag-release can choose the menu command in one gesture.
+            guard let origin = desktopMenuOrigin, hypot(origin.x - event.location.x, origin.y - event.location.y) >= 5 else { return }
+        default: return
+        }
+        guard desktopMenuOrigin != nil else { return }
+        desktopMenuOrigin = nil
+        guard type != .otherMouseDown, let item = hit(at: event.location), item.role == kAXMenuItemRole,
+              item.value(kAXIdentifierAttribute) as String? == "cmdNewFolderAtMouseLocation:",
+              let pid = item.processID, NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == "com.apple.finder" else { return }
+        newDesktopFolder = NewDesktopFolder(finder: pid, foreground: NSWorkspace.shared.frontmostApplication, chosenAt: Date())
+    }
+
+    private func desktopHasFileFocus(_ finder: AXUIElement, pid: pid_t) -> Bool {
+        guard let window = finder.element(kAXFocusedWindowAttribute), window.role == kAXScrollAreaRole,
+              let focused = finder.element(kAXFocusedUIElementAttribute) else { return false }
+        if focused.role == kAXGroupRole {
+            // When Del follows a click immediately, AXSelectedChildren can lag.
+            // Let Finder apply the native command to its selection at delivery.
+            return focused.element(kAXParentAttribute) == window
+        }
+        // A normal rename, an edited name or a field outside the Desktop must
+        // keep its normal text-editing keys.
+        guard newDesktopFolder?.finder == pid, focused.role == kAXTextFieldRole,
+              focused.element(kAXParentAttribute) == finder,
+              let name: String = focused.value(kAXValueAttribute), !name.isEmpty,
+              focused.value(kAXSelectedTextAttribute) as String? == name,
+              let children: [AXUIElement] = window.value(kAXChildrenAttribute) else { return false }
+        return children.contains { group in
+            guard group.role == kAXGroupRole, let icons: [AXUIElement] = group.value(kAXSelectedChildrenAttribute),
+                  icons.count == 1, icons[0].role == kAXImageRole else { return false }
+            return icons[0].value(kAXTitleAttribute) as String? == name
+        }
+    }
+
+    // A background Desktop context menu can create and select a folder while
+    // another app still owns the keyboard. Never send that app Command-Delete.
+    private func backgroundFolderReference(_ command: NewDesktopFolder) -> NSURL? {
+        let finder = AXUIElementCreateApplication(command.finder)
+        AXUIElementSetMessagingTimeout(finder, 0.08)
+        guard let windows: [AXUIElement] = finder.value(kAXWindowsAttribute) else { return nil }
+        for desktop in windows where desktop.role == kAXScrollAreaRole {
+            guard let groups: [AXUIElement] = desktop.value(kAXChildrenAttribute) else { continue }
+            for group in groups where group.role == kAXGroupRole {
+                guard let selected: [AXUIElement] = group.value(kAXSelectedChildrenAttribute),
+                      selected.count == 1, selected[0].role == kAXImageRole,
+                      let url: NSURL = selected[0].value(kAXURLAttribute),
+                      CFURLIsFileReferenceURL(url as CFURL) else { continue }
+                return url
+            }
+        }
+        return nil
+    }
+
+    private func recycleNewFolder(_ reference: NSURL, chosenAt: Date, started: TimeInterval) {
+        // Keep Finder's file reference until the worker runs. Swift URL bridges
+        // file references to paths. Recheck the location and identity before Trash.
+        DispatchQueue.global(qos: .userInitiated).async {
+            guard let url = reference.filePathURL,
+                  let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first,
+                  url.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL.path
+                    == desktop.resolvingSymlinksInPath().standardizedFileURL.path,
+                  let info = try? url.resourceValues(forKeys: [.creationDateKey, .isDirectoryKey, .isSymbolicLinkKey, .isVolumeKey]),
+                  info.isDirectory == true, info.isSymbolicLink == false, info.isVolume == false,
+                  let birth = info.creationDate, birth >= chosenAt,
+                  let current = CFURLCreateFileReferenceURL(nil, url as CFURL, nil)?.takeRetainedValue(),
+                  CFEqual(current, reference) else {
+                self.record(.desktopDeleteShortcut, .unavailable, started: started)
+                return
+            }
+            NSWorkspace.shared.recycle([url]) { moved, error in
+                self.record(.desktopDeleteShortcut, error == nil && moved.count == 1 ? .complete : .issues, started: started)
+            }
+        }
+    }
+
+    private func desktopKeyEvent(_ event: CGEvent) -> Unmanaged<CGEvent>? {
         let started = ProcessInfo.processInfo.systemUptime
+        var background: (NSURL, Date)?
         let action = DesktopFileKey.action(for: event) {
-            guard Preferences.selection.contains(.desktopDelete),
-                  let app = NSWorkspace.shared.frontmostApplication, app.bundleIdentifier == "com.apple.finder" else { return false }
-            let finder = AXUIElementCreateApplication(app.processIdentifier)
-            AXUIElementSetMessagingTimeout(finder, 0.08)
-            // Exclude Finder windows, Quick Look and inline filename editing.
-            guard let window = finder.element(kAXFocusedWindowAttribute), window.role == kAXScrollAreaRole,
-                  let focused = finder.element(kAXFocusedUIElementAttribute), focused.role == kAXGroupRole,
-                  focused.element(kAXParentAttribute) == window else { return false }
-            // Finder processes the click before the key. AXSelectedChildren can
-            // still be empty here when Del immediately follows the first click.
-            // Let the native command use Finder's selection at delivery.
+            guard Preferences.selection.contains(.desktopDelete), let app = NSWorkspace.shared.frontmostApplication else { return false }
+            if app.bundleIdentifier == "com.apple.finder" {
+                let finder = AXUIElementCreateApplication(app.processIdentifier)
+                AXUIElementSetMessagingTimeout(finder, 0.08)
+                guard desktopHasFileFocus(finder, pid: app.processIdentifier) else { return false }
+            } else {
+                guard let command = newDesktopFolder, command.foreground == app,
+                      let url = backgroundFolderReference(command) else { return false }
+                background = (url, command.chosenAt)
+            }
             return NSWorkspace.shared.frontmostApplication == app
         }
-        if case .moveToTrash = action { record(.desktopDeleteShortcut, .complete, started: started) }
-        return action
+        switch action {
+        case .ignoreBackspace: return nil
+        case .passThrough:
+            newDesktopFolder = nil
+            return Unmanaged.passUnretained(event)
+        case let .moveToTrash(replacement):
+            newDesktopFolder = nil
+            if let (url, chosenAt) = background {
+                recycleNewFolder(url, chosenAt: chosenAt, started: started)
+                return nil
+            }
+            record(.desktopDeleteShortcut, .complete, started: started)
+            // Quartz releases a newly supplied event after dispatch.
+            return Unmanaged.passRetained(replacement)
+        }
     }
 
     private func hit(at point: CGPoint) -> AXUIElement? {
