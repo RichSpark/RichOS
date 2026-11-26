@@ -144,6 +144,17 @@ class Reviews(unittest.TestCase):
             for item in due:
                 watcher.start(item, "handover", 10 ** 6, 1)
         self.assertEqual({id(it) for it in started}, {id(codex), id(worker)}, "an open chat's review did not start")
+        # A handover an earlier version queued names no chat: its connection's place does, so it
+        # waits while its chat is shut and is reviewed once the chat opens.
+        codex.chat = ""
+        self.open_chats()
+        with mock.patch.object(watcher, "take_lock", side_effect=AssertionError("an old handover of a shut chat was locked")):
+            self.assertIsNone(watcher.start(codex, "handover", 10 ** 6, 1))
+        self.open_chats(("company-a", "chat-a"))
+        started.clear()
+        with mock.patch.object(watcher, "take_lock", side_effect=lambda item, *rest: started.append(item) and None):
+            watcher.start(codex, "handover", 10 ** 6, 1)
+        self.assertEqual(started, [codex], "a handover queued by an earlier version never reaches review once its chat opens")
         # The terminal's watcher has no such record and starts as before.
         self.assertTrue(rw.World.may_start(object.__new__(rw.World), worker))
 

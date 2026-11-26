@@ -1006,6 +1006,13 @@ class AppWorld(World):
         or ran long, a lost, held or stopped review from before, a Codex READY): only in an open
         chat. Watcher.start asks this before anything else."""
         chat = os.path.basename((item.env or {}).get("RICHOS_WORKSPACES_DIR", "")) or getattr(item, "chat", "")
+        channel = getattr(item, "channel", None)
+        if not chat and channel:
+            # A handover an earlier version queued names no chat; its connection's place does:
+            # <coordination>/connections/<company>/<conversation>/<connection>.
+            parts = os.path.normpath(channel["locator"]).split(os.sep)
+            if len(parts) >= 4 and parts[-4] == "connections":
+                chat = chat_partition(parts[-3], parts[-2])
         return bool(chat) and chat in self.open_chats()
 
     def channel_repositories(self, endpoint):
