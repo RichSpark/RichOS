@@ -467,6 +467,16 @@ mod tests {
     }
 
     #[test]
+    fn the_automatic_drop_to_opus_runs_rich_at_high_when_no_level_was_chosen() {
+        // CEO 2026-11-26: "when on Opus, Rich needs to run on Opus-high by default. Even when it
+        // drops from Fable to Opus automatically." Fable selected for both, nothing chosen: the
+        // switch moves both to Opus, Rich and the team at High.
+        let (models, efforts) = lease_choices(true, LeaseModels::default(), EffortChoices::default());
+        assert_eq!((models.rich, models.stu), (ModelChoice::Opus, ModelChoice::Opus));
+        assert_eq!((efforts.rich, efforts.stu), (crate::config::EffortLevel::High, crate::config::EffortLevel::High));
+    }
+
+    #[test]
     fn refused_fable_can_retry_with_the_same_account_and_saved_opus_efforts() {
         let mut state = State::default();
         let refused = UsageLimit { resets_at: Some(END), window: LimitWindow::Fable };

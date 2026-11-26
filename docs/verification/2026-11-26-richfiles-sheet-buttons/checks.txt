@@ -1,0 +1,38 @@
+PASS app bundle signature verifies in the guest
+PASS guest Music folder holds no folder (the no-arrow case): 0 folders
+PASS fixture holds 129 items: 129 items
+PASS daybreak: RichFiles opened the fixture: pid 1129
+PASS daybreak: Connect to Server's Connect clears AA (label 4.5:1, fill 3:1): label (253, 252, 248) on fill (113, 87, 21), 6.65:1; fill against (253, 252, 248) around it, 6.65:1
+PASS daybreak: Connect to Server's Cancel clears AA (label 4.5:1): label (12, 19, 34) on fill (234, 230, 221), 14.90:1
+PASS daybreak: File Actions's Run clears AA (label 4.5:1, fill 3:1): label (253, 252, 248) on fill (113, 87, 21), 6.65:1; fill against (253, 252, 248) around it, 6.65:1
+PASS daybreak: File Actions's Cancel clears AA (label 4.5:1): label (12, 19, 34) on fill (234, 230, 221), 14.90:1
+PASS daybreak: Search Filters's Search clears AA (label 4.5:1, fill 3:1): label (253, 252, 248) on fill (113, 87, 21), 6.65:1; fill against (253, 252, 248) around it, 6.65:1
+PASS daybreak: Search Filters's Cancel clears AA (label 4.5:1): label (12, 19, 34) on fill (234, 230, 221), 14.90:1
+PASS daybreak: Create ZIP's Create clears AA (label 4.5:1, fill 3:1): label (253, 252, 248) on fill (113, 87, 21), 6.65:1; fill against (253, 252, 248) around it, 6.65:1
+PASS daybreak: Create ZIP's Close clears AA (label 4.5:1): label (12, 19, 34) on fill (234, 230, 221), 14.90:1
+PASS daybreak: New Folder's Create clears AA (label 4.5:1, fill 3:1): label (253, 252, 248) on fill (113, 87, 21), 6.65:1; fill against (253, 252, 248) around it, 6.65:1
+PASS daybreak: New Folder's Cancel clears AA (label 4.5:1): label (12, 19, 34) on fill (234, 230, 221), 14.90:1
+PASS daybreak: Open With chooser's Open clears AA (label 4.5:1, fill 3:1): label (253, 252, 248) on fill (113, 87, 21), 6.65:1; fill against (253, 252, 248) around it, 6.65:1
+PASS daybreak: Open With chooser's Cancel clears AA (label 4.5:1): label (12, 19, 34) on fill (234, 230, 221), 14.90:1
+PASS daybreak: Disk Cleanup's Move to Trash clears AA (label 4.5:1, fill 3:1): label (253, 252, 248) on fill (113, 87, 21), 6.65:1; fill against (253, 252, 248) around it, 6.65:1
+PASS daybreak: New File's Rename clears AA (label 4.5:1, fill 3:1): label (253, 252, 248) on fill (113, 87, 21), 6.65:1; fill against (253, 252, 248) around it, 6.65:1
+PASS daybreak: New File's Cancel clears AA (label 4.5:1): label (12, 19, 34) on fill (234, 230, 221), 14.90:1
+PASS guest Music folder holds no folder (the no-arrow case): 0 folders
+PASS fixture holds 129 items: 129 items
+PASS sovereign: RichFiles opened the fixture: pid 2640
+PASS sovereign: Connect to Server's Connect clears AA (label 4.5:1, fill 3:1): label (10, 17, 32) on fill (194, 163, 92), 7.80:1; fill against (24, 36, 64) around it, 6.36:1
+PASS sovereign: Connect to Server's Cancel clears AA (label 4.5:1): label (223, 228, 238) on fill (12, 19, 34), 14.55:1
+PASS sovereign: File Actions's Run clears AA (label 4.5:1, fill 3:1): label (10, 17, 32) on fill (194, 163, 92), 7.80:1; fill against (24, 36, 64) around it, 6.36:1
+PASS sovereign: File Actions's Cancel clears AA (label 4.5:1): label (223, 228, 238) on fill (12, 19, 34), 14.55:1
+PASS sovereign: Search Filters's Search clears AA (label 4.5:1, fill 3:1): label (10, 17, 32) on fill (194, 163, 92), 7.80:1; fill against (24, 36, 64) around it, 6.36:1
+PASS sovereign: Search Filters's Cancel clears AA (label 4.5:1): label (223, 228, 238) on fill (12, 19, 34), 14.55:1
+PASS sovereign: Create ZIP's Create clears AA (label 4.5:1, fill 3:1): label (10, 17, 32) on fill (194, 163, 92), 7.80:1; fill against (24, 36, 64) around it, 6.36:1
+PASS sovereign: Create ZIP's Close clears AA (label 4.5:1): label (223, 228, 238) on fill (12, 19, 34), 14.55:1
+PASS sovereign: New Folder's Create clears AA (label 4.5:1, fill 3:1): label (10, 17, 32) on fill (194, 163, 92), 7.80:1; fill against (24, 36, 64) around it, 6.36:1
+PASS sovereign: New Folder's Cancel clears AA (label 4.5:1): label (223, 228, 238) on fill (12, 19, 34), 14.55:1
+PASS sovereign: Open With chooser's Open clears AA (label 4.5:1, fill 3:1): label (10, 17, 32) on fill (194, 163, 92), 7.80:1; fill against (24, 36, 64) around it, 6.36:1
+PASS sovereign: Open With chooser's Cancel clears AA (label 4.5:1): label (223, 228, 238) on fill (12, 19, 34), 14.55:1
+PASS sovereign: Disk Cleanup's Move to Trash clears AA (label 4.5:1, fill 3:1): label (10, 17, 32) on fill (194, 163, 92), 7.80:1; fill against (24, 36, 64) around it, 6.36:1
+PASS sovereign: New File's Rename clears AA (label 4.5:1, fill 3:1): label (10, 17, 32) on fill (194, 163, 92), 7.80:1; fill against (24, 36, 64) around it, 6.36:1
+PASS sovereign: New File's Cancel clears AA (label 4.5:1): label (223, 228, 238) on fill (12, 19, 34), 14.55:1
+PASS RichFiles is quit and its process is gone

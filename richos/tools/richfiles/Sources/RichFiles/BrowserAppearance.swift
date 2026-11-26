@@ -1,3 +1,4 @@
+import AppKit
 import CoreText
 import SwiftUI
 
@@ -63,6 +64,15 @@ struct BrowserPalette {
     let attention: Color
     let hover: Color
     let hint: Color
+    /// The quiet item states of round 107.1 (catalog entries 4, 6, 7): one light fill and one
+    /// thin line for a selected item, a slightly deeper fill while the pointer is on it.
+    let selectionFill: Color
+    let selectionFillHover: Color
+    let selectionEdge: Color
+    /// The file pane's and sidebar's scroll bars (entries 9 and 15).
+    let scrollThumb: Color
+    let scrollThumbHover: Color
+    let scrollTrack: Color
 
     /// The four opaque grounds text sits on: the bars, the file pane, the sidebar and a sheet.
     static func grounds(_ scheme: ColorScheme) -> (chrome: UInt32, pane: UInt32, sidebar: UInt32, floating: UInt32) {
@@ -78,6 +88,38 @@ struct BrowserPalette {
     static func hintValue(_ scheme: ColorScheme) -> UInt32 {
         scheme == .dark ? 0xa0a6b1 : 0x53575e
     }
+
+    /// The selected item's fill, its fill under the pointer and its 1 px line. The line carries
+    /// the state (3:1 for an indicator); the fill only tells a selected item from the
+    /// keyboard-focus outline. Computed in `BrowserAppearanceTests`. The dark line is a step
+    /// lighter than round 107.1's #7d6f48, which measured 2.86:1 against the fill under the
+    /// pointer; #84754c measures 3.12:1 there, 3.46:1 on the plain fill and 4.16:1 on the pane.
+    static func selectionValues(_ scheme: ColorScheme) -> (fill: UInt32, fillHover: UInt32, edge: UInt32) {
+        scheme == .dark ? (0x1b2335, 0x222b3e, 0x84754c) : (0xf3ecda, 0xede4cd, 0x8f7a48)
+    }
+
+    /// The scroll bar's thumb, its thumb when pointed at or dragged, and its track (with opacity).
+    static func scrollValues(_ scheme: ColorScheme) -> (thumb: UInt32, thumbHover: UInt32, track: UInt32, trackOpacity: Double) {
+        scheme == .dark ? (0x5d6b8c, 0x6b7ea8, 0x4c6087, 0.16) : (0x767c8d, 0x5d6372, 0x3c465f, 0.10)
+    }
+
+    /// A sheet's buttons as round 107.1 draws them (`.pbtn` and `.pbtn.def`): the default one is
+    /// the signal color with the pane color for its bold label (6.65:1 light, 7.80:1 dark), the
+    /// other one ink on the chrome color inside the control line. macOS's own blue default
+    /// button left at most 3.75:1 for its label in the light theme.
+    static func sheetButtonValues(_ scheme: ColorScheme) -> (primaryFill: UInt32, primaryLabel: UInt32, fill: UInt32, label: UInt32) {
+        let g = grounds(scheme)
+        return (signalValue(scheme), g.pane, g.chrome, inkValue(scheme))
+    }
+
+    /// The ink color as an opaque value; `muted` and `hover` are this ink at an opacity.
+    static func inkValue(_ scheme: ColorScheme) -> UInt32 { scheme == .dark ? 0xdfe4ee : 0x0c1322 }
+    static func mutedOpacity(_ scheme: ColorScheme) -> Double { scheme == .dark ? 0.64 : 0.68 }
+    static func hoverOpacity(_ scheme: ColorScheme) -> Double { scheme == .dark ? 0.07 : 0.06 }
+    static func controlLineValue(_ scheme: ColorScheme) -> UInt32 { scheme == .dark ? 0x6b7ea8 : 0x767c8d }
+    static func folderValue(_ scheme: ColorScheme) -> UInt32 { scheme == .dark ? 0x7e92b8 : 0x4c6087 }
+    static func currentFolderValue(_ scheme: ColorScheme) -> UInt32 { scheme == .dark ? 0x3a3d46 : 0xe4dbc5 }
+    static func signalValue(_ scheme: ColorScheme) -> UInt32 { scheme == .dark ? 0xc2a35c : 0x715715 }
 
     init(_ scheme: ColorScheme) {
         let dark = scheme == .dark
@@ -98,9 +140,17 @@ struct BrowserPalette {
         danger = Self.rgb(dark ? 0xe8837c : 0x8a2f28)
         attention = Self.rgb(dark ? 0xe09a55 : 0x8c4a1b)
         hover = ink.opacity(dark ? 0.07 : 0.06)
+        let selection = Self.selectionValues(scheme)
+        selectionFill = Self.rgb(selection.fill)
+        selectionFillHover = Self.rgb(selection.fillHover)
+        selectionEdge = Self.rgb(selection.edge)
+        let scroll = Self.scrollValues(scheme)
+        scrollThumb = Self.rgb(scroll.thumb)
+        scrollThumbHover = Self.rgb(scroll.thumbHover)
+        scrollTrack = Self.rgb(scroll.track).opacity(scroll.trackOpacity)
     }
 
-    private static func rgb(_ value: UInt32) -> Color {
+    static func rgb(_ value: UInt32) -> Color {
         Color(red: Double((value >> 16) & 0xff) / 255,
               green: Double((value >> 8) & 0xff) / 255,
               blue: Double(value & 0xff) / 255)
@@ -113,6 +163,11 @@ enum BrowserTypography {
 
     static func reading(_ size: CGFloat) -> Font {
         inter ? .custom("InterVariable", size: size) : .system(size: size)
+    }
+
+    /// The AppKit font that draws `reading(size)`, for measuring names and for AppKit text fields.
+    static func readingNSFont(_ size: CGFloat) -> NSFont {
+        (inter ? NSFont(name: "InterVariable", size: size) : nil) ?? .systemFont(ofSize: size)
     }
 
     static func heading(_ size: CGFloat) -> Font {
@@ -130,18 +185,58 @@ enum BrowserTypography {
     }
 }
 
+/// A sheet's default button and the Cancel beside it, in the app's colors (round 107.1's
+/// chooser), and Disk Cleanup's Move to Trash. A disabled button is
+/// drawn at half strength; WCAG exempts an inactive control, and it carries no readable state.
+struct SheetButtonStyle: ButtonStyle {
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.isEnabled) private var enabled
+    var primary = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        let values = BrowserPalette.sheetButtonValues(scheme)
+        let line = BrowserPalette.rgb(primary ? values.primaryFill : BrowserPalette.controlLineValue(scheme))
+        let shape = RoundedRectangle(cornerRadius: 7)
+        configuration.label
+            .fontWeight(primary ? .semibold : .regular)
+            .padding(.horizontal, 14)
+            .frame(minWidth: 84, minHeight: 32)
+            .foregroundStyle(BrowserPalette.rgb(primary ? values.primaryLabel : values.label))
+            .background(BrowserPalette.rgb(primary ? values.primaryFill : values.fill), in: shape)
+            .overlay(shape.strokeBorder(line, lineWidth: 1).allowsHitTesting(false))
+            .contentShape(shape)
+            .opacity(enabled ? (configuration.isPressed ? 0.85 : 1) : 0.5)
+    }
+}
+
+extension View {
+    /// A sheet's default button: Return presses it, drawn as `SheetButtonStyle(primary: true)`.
+    /// macOS's own blue default button leaves its white label at most 3.75:1 in the light theme,
+    /// so `SheetButtonColorTests` refuses a default action drawn any other way.
+    func sheetDefaultAction() -> some View {
+        keyboardShortcut(.defaultAction).buttonStyle(SheetButtonStyle(primary: true))
+    }
+
+    /// The Cancel or Close beside a sheet's default button: Esc presses it, drawn to match.
+    func sheetCancelAction() -> some View {
+        keyboardShortcut(.cancelAction).buttonStyle(SheetButtonStyle())
+    }
+}
+
 struct BrowserButtonStyle: ButtonStyle {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.isEnabled) private var enabled
     var selected = false
     var bordered = false
+    /// The sidebar's rows sit 24 px apart (round 107.1, catalog entry 10), so its buttons do too.
+    var compact = false
 
     func makeBody(configuration: Configuration) -> some View {
         let palette = BrowserPalette(scheme)
         let shape = RoundedRectangle(cornerRadius: 6)
         configuration.label
             .padding(.horizontal, 7)
-            .frame(minHeight: 30)
+            .frame(minHeight: compact ? 24 : 30)
             .contentShape(shape)
             .background(selected ? palette.selected : (configuration.isPressed ? palette.hover : .clear), in: shape)
             .overlay {

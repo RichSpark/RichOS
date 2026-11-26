@@ -16,6 +16,7 @@ The script builds and ad hoc signs a development bundle. RichOS packaging uses t
 ## Keyboard and macOS integration
 
 - In the Windows preset, Ctrl+L focuses the address, Ctrl+C copies files, Ctrl+X cuts, Ctrl+V pastes and Ctrl+Z undoes a supported action. Enter opens, F2 renames, Backspace goes back in folder history, Space previews and Delete moves to Trash. On a compact Mac keyboard, Fn+Delete or ⌘Delete moves files to Trash.
+- Ctrl+C and then Ctrl+V in the same folder makes a copy named `name - Copy`, then `name - Copy (2)`; Ctrl+Z undoes it. F2 or a second click on a selected item after a short pause, renames it in place in List and Columns view. Turn the mouse wheel over List view to scroll it sideways and rest the pointer on an item to see its kind, size and date.
 - RichFiles Settings offers the Mac preset and individual shortcut overrides.
 - **Double-click desktop folders to open them in RichFiles** is on by default. It works independently of the default folder app. Turn it off in **RichFiles Settings → Keyboard → Mac desktop** to have Finder open Desktop folders again.
 - **Press Forward Delete (Del) to move selected desktop items to Trash** is on by default. On a compact Mac keyboard, use Fn+Delete. Plain Backspace leaves the Desktop selection in place. Change it in **RichFiles Settings → Keyboard → Mac desktop**. RichOS can start the Window Gestures background helper when it opens or installs an update. Follow the Accessibility and Input Monitoring instructions in Settings if macOS asks for access.

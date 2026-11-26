@@ -594,6 +594,157 @@ final class BrowserActionsTests: XCTestCase {
         }
     }
 
+    /// Catalog entry 1: Ctrl+C, then Ctrl+V in the same folder makes `name - Copy.ext`, then
+    /// `name - Copy (2).ext`, for files and folders, each selectable and undoable as a Duplicate.
+    @MainActor
+    func testPasteIntoTheSameFolderDuplicatesAsCopyThenCopyTwo() async throws {
+        try await withFixture { _, folder, board in
+            let file = try write("original", named: "yet another test file.txt", in: folder)
+            let actions = BrowserActions(pasteboard: board)
+            actions.copy([file])
+
+            try await perform(actions) { actions.paste(into: folder) }
+            let first = folder.appendingPathComponent("yet another test file - Copy.txt")
+            XCTAssertEqual(try contents(first), "original")
+            XCTAssertEqual(actions.status, "Copied as “yet another test file - Copy.txt”.")
+            XCTAssertEqual(actions.lastDuplicates?.items.map(\.url.lastPathComponent), ["yet another test file - Copy.txt"])
+            XCTAssertEqual(actions.undoName, "Duplicate")
+
+            try await perform(actions) { actions.paste(into: folder) }
+            let second = folder.appendingPathComponent("yet another test file - Copy (2).txt")
+            XCTAssertEqual(try contents(second), "original")
+            XCTAssertEqual(try contents(file.url), "original")
+            // Undo Duplicate moves the copy to the real Trash, so it is walked in the test VM, not here.
+            XCTAssertEqual(actions.undoName, "Duplicate")
+
+            let plans = try FileOperations.createFolder(in: folder, named: "Plans")
+            _ = try write("inside", named: "inside.txt", in: plans.url)
+            actions.copy([plans])
+            try await perform(actions) { actions.paste(into: folder) }
+            XCTAssertEqual(try contents(folder.appendingPathComponent("Plans - Copy/inside.txt")), "inside")
+            XCTAssertEqual(actions.lastDuplicates?.items.map(\.url.lastPathComponent), ["Plans - Copy"])
+        }
+    }
+
+    /// Catalog entry 11: each List column is its own longest name plus the row's chrome, so
+    /// columns differ in width; a longer name widens only its column, and the cap holds.
+    func testListColumnsFitTheirLongestNameEachOnItsOwn() {
+        let measure = { (name: String) in CGFloat(name.count * 8) }
+        let names = ["a", "_the longest file name in this column.html", "bb", "c", "dd"]
+        let layout = ListColumnLayout(names: names, rows: 2, measure: measure)
+        XCTAssertEqual(layout.widths, [CGFloat(43 + 42 * 8), CGFloat(43 + 2 * 8), CGFloat(43 + 2 * 8)])
+        let editing = ListColumnLayout(names: names, rows: 2, extra: { $0 == 3 ? 40 : 0 }, measure: measure)
+        XCTAssertEqual(editing.widths, [CGFloat(43 + 42 * 8), CGFloat(43 + 8 + 40), CGFloat(43 + 2 * 8)],
+                       "Only the edited name's column moves")
+        let capped = ListColumnLayout(names: [String(repeating: "x", count: 200)], rows: 30, measure: measure)
+        XCTAssertEqual(capped.widths, [ListColumnLayout.maximum])
+    }
+
+    /// Catalog entry 15: renaming an open folder keeps it and the folders open inside it open
+    /// under the new name, in every root it appears under, and leaves other folders alone.
+    @MainActor
+    func testRenamingAFolderKeepsItsOpenBranchesOpen() {
+        let tree = FolderTreeState()
+        for id in ["place:/Users/a/Desktop", "place:/Users/a/Desktop/Projects", "place:/Users/a/Desktop/Projects/Active",
+                   "pin:/Users/a/Desktop/Projects", "place:/Users/a/Desktop/Projects Old"] {
+            tree.setOpen(id, true)
+        }
+        tree.move(from: URL(fileURLWithPath: "/Users/a/Desktop/Projects"),
+                  to: URL(fileURLWithPath: "/Users/a/Desktop/Client Projects"))
+        XCTAssertEqual(tree.open, ["place:/Users/a/Desktop", "place:/Users/a/Desktop/Client Projects",
+                                   "place:/Users/a/Desktop/Client Projects/Active", "pin:/Users/a/Desktop/Client Projects",
+                                   "place:/Users/a/Desktop/Projects Old"])
+    }
+
+    /// Catalog entry 15: Undo Rename puts the open branches back under the old name, and Redo
+    /// moves them again, as the rename itself did: the replay reports the move it made.
+    @MainActor
+    func testUndoAndRedoRenameKeepTheOpenSidebarBranchesOpen() async throws {
+        try await withFixture { root, _, board in
+            let projects = root.appendingPathComponent("Projects", isDirectory: true)
+            try FileManager.default.createDirectory(at: projects.appendingPathComponent("Active"),
+                                                    withIntermediateDirectories: true)
+            let renamed = root.appendingPathComponent("Client Projects", isDirectory: true)
+            let actions = BrowserActions(pasteboard: board)
+            let tree = FolderTreeState()
+            tree.setOpen("place:" + projects.path, true)
+            tree.setOpen("place:" + projects.appendingPathComponent("Active").path, true)
+            @MainActor func state(_ folder: URL) -> (Bool, Bool) {
+                (tree.isOpen("place:" + folder.path), tree.isOpen("place:" + folder.appendingPathComponent("Active").path))
+            }
+            // What BrowserView does with each change: a rename moves the keys in its completion,
+            // every change applies the moves the actions report.
+            @MainActor func follow() { for move in actions.mutationMoves { tree.move(from: move.from, to: move.to) } }
+
+            var moved: FileReference?
+            try await perform(actions) { actions.rename(try! FileReference(url: projects), to: "Client Projects") { moved = $0 } }
+            tree.move(from: projects, to: try XCTUnwrap(moved).url)
+            follow()
+            XCTAssertTrue(state(renamed) == (true, true), "renamed=\(state(renamed))")
+
+            try await perform(actions) { actions.undo() }
+            follow()
+            XCTAssertTrue(FileManager.default.fileExists(atPath: projects.appendingPathComponent("Active").path))
+            XCTAssertTrue(state(projects) == (true, true), "after Undo=\(state(projects))")
+
+            try await perform(actions) { actions.redo() }
+            follow()
+            XCTAssertTrue(state(renamed) == (true, true), "after Redo=\(state(renamed))")
+        }
+    }
+
+    /// Catalog entry 2: Enter keeps a new name, refuses one macOS cannot use or one already in the
+    /// folder (ignoring case), and leaves an empty or unchanged name alone; the box selects the
+    /// part before the extension.
+    func testInlineRenameOutcomesAndTheSelectedStem() {
+        let siblings = ["_short file name.html", "Notes.txt", "Plans"]
+        XCTAssertEqual(InlineRename.outcome(for: "  ", original: "Notes.txt", siblings: siblings), .cancel)
+        XCTAssertEqual(InlineRename.outcome(for: "Notes.txt", original: "Notes.txt", siblings: siblings), .cancel)
+        XCTAssertEqual(InlineRename.outcome(for: "a/b.txt", original: "Notes.txt", siblings: siblings),
+                       .refuse("A name can’t contain “/” or “:”."))
+        XCTAssertEqual(InlineRename.outcome(for: "plans", original: "Notes.txt", siblings: siblings),
+                       .refuse("An item named “plans” already exists here."))
+        XCTAssertEqual(InlineRename.outcome(for: "notes.TXT", original: "Notes.txt", siblings: siblings),
+                       .rename("notes.TXT"), "A change of case only is a rename of the same item")
+        XCTAssertEqual(InlineRename.outcome(for: "Renamed.txt ", original: "Notes.txt", siblings: siblings), .rename("Renamed.txt"))
+        XCTAssertEqual(InlineRename.stemLength("_the longest file name in this.html", directory: false), 30)
+        XCTAssertEqual(InlineRename.stemLength("archive.tar.gz", directory: false), 11)
+        XCTAssertEqual(InlineRename.stemLength("Plans.v2", directory: true), 8)
+        XCTAssertEqual(InlineRename.stemLength("README", directory: false), 6)
+    }
+
+    /// Catalog entry 2: finishing an inline rename by clicking another file leaves that file
+    /// selected; Enter (the renamed file still the only selection) selects the new name.
+    func testClickingAnotherFileToFinishARenameKeepsThatFileSelected() {
+        let folder = URL(fileURLWithPath: "/fixture", isDirectory: true)
+        let report = folder.appendingPathComponent("report.txt")
+        let renamed = folder.appendingPathComponent("report-final.txt")
+        let budget = folder.appendingPathComponent("budget.txt")
+        XCTAssertNil(InlineRename.selection(afterRenaming: report, to: renamed, current: [budget]),
+                     "The click on budget.txt that finished the edit keeps budget.txt selected")
+        XCTAssertNil(InlineRename.selection(afterRenaming: report, to: renamed, current: []),
+                     "A click on empty space that finished the edit leaves nothing selected")
+        XCTAssertEqual(InlineRename.selection(afterRenaming: report, to: renamed, current: [report]), [renamed])
+    }
+
+    /// Catalog entry 2: click, pause, click arms the name box; if the selection moves before it
+    /// opens (Down pressed), the box never opens on the old item.
+    @MainActor
+    func testAPendingClickPauseClickRenameIsCanceledWhenTheSelectionMoves() async throws {
+        let rename = InlineRename()
+        var selected = true
+        var opened = 0
+        rename.arm(after: 0.05, stillSelected: { selected }) { opened += 1 }
+        selected = false
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(opened, 0, "The selection moved before the box opened")
+
+        selected = true
+        rename.arm(after: 0.05, stillSelected: { selected }) { opened += 1 }
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(opened, 1, "The item still the only selection gets its box")
+    }
+
     @MainActor
     func testCopyConflictOffersTheExactReviewedFilesWithoutReplacingThem() async throws {
         try await withFixture { root, destination, board in

@@ -1,6 +1,7 @@
 // pointer-drag.test.js — the guest half of pointer-drag.sh, run against mocked CoreGraphics.
 //
-// What it proves: a left drag posts move, left down, left dragged..., left up; `right: true`
+// What it proves: a left drag posts move, left down, left dragged..., left up; `thenKey` adds that
+// key's down and up after the button comes up (RichFiles round 107.1's fixes walk); `right: true`
 // on one point twice posts move, RIGHT down, RIGHT up and no dragged event (a click, which
 // WebKit turns into a `contextmenu`); and the frontmost refusal still sends nothing.
 // Added with --right in the candidate 38 walk (2026-10-06). Run: node pointer-drag.test.js
@@ -38,6 +39,7 @@ function drive(params, frontmost, named) {
   $.CGEventCreateScrollWheelEvent2 = (src, units, count, d1) => ({ type: 22, units, count, d1, flags: 0 });
   $.CGEventSetFlags = (ev, flags) => { ev.flags = flags; };
   $.CGEventSetIntegerValueField = (ev, field, value) => { if (field === 1) ev.clickState = value; };
+  $.CGEventCreateKeyboardEvent = (src, code, down) => ({ type: down ? 10 : 11, code });
   $.CGEventPost = (tap, ev) => posted.push(ev);
   sandbox.$ = $;
   const fn = new Function("ObjC", "delay", "Application", "$", "DRAG_PARAMS",
@@ -53,6 +55,15 @@ function drive(params, frontmost, named) {
   assert.strictEqual(answer.button, "left");
   assert.deepStrictEqual(posted.map((e) => e.type), [5, 1, 6, 6, 2]);
   assert.ok(posted.slice(1).every((e) => e.button === 0), "every left event names button 0");
+}
+
+// A click, then Down pressed from the same guest process after the button comes up.
+{
+  const { answer, posted } = drive({ pid: 42, points: [[10, 5], [10, 5]], step: 8, pause: 0, rest: 0,
+                                     thenKey: 125, thenAfter: 0.1 }, true);
+  assert.strictEqual(answer.thenKey, 125);
+  assert.deepStrictEqual(posted.map((e) => e.type), [5, 1, 2, 10, 11]);
+  assert.deepStrictEqual(posted.slice(3).map((e) => e.code), [125, 125]);
 }
 
 // A right-click: one point twice.

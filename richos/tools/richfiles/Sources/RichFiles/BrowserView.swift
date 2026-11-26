@@ -55,6 +55,16 @@ struct BrowserView: View {
     @State private var folderReveal: FolderTreeReveal?
     @State private var commandOwner = UUID()
     @State private var paletteChoice: BrowserCommand?
+    // Held as plain references: typing a new name or resting the pointer redraws only the
+    // views that observe them, never the whole window.
+    @State private var renaming = InlineRename()
+    @State private var quickInfo = ItemQuickInfo()
+    @StateObject private var folderTree = FolderTreeState()
+    @StateObject private var paneKeyFocus = PaneKeyFocus()
+    /// Changes on every file change made here, on Refresh and when RichFiles comes back to the
+    /// front, so the sidebar asks each folder again whether it holds folders (one made in
+    /// Finder gets its arrow) and reloads the open ones.
+    @State private var treeRevision = UUID()
 
     private var palette: BrowserPalette { BrowserPalette(scheme) }
     private var activePane: Bool { !workspace.isSplit || workspace.active == side }
@@ -140,19 +150,49 @@ struct BrowserView: View {
                                    shortcuts: BrowserShortcut.load(shortcutData),
                                    activate: { workspace.select(side) },
                                    perform: perform, prefix: { model.typeToSelect($0) }))
-        .onAppear { workspace.setCommands(for: side, owner: commandOwner, handler: perform) }
-        .onDisappear { workspace.clearCommands(for: side, owner: commandOwner) }
+        .onAppear {
+            workspace.setCommands(for: side, owner: commandOwner, handler: perform)
+            configureQuickInfo()
+        }
+        .onDisappear {
+            workspace.clearCommands(for: side, owner: commandOwner)
+            quickInfo.hide()
+        }
+        .onChange(of: scheme) { _ in configureQuickInfo() }
+        .onChange(of: textSize) { _ in configureQuickInfo() }
+        .onChange(of: model.showHidden) { _ in configureQuickInfo() }
         .onChange(of: model.tabs.map(\.folder)) { _ in sessionChanged() }
         .onChange(of: model.currentTabID) { _ in sessionChanged() }
-        .onChange(of: actions.mutationRevision) { _ in model.refresh() }
+        .onChange(of: actions.mutationRevision) { _ in
+            // Undo Rename (and Redo) keep the sidebar's open branches open, as the rename did.
+            for move in actions.mutationMoves { folderTree.move(from: move.from, to: move.to) }
+            model.refresh()
+            treeRevision = UUID()
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             actions.refreshClipboard()
+            treeRevision = UUID()
         }
         .onChange(of: model.folder) { _ in
             editingAddress = false
             focus = nil
             suggestions = []
             feedback = ""
+            renaming.end()
+            quickInfo.hide()
+        }
+        .onChange(of: actions.lastDuplicates) { duplicates in
+            // Catalog entry 1: the new copy takes its sorted place, is selected and scrolled into view.
+            guard let duplicates, activePane,
+                  duplicates.folder.resolvingSymlinksInPath().standardizedFileURL.path
+                    == model.folder.resolvingSymlinksInPath().standardizedFileURL.path else { return }
+            model.selectCreatedItems(duplicates.items)
+            if let last = duplicates.items.last {
+                model.selection.rangeAnchor = last.url
+                model.selection.moveCursor(to: last.url, scrolling: true)
+                model.selection.flash(duplicates.items.map(\.url))
+            }
+            focusItems()
         }
         .background {
             observeSelection { selection in
@@ -171,6 +211,23 @@ struct BrowserView: View {
             sheetContents(value)
                 .font(BrowserTypography.reading(16 * textSize.scale))
                 .background(palette.floating)
+        }
+    }
+
+    /// Catalog entry 13: what the quick-info box says about an item, in the app's own terms and
+    /// formats: Kind, Size (a folder: Contains) and Modified.
+    private func configureQuickInfo() {
+        quickInfo.style = .init(scheme: scheme, size: 16 * textSize.scale)
+        quickInfo.showHidden = model.showHidden
+        let model = model
+        let renaming = renaming
+        quickInfo.describe = { url in
+            guard renaming.item == nil, let entry = model.entries.first(where: { $0.url == url }) else { return nil }
+            let directory = entry.kind == .directory
+            var lines = [QuickInfo.Line(label: "Kind", value: entry.typeDescription ?? (directory ? "Folder" : "Document"))]
+            if !directory, let size = entry.size { lines.append(.init(label: "Size", value: formattedBytes(size))) }
+            if let modified = entry.modified { lines.append(.init(label: "Modified", value: formattedDate(modified))) }
+            return QuickInfo(lines: lines, countFolder: directory ? entry.url : nil)
         }
     }
 
@@ -316,59 +373,70 @@ struct BrowserView: View {
 
     private var sidebar: some View {
         VStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        sideHeading("Quick Access")
-                        ForEach(Array(model.favorites.enumerated()), id: \.element) { index, url in
-                            FolderTreeRow(url: url, title: url.lastPathComponent, symbol: "pin",
-                                          current: model.folder, showHidden: model.showHidden,
-                                          reveal: reveal(for: url), open: model.openFolder, isPin: true)
-                                .contextMenu {
-                                    Button("Remove from Quick Access") { model.removeFavorite(url) }
-                                    Button("Move Up") { model.moveFavorite(from: IndexSet(integer: index), to: index - 1) }
-                                        .disabled(index == 0)
-                                    Button("Move Down") { model.moveFavorite(from: IndexSet(integer: index), to: index + 2) }
-                                        .disabled(index == model.favorites.count - 1)
-                                }
-                        }
-                        if !model.favorites.contains(where: { $0.path == model.folder.path }) {
-                            barButton("Pin Current Folder", "plus", showTitle: true) { model.addFavorite(model.folder) }
-                        }
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            sideHeading("This Mac")
-                            Spacer()
-                            barButton("Expand to Current Folder", "list.bullet.indent") { expandToCurrentFolder() }
-                        }
-                        ForEach(model.places) { place in
-                            FolderTreeRow(url: place.url, title: place.title, symbol: place.symbol,
-                                          current: model.folder, showHidden: model.showHidden,
-                                          reveal: reveal(for: place.url), open: model.openFolder)
-                        }
-                        ForEach(model.volumes) { volume in
-                            HStack(alignment: .top, spacing: 1) {
-                                FolderTreeRow(url: volume.url, title: volume.name,
-                                              symbol: volume.isLocal == false ? "network" : "externaldrive",
+            ScrollViewReader { scroll in
+                ScrollView {
+                    // Catalog entry 10: rows and headings 24 px apart with nothing between rows, and
+                    // 14 px between the groups, so a group gap reads larger than a row gap.
+                    VStack(alignment: .leading, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            sideHeading("Quick Access")
+                            ForEach(Array(model.favorites.enumerated()), id: \.element) { index, url in
+                                FolderTreeRow(url: url, title: url.lastPathComponent, symbol: "pin",
                                               current: model.folder, showHidden: model.showHidden,
-                                              reveal: reveal(for: volume.url), open: model.openFolder, volume: volume)
-                                if volume.isEjectable == true {
-                                    barButton("Eject \(volume.name)", "eject") { eject(volume) }
-                                        .disabled(actions.busy)
+                                              reveal: reveal(for: url), revision: treeRevision, tree: folderTree,
+                                              open: model.openFolder, opened: { showOpened($0, scroll) }, isPin: true)
+                                    .contextMenu {
+                                        Button("Remove from Quick Access") { model.removeFavorite(url) }
+                                        Button("Move Up") { model.moveFavorite(from: IndexSet(integer: index), to: index - 1) }
+                                            .disabled(index == 0)
+                                        Button("Move Down") { model.moveFavorite(from: IndexSet(integer: index), to: index + 2) }
+                                            .disabled(index == model.favorites.count - 1)
+                                    }
+                            }
+                            if !model.favorites.contains(where: { $0.path == model.folder.path }) {
+                                barButton("Pin Current Folder", "plus", showTitle: true, compact: true) {
+                                    model.addFavorite(model.folder)
                                 }
                             }
-                            .contextMenu { Button("Copy Path") { copyPaths([volume.url]) } }
                         }
-                        if !model.volumeStatus.isEmpty {
-                            Text(model.volumeStatus).font(textSize.font(size: 14))
-                                .foregroundStyle(palette.muted)
+                        VStack(alignment: .leading, spacing: 0) {
+                            HStack {
+                                sideHeading("This Mac")
+                                Spacer()
+                                barButton("Expand to Current Folder", "list.bullet.indent", compact: true) { expandToCurrentFolder() }
+                            }
+                            ForEach(model.places) { place in
+                                FolderTreeRow(url: place.url, title: place.title, symbol: place.symbol,
+                                              current: model.folder, showHidden: model.showHidden,
+                                              reveal: reveal(for: place.url), revision: treeRevision, tree: folderTree,
+                                              open: model.openFolder, opened: { showOpened($0, scroll) })
+                            }
+                            ForEach(model.volumes) { volume in
+                                HStack(alignment: .top, spacing: 1) {
+                                    FolderTreeRow(url: volume.url, title: volume.name,
+                                                  symbol: volume.isLocal == false ? "network" : "externaldrive",
+                                                  current: model.folder, showHidden: model.showHidden,
+                                                  reveal: reveal(for: volume.url), revision: treeRevision,
+                                                  tree: folderTree, open: model.openFolder, opened: { showOpened($0, scroll) },
+                                                  volume: volume)
+                                    if volume.isEjectable == true {
+                                        barButton("Eject \(volume.name)", "eject", compact: true) { eject(volume) }
+                                            .disabled(actions.busy)
+                                    }
+                                }
+                                .contextMenu { Button("Copy Path") { copyPaths([volume.url]) } }
+                            }
+                            if !model.volumeStatus.isEmpty {
+                                Text(model.volumeStatus).font(textSize.font(size: 14))
+                                    .foregroundStyle(palette.muted)
+                            }
+                            barButton("Connect to Server", "network", showTitle: true, compact: true) { sheet = .connect }
                         }
-                        barButton("Connect to Server", "network", showTitle: true) { sheet = .connect }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, 8).padding(.trailing, 12).padding(.vertical, 6)
+                    .background(PaneScrollBridge(horizontal: false, colors: palette.scrollerColors(on: palette.sidebar, track: false)))
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(8)
             }
             rule.padding(.horizontal, 8)
             Button { sheet = .trash } label: {
@@ -381,6 +449,12 @@ struct BrowserView: View {
         }
         .background(palette.sidebar)
         .accessibilityLabel("Folder sidebar")
+    }
+
+    /// Opening a folder near the bottom scrolls just enough to show what opened, never pushing
+    /// the folder itself off the top (catalog entry 15).
+    private func showOpened(_ ids: [String], _ scroll: ScrollViewProxy) {
+        for id in ids { scroll.scrollTo(id, anchor: nil) }
     }
 
     private func reveal(for root: URL) -> FolderTreeReveal? {
@@ -399,7 +473,7 @@ struct BrowserView: View {
 
     private func sideHeading(_ label: String) -> some View {
         Text(label).fontWeight(.semibold).foregroundStyle(palette.muted)
-            .padding(.leading, 5).padding(.vertical, 5).accessibilityAddTraits(.isHeader)
+            .padding(.leading, 5).frame(minHeight: 24 * textSize.scale).accessibilityAddTraits(.isHeader)
     }
 
     private var tabs: some View {
@@ -588,9 +662,9 @@ struct BrowserView: View {
 
     private func barButton(_ title: String, _ symbol: String, showTitle: Bool = false,
                            selected: Bool = false, bordered: Bool = false, visibleTitle: String? = nil,
-                           action: @escaping () -> Void) -> some View {
+                           compact: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) { barLabel(visibleTitle ?? title, symbol, showTitle) }
-            .buttonStyle(BrowserButtonStyle(selected: selected, bordered: bordered))
+            .buttonStyle(BrowserButtonStyle(selected: selected, bordered: bordered, compact: compact))
             .accessibilityLabel(title).help(title)
     }
 
@@ -606,7 +680,7 @@ struct BrowserView: View {
         }
     }
 
-    private var itemPane: some View {
+    private var itemPaneContent: some View {
         ZStack(alignment: .top) {
             Group {
                 if model.isDisconnected {
@@ -659,22 +733,31 @@ struct BrowserView: View {
             // existing group. A normal click can narrow it on release.
             guard !modifiers.isEmpty || !model.selected.contains(url) else { return false }
             workspace.select(side)
-            if focus != .items { focus = .items }
+            focusItems()
             select(entry, modifiers: modifiers)
             return true
-        }, click: { start, end, event in
+        }, click: { start, end, event, wasKey in
             // AppKit has already counted the clicks. An unhandled first press
             // still selects on release and the second release opens the item.
             guard model.viewMode != .details,
                   let url = rowAt(start), rowAt(end) == url,
                   let entry = model.entries.first(where: { $0.url == url }) else { return false }
             workspace.select(side)
-            if focus != .items { focus = .items }
+            focusItems()
             if event.clickCount == 2 {
+                renaming.cancelArm()
                 select(entry, modifiers: [])
                 activate([entry])
             } else {
+                // Catalog entry 2: a click on the item that is already the only selection, after a
+                // pause, opens the inline name box once no second click makes it a double-click.
+                let armed = wasKey && model.selected == [url] && renaming.item == nil && supportsInlineRename
+                    && event.modifierFlags.intersection([.command, .shift, .control, .option]).isEmpty
                 select(entry, modifiers: event.modifierFlags)
+                if armed {
+                    renaming.arm(after: NSEvent.doubleClickInterval,
+                                 stillSelected: { model.selected == [url] }) { beginInlineRename(entry) }
+                }
             }
             return true
         }, controlClick: { point, windowPoint, window in
@@ -685,8 +768,36 @@ struct BrowserView: View {
             workspace.select(side)
             select(entry, modifiers: .control)
             if model.viewMode == .details { detailsViewport.focusTable() }
-            else { focus = .items }
+            else { focusItems() }
             return true
+        }, blankClick: { point in
+            // Catalog entry 6: a click on empty space deselects; the last item keeps only its
+            // thin keyboard-focus outline.
+            guard model.viewMode != .details, canSelectFromBlankSpace(at: point) else { return }
+            workspace.select(side)
+            focusItems()
+            if !model.selected.isEmpty { model.selected = [] }
+        }, secondaryPress: { point in
+            // Catalog entry 8: a right-click selects the item before its menu opens, so the menu
+            // plainly belongs to it. On empty space it deselects and the folder menu opens.
+            guard model.viewMode != .details else { return nil }
+            renaming.cancelArm()
+            quickInfo.hide()
+            if let url = rowAt(point), let entry = model.entries.first(where: { $0.url == url }) {
+                workspace.select(side)
+                if !model.selected.contains(url) { select(entry, modifiers: []) }
+                else { model.selection.moveCursor(to: url) }
+                focusItems()
+                return rowFrames[url]
+            } else if canSelectFromBlankSpace(at: point) {
+                workspace.select(side)
+                if !model.selected.isEmpty { model.selected = [] }
+                focusItems()
+            }
+            return nil
+        }, anyPress: { inText in
+            renaming.cancelArm()
+            if renaming.item != nil && !inText { commitInlineRename(quiet: true) }
         }))
         .onPreferenceChange(RowFramesKey.self) { rowFrames = $0 }
         .onPreferenceChange(FileColumnFrameKey.self) { fileColumnFrame = $0 }
@@ -708,16 +819,43 @@ struct BrowserView: View {
                 })
             }
             .onEnded { _ in
-                if selectionRectangle != nil && model.viewMode != .details { focus = .items }
+                if selectionRectangle != nil && model.viewMode != .details { focusItems() }
                 selectionRectangle = nil
             })
         .onDrop(of: [UTType.fileURL.identifier, BrowserDragSelection.type], delegate: BrowserDropTarget(
             proposal: proposeDrop, exited: { dropOperation = nil }, receive: receiveDrop
         ))
         .contextMenu { folderMenu }
-        .focusable(model.viewMode != .details)
-        .focused($focus, equals: .items)
     }
+
+    /// The file pane takes keyboard focus but draws no ring or border around itself (catalog
+    /// entry 5). macOS 14 and later turn SwiftUI's ring off; macOS 13 has no such switch, so
+    /// there the pane's focus is an AppKit view that draws no ring.
+    @ViewBuilder
+    private var itemPane: some View {
+        if #available(macOS 14.0, *) {
+            itemPaneContent
+                .focusable(model.viewMode != .details)
+                .focusEffectDisabled()
+                .focused($focus, equals: .items)
+        } else {
+            itemPaneContent.background(PaneKeyFocusSink(focus: paneKeyFocus))
+        }
+    }
+
+    private var itemsHaveFocus: Bool { focus == .items || paneKeyFocus.focused }
+
+    private func focusItems() {
+        if #available(macOS 14.0, *) {
+            if focus != .items { focus = .items }
+        } else {
+            if focus != nil { focus = nil }
+            paneKeyFocus.take()
+        }
+    }
+
+    /// The views whose items show their name with `nameLabel`, which can turn into the inline box.
+    private var supportsInlineRename: Bool { model.viewMode == .list || model.viewMode == .columns }
 
     private func rowAt(_ point: CGPoint) -> URL? {
         rowFrames.first { row in
@@ -953,41 +1091,14 @@ struct BrowserView: View {
 
     private var compactList: some View {
         GeometryReader { geometry in
-            let rowHeight = (model.searchActive ? 48 : 28) * textSize.scale
-            let rows = max(1, Int((geometry.size.height - 12) / rowHeight))
-            let width = max(1, geometry.size.width - 12)
-            let visibleColumns = max(1, Int(width / (325 * textSize.scale)))
-            let columnWidth = width / CGFloat(visibleColumns)
-            let entries = model.entries
-            let columns = (entries.count + rows - 1) / rows
+            // Catalog entries 10, 11 and 12: rows 24 px apart, each column as wide as its own
+            // longest name, columns separated only by a 12 px gap, no lines between them.
+            let rowHeight: CGFloat = (model.searchActive ? 48 : 24) * textSize.scale
+            let scrollerHeight: CGFloat = NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)
+            let rows: Int = max(1, Int((geometry.size.height - 12 - scrollerHeight) / rowHeight))
             ScrollViewReader { scroll in
-                ScrollView(.horizontal) {
-                    LazyHStack(alignment: .top, spacing: 0) {
-                        ForEach(0..<columns, id: \.self) { column in
-                            let start = column * rows
-                            let end = min(start + rows, entries.count)
-                            VStack(spacing: 0) {
-                                ForEach(entries[start..<end]) { entry in
-                                    selectable(entry) {
-                                        VStack(alignment: .leading, spacing: 1) {
-                                            nameLabel(entry)
-                                            if model.searchActive {
-                                                resultLocation(entry, font: BrowserTypography.reading(14 * textSize.scale))
-                                            }
-                                        }.frame(maxWidth: .infinity, alignment: .leading)
-                                    }.frame(height: rowHeight)
-                                }
-                            }
-                            .padding(.horizontal, 5)
-                            .frame(width: columnWidth, height: max(0, geometry.size.height - 12), alignment: .top)
-                            .overlay(alignment: .trailing) {
-                                if column + 1 < columns {
-                                    Rectangle().fill(palette.line).frame(width: 1).allowsHitTesting(false)
-                                }
-                            }
-                            .id(column)
-                        }
-                    }.padding(6)
+                Observing(object: renaming) { rename in
+                    listColumns(rows: rows, rowHeight: rowHeight, rename: rename)
                 }
                 .onAppear {
                     listRows = rows
@@ -1007,6 +1118,62 @@ struct BrowserView: View {
         .accessibilityIdentifier("file-list")
         .accessibilityLabel("List view, filenames and extensions")
     }
+
+    private func listColumns(rows: Int, rowHeight: CGFloat, rename: InlineRename) -> some View {
+        let entries = model.entries
+        let columns = (entries.count + rows - 1) / rows
+        let layout = listLayout(entries, rows: rows, rename: rename)
+        let renamingColumn: Int? = rename.item.flatMap { item in entries.firstIndex { $0.url == item } }.map { $0 / rows }
+        return ScrollView(.horizontal) {
+            LazyHStack(alignment: .top, spacing: ListColumnLayout.gap) {
+                ForEach(0..<columns, id: \.self) { column in
+                    listColumn(entries[(column * rows)..<min(column * rows + rows, entries.count)],
+                               rowHeight: rowHeight, rename: rename)
+                        .frame(width: column < layout.widths.count ? layout.widths[column] : 0, alignment: .top)
+                        .zIndex(renamingColumn == column ? 1 : 0)
+                        .id(column)
+                }
+            }
+            .padding(6)
+            .background(PaneScrollBridge(horizontal: true, colors: palette.scrollerColors(on: palette.pane),
+                                         scrolled: { quickInfo.hide() }))
+        }
+    }
+
+    private func listColumn(_ slice: ArraySlice<FileEntry>, rowHeight: CGFloat, rename: InlineRename) -> some View {
+        VStack(spacing: 0) {
+            ForEach(slice) { entry in
+                selectable(entry) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        nameLabel(entry)
+                        if model.searchActive {
+                            resultLocation(entry, font: BrowserTypography.reading(14 * textSize.scale))
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(height: rowHeight)
+                .zIndex(rename.item == entry.url ? 1 : 0)
+            }
+        }
+    }
+
+    /// Column widths for the List view. A name being edited is measured as typed, so its column
+    /// and every column after it move with each letter (catalog entry 11).
+    private func listLayout(_ entries: [FileEntry], rows: Int, rename: InlineRename) -> ListColumnLayout {
+        let size = 16 * textSize.scale
+        let cut = actions.cutURLs
+        return ListColumnLayout(names: entries.map(\.name), rows: rows, extra: { index in
+            let entry = entries[index]
+            if rename.item == entry.url {
+                return NameWidths.measure(rename.text, size: size) + Self.renameBoxPadding - NameWidths.measure(entry.name, size: size)
+            }
+            return cut.contains(where: { $0.path == entry.url.path }) ? 26 : 0
+        }, measure: { NameWidths.measure($0, size: size) })
+    }
+
+    /// The inline box's room around the typed name: 4 px of text inset on each side, the 1 px
+    /// border on each side and a 2 px caret allowance.
+    private static let renameBoxPadding: CGFloat = 12
 
     private func scrollList(to url: URL?, rows: Int, using scroll: ScrollViewProxy, anchor: UnitPoint? = nil) {
         guard let url, let index = model.entries.firstIndex(where: { $0.url == url }) else { return }
@@ -1055,10 +1222,13 @@ struct BrowserView: View {
 
     private func selectable<Content: View>(_ entry: FileEntry, @ViewBuilder content: () -> Content) -> some View {
         let cut = actions.cutURLs.contains { $0.path == entry.url.path }
-        let itemsFocused = focus == .items
+        let itemsFocused = itemsHaveFocus
         let location = model.searchActive ? entry.url.deletingLastPathComponent().path : ""
         let outline = RoundedRectangle(cornerRadius: 5)
-        let marker = activePane ? palette.signal : palette.muted
+        // Catalog entries 4, 6 and 7: one light fill and one thin line for a selected item, the
+        // line alone for the keyboard-focus item, a faint tint under the pointer. No bar, no ring.
+        let edge = activePane ? palette.selectionEdge : palette.muted
+        let quickInfoHere = model.viewMode == .list || model.viewMode == .columns
         let row = content()
         return observeSelection { selection in
             let selected = selection.urls.contains(entry.url)
@@ -1067,17 +1237,15 @@ struct BrowserView: View {
                 .padding(.horizontal, 8)
                 .background {
                     RowHighlight(selection: model.selection, url: entry.url,
-                                 color: NSColor(activePane ? palette.selected : palette.inactiveSelection))
+                                 fill: NSColor(activePane ? palette.selectionFill : palette.inactiveSelection),
+                                 fillHover: NSColor(activePane ? palette.selectionFillHover : palette.inactiveSelection),
+                                 hover: NSColor(palette.hover),
+                                 quickInfo: quickInfoHere ? quickInfo : nil)
                 }
                 .overlay {
                     if selected || cursor || cut {
-                        outline.strokeBorder(marker, style: StrokeStyle(lineWidth: cursor ? 2 : 1, dash: cut ? [4, 3] : []))
+                        outline.strokeBorder(edge, style: StrokeStyle(lineWidth: 1, dash: cut ? [4, 3] : []))
                             .allowsHitTesting(false)
-                    }
-                }
-                .overlay(alignment: .leading) {
-                    if selected {
-                        Capsule().fill(marker).frame(width: 3).padding(.vertical, 2).allowsHitTesting(false)
                     }
                 }
                 .background(dragFrame(for: entry.url))
@@ -1085,13 +1253,14 @@ struct BrowserView: View {
                 .contextMenu {
                     selectionMenu(selected ? model.selectedEntries : [entry])
                 }
-                .help(model.searchActive ? entry.url.path : entry.name)
+                .modifier(NameHelp(text: quickInfoHere ? nil : (model.searchActive ? entry.url.path : entry.name)))
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(entry.name)
                 .accessibilityValue(location)
                 .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
                 .accessibilityAction { select(entry, modifiers: [], scroll: true) }
                 .accessibilityAction(named: "Open") { activate([entry]) }
+                .accessibilityAction(named: "Rename") { requestRename(entry) }
         }.id(entry.url)
     }
 
@@ -1110,18 +1279,38 @@ struct BrowserView: View {
 
     private func nameLabel(_ entry: FileEntry) -> some View {
         let cut = actions.cutURLs.contains { $0.path == entry.url.path }
-        let font = BrowserTypography.reading(16 * textSize.scale)
-        return HStack(spacing: 8) {
-            Image(systemName: fileSymbol(entry))
-                .foregroundStyle(entry.kind == .directory ? palette.folder : palette.muted)
-                .frame(width: 18)
-            Text(entry.name).lineLimit(1).truncationMode(.middle)
-                .font(cut ? font.italic() : font)
-            if cut { Image(systemName: "scissors").foregroundStyle(palette.muted).accessibilityLabel("Cut") }
+        let size = 16 * textSize.scale
+        let font = BrowserTypography.reading(size)
+        return Observing(object: renaming) { rename in
+            HStack(spacing: 8) {
+                Image(systemName: fileSymbol(entry))
+                    .foregroundStyle(entry.kind == .directory ? palette.folder : palette.muted)
+                    .frame(width: 18)
+                if rename.item == entry.url {
+                    InlineRenameField(rename: rename, font: BrowserTypography.readingNSFont(size),
+                                      ink: NSColor(palette.ink), ground: NSColor(palette.pane),
+                                      commit: { commitInlineRename(quiet: $0) }, cancel: { cancelInlineRename() })
+                        .frame(width: NameWidths.measure(rename.text, size: size) + Self.renameBoxPadding,
+                               height: 22 * textSize.scale)
+                        .overlay(alignment: .topLeading) {
+                            if !rename.problem.isEmpty {
+                                Text(rename.problem)
+                                    .padding(.horizontal, 9).padding(.vertical, 6)
+                                    .background(palette.floating, in: RoundedRectangle(cornerRadius: 6))
+                                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(palette.attention, lineWidth: 1))
+                                    .fixedSize()
+                                    .offset(y: 22 * textSize.scale + 4)
+                            }
+                        }
+                } else {
+                    Text(entry.name).lineLimit(1).truncationMode(.middle)
+                        .font(cut ? font.italic() : font)
+                }
+                if cut { Image(systemName: "scissors").foregroundStyle(palette.muted).accessibilityLabel("Cut") }
+            }
+            .opacity(cut ? 0.65 : 1)
+            .accessibilityLabel(entry.name)
         }
-        .opacity(cut ? 0.65 : 1)
-        .help(entry.name)
-        .accessibilityLabel(entry.name)
     }
 
     @ViewBuilder
@@ -1136,10 +1325,15 @@ struct BrowserView: View {
                     Button("New Terminal at Folder") { openTerminal(at: first, inNewTab: false) }
                     Button("New Terminal Tab at Folder") { openTerminal(at: first, inNewTab: true) }
                 } else {
-                    Button("Open With…") { chooseApplication(first) }
+                    // Catalog entry 3: the apps for this file type, the default first, right in
+                    // the menu, then Choose Another App… for the full list.
+                    Menu("Open With") {
+                        OpenWithMenuItems(file: first.url, open: { app in open(first, with: app) },
+                                          chooseAnother: { chooseApplication(first) })
+                    }
                     Button("Quick Look") { sheet = .preview(first) }
                 }
-                Button("Rename…") { requestRename(first) }.disabled(actions.busy)
+                Button(supportsInlineRename ? "Rename" : "Rename…") { requestRename(first) }.disabled(actions.busy)
                 Button("Properties") { sheet = .properties(first) }
                 if first.kind == .regularFile {
                     Button("Verify Checksum…") { checksum(first) }
@@ -1362,6 +1556,7 @@ struct BrowserView: View {
         case .refresh:
             dropDestination = nil
             destinationRefresh = UUID()
+            treeRevision = UUID()
             model.refreshVolumes()
             model.refresh()
         case .address: editAddress()
@@ -1519,12 +1714,70 @@ struct BrowserView: View {
         sheet = .openWith(entry)
     }
 
+    private func open(_ entry: FileEntry, with application: WorkspaceApplication) {
+        Task {
+            do { try await WorkspaceServices.open(entry.url, with: application) }
+            catch { feedback = error.localizedDescription }
+        }
+    }
+
     private func requestRename(_ entry: FileEntry) {
+        if supportsInlineRename {
+            beginInlineRename(entry)
+            return
+        }
         withReferences([entry]) { references in
             guard let source = references.first else { return }
             sheet = .name(NameRequest(source: source, folder: model.folder,
                                       directory: entry.kind == .directory, name: entry.name))
         }
+    }
+
+    /// Catalog entry 2: the name turns into a box in place, the part before the extension
+    /// selected. F2, the toolbar's Rename, the menu's Rename and click, pause, click all open it.
+    private func beginInlineRename(_ entry: FileEntry) {
+        guard !actions.busy, model.entries.contains(where: { $0.url == entry.url }) else { return }
+        quickInfo.hide()
+        let folder = model.folder
+        withReferences([entry]) { references in
+            guard let source = references.first, model.folder == folder else { return }
+            workspace.select(side)
+            model.selected = [entry.url]
+            model.selection.rangeAnchor = entry.url
+            model.selection.moveCursor(to: entry.url, scrolling: true)
+            renaming.begin(entry, source: source)
+        }
+    }
+
+    private func commitInlineRename(quiet: Bool) {
+        guard let item = renaming.item, let source = renaming.source else { return }
+        let parent = item.deletingLastPathComponent().path
+        let siblings = model.entries.filter { $0.url.deletingLastPathComponent().path == parent }.map(\.name)
+        switch InlineRename.outcome(for: renaming.text, original: renaming.original, siblings: siblings) {
+        case .cancel:
+            cancelInlineRename()
+        case .refuse(let message):
+            if quiet { cancelInlineRename() } else { renaming.problem = message }
+        case .rename(let name):
+            renaming.end()
+            focusItems()
+            let folder = model.folder
+            actions.rename(source, to: name) { moved in
+                folderTree.move(from: item, to: moved.url)
+                // The item clicked to finish the edit keeps the selection and the cursor.
+                guard model.folder == folder,
+                      InlineRename.selection(afterRenaming: item, to: moved.url, current: model.selected) != nil
+                else { return }
+                model.selectCreatedItem(moved)
+                model.selection.rangeAnchor = moved.url
+                model.selection.moveCursor(to: moved.url, scrolling: true)
+            }
+        }
+    }
+
+    private func cancelInlineRename() {
+        renaming.end()
+        focusItems()
     }
 
     private func checksum(_ entry: FileEntry) {
@@ -1843,49 +2096,119 @@ struct BrowserView: View {
 }
 
 /// Paint the row fill as soon as selection changes. SwiftUI can update the
-/// toolbar, outline and accessibility traits in its next layout pass.
+/// toolbar, outline and accessibility traits in its next layout pass. The same view follows the
+/// pointer: a faint tint on the item under it (catalog entry 7), and the quick-info box after a
+/// rest (entry 13), both without redrawing any SwiftUI view.
 private struct RowHighlight: NSViewRepresentable {
     let selection: BrowserSelection
     let url: URL
-    let color: NSColor
+    let fill: NSColor
+    let fillHover: NSColor
+    let hover: NSColor
+    let quickInfo: ItemQuickInfo?
 
     func makeNSView(context: Context) -> Highlight { Highlight() }
 
     func updateNSView(_ view: Highlight, context: Context) {
-        view.configure(selection: selection, url: url, color: color)
+        view.configure(selection: selection, url: url, colors: (fill, fillHover, hover), quickInfo: quickInfo)
     }
 
     final class Highlight: NSView {
         private weak var selection: BrowserSelection?
+        private weak var quickInfo: ItemQuickInfo?
         private var url: URL?
-        private var color: NSColor = .clear
+        private var colors: (fill: NSColor, fillHover: NSColor, hover: NSColor) = (.clear, .clear, .clear)
         private var subscription: AnyCancellable?
+        private var selected = false
+        private var pointed = false
 
+        override var isFlipped: Bool { true }
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-        func configure(selection: BrowserSelection, url: URL, color: NSColor) {
+        func configure(selection: BrowserSelection, url: URL,
+                       colors: (fill: NSColor, fillHover: NSColor, hover: NSColor), quickInfo: ItemQuickInfo?) {
             if !wantsLayer {
                 wantsLayer = true
                 layer?.cornerRadius = 5
             }
-            self.color = color
+            self.colors = colors
+            self.quickInfo = quickInfo
             if self.selection !== selection || self.url != url {
                 self.selection = selection
                 self.url = url
+                selected = selection.urls.contains(url)
                 subscription = selection.$urls.map { $0.contains(url) }.removeDuplicates().sink { [weak self] in
-                    self?.paint(selected: $0)
+                    self?.selected = $0
+                    self?.paint()
                 }
-            } else {
-                paint(selected: selection.urls.contains(url))
+                flashIfNew(selection, url)
+            }
+            paint()
+        }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            trackingAreas.forEach(removeTrackingArea)
+            addTrackingArea(NSTrackingArea(
+                rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeInActiveApp, .inVisibleRect], owner: self
+            ))
+        }
+
+        override func mouseEntered(with event: NSEvent) {
+            pointed = true
+            paint()
+            // A pointer that lands on the item in one move sends no mouseMoved first.
+            if let url { quickInfo?.moved(over: url, at: NSEvent.mouseLocation) }
+        }
+
+        override func mouseMoved(with event: NSEvent) {
+            if !pointed { pointed = true; paint() }
+            if let url { quickInfo?.moved(over: url, at: NSEvent.mouseLocation) }
+        }
+
+        override func mouseExited(with event: NSEvent) {
+            pointed = false
+            paint()
+            if let url { quickInfo?.left(url) }
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window == nil, pointed, let url {
+                pointed = false
+                quickInfo?.left(url)
             }
         }
 
-        private func paint(selected: Bool) {
+        private func paint() {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            layer?.backgroundColor = selected ? color.cgColor : nil
+            layer?.backgroundColor = selected ? (pointed ? colors.fillHover : colors.fill).cgColor
+                : pointed ? colors.hover.cgColor : nil
             CATransaction.commit()
         }
+
+        /// A pasted duplicate flashes once (catalog entry 1): its fill fades from the deeper
+        /// pointed-at tone to the plain selected tone.
+        private func flashIfNew(_ selection: BrowserSelection, _ url: URL) {
+            let flashed = selection.flashed
+            let elapsed = ProcessInfo.processInfo.systemUptime - flashed.at
+            guard elapsed < 0.9, flashed.paths.contains(url.standardizedFileURL.path) else { return }
+            let animation = CABasicAnimation(keyPath: "backgroundColor")
+            animation.fromValue = colors.fillHover.cgColor
+            animation.duration = 0.9 - elapsed
+            animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            layer?.add(animation, forKey: "flash")
+        }
+    }
+}
+
+/// The system tooltip with an item's full name, in the views that do not show quick info.
+private struct NameHelp: ViewModifier {
+    let text: String?
+
+    func body(content: Content) -> some View {
+        if let text { content.help(text) } else { content }
     }
 }
 
@@ -1995,6 +2318,37 @@ private struct RowFramesKey: PreferenceKey {
     }
 }
 
+/// Which sidebar folders are open, by their place in the tree. It outlives the rows, so closing a
+/// folder and opening it again brings back what was open inside it (catalog entry 15).
+@MainActor
+final class FolderTreeState: ObservableObject {
+    @Published private(set) var open: Set<String> = []
+
+    func isOpen(_ id: String) -> Bool { open.contains(id) }
+
+    func setOpen(_ id: String, _ value: Bool) {
+        if value { if !open.contains(id) { open.insert(id) } }
+        else if open.contains(id) { open.remove(id) }
+    }
+
+    /// A folder renamed or moved keeps itself and everything inside it open as it was. A row's
+    /// place is a root prefix ("place:", "pin:", "volume:") and the folder's full path.
+    func move(from old: URL, to new: URL) {
+        let before = old.standardizedFileURL.path, after = new.standardizedFileURL.path
+        let moved = Set(open.map { id -> String in
+            guard let colon = id.firstIndex(of: ":") else { return id }
+            let path = String(id[id.index(after: colon)...])
+            guard path == before || path.hasPrefix(before + "/") else { return id }
+            return String(id[...colon]) + after + path.dropFirst(before.count)
+        })
+        if moved != open { open = moved }
+    }
+}
+
+/// One folder in the sidebar tree (catalog entries 15 and 16). The arrow is its own 18 by 20 px
+/// target and only opens or closes the folder here; the rest of the row shows the folder's files
+/// on the right. A folder with no folders inside has no arrow. Each level sits 12 px further
+/// right and every row is 24 px tall (entry 10).
 private struct FolderTreeRow: View {
     let url: URL
     let title: String
@@ -2002,15 +2356,30 @@ private struct FolderTreeRow: View {
     let current: URL
     let showHidden: Bool
     let reveal: FolderTreeReveal?
+    let revision: UUID
+    @ObservedObject var tree: FolderTreeState
     let open: (URL) -> Void
+    let opened: ([String]) -> Void
     var isPin = false
     var volume: VolumeInfo?
+    var level = 0
+    var parentID: String?
     @Environment(\.colorScheme) private var scheme
     @AppStorage("richfiles.textSize") private var textSize = BrowserTextSize.standard
-    @State private var expanded = false
     @State private var children: [FileEntry] = []
     @State private var problem = ""
     @State private var missing = false
+    @State private var hasFolders: Bool?
+    @State private var rowPointed = false
+    @State private var arrowPointed = false
+    @State private var showOpened = false
+
+    private var id: String {
+        parentID.map { $0 + "/" + url.lastPathComponent }
+            ?? (isPin ? "pin:" : volume == nil ? "place:" : "volume:") + url.standardizedFileURL.path
+    }
+
+    private var expanded: Bool { tree.isOpen(id) }
 
     private var childToReveal: String? { reveal?.nextChild[url.standardizedFileURL.path] }
 
@@ -2018,56 +2387,32 @@ private struct FolderTreeRow: View {
         let expanded: Bool
         let showHidden: Bool
         let child: String?
+        let revision: UUID
+    }
+
+    private struct ProbeRequest: Hashable {
+        let showHidden: Bool
+        let revision: UUID
     }
 
     var body: some View {
         let palette = BrowserPalette(scheme)
         let here = current.standardizedFileURL.path == url.standardizedFileURL.path
-        DisclosureGroup(isExpanded: $expanded) {
-            ForEach(children) { entry in
-                FolderTreeRow(url: entry.url, title: entry.name, symbol: "folder", current: current,
-                              showHidden: showHidden, reveal: reveal, open: open)
-            }
-            if !problem.isEmpty { Text(problem).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
-        } label: {
-            Button { open(url) } label: {
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
-                        Image(systemName: missing ? "exclamationmark.triangle" : symbol)
-                            .foregroundStyle(missing ? palette.attention : palette.folder)
-                        Text(title).lineLimit(1)
-                        if missing {
-                            Text("Missing").font(BrowserTypography.reading(13 * textSize.scale))
-                                .foregroundStyle(palette.attention)
-                        }
-                    }
-                    if let volume, let available = volume.availableBytes, let total = volume.totalBytes, total > 0 {
-                        Text("\(formattedBytes(available)) free of \(formattedBytes(total))")
-                            .font(BrowserTypography.reading(14 * textSize.scale))
-                            .foregroundStyle(palette.muted).lineLimit(1)
-                        GeometryReader { geometry in
-                            Capsule().fill(palette.controlLine.opacity(0.35))
-                            Capsule().fill(palette.folder)
-                                .frame(width: geometry.size.width * min(1, max(0, Double(total - available) / Double(total))))
-                        }.frame(height: 4).accessibilityHidden(true)
-                    }
+        VStack(alignment: .leading, spacing: 0) {
+            row(palette, here: here).id(id)
+            if expanded {
+                ForEach(children) { entry in
+                    FolderTreeRow(url: entry.url, title: entry.name, symbol: "folder", current: current,
+                                  showHidden: showHidden, reveal: reveal, revision: revision, tree: tree,
+                                  open: open, opened: opened, level: level + 1, parentID: id)
                 }
-                .fontWeight(here ? .semibold : .regular)
-                .padding(.horizontal, 6)
-                .padding(.vertical, volume == nil ? 3 : 5)
-                .frame(maxWidth: .infinity, minHeight: 26 * textSize.scale, alignment: .leading)
-                .background(here ? palette.selected : .clear, in: RoundedRectangle(cornerRadius: 5))
-                .overlay(alignment: .leading) {
-                    if here { Capsule().fill(palette.signal).frame(width: 3).allowsHitTesting(false) }
+                if !problem.isEmpty {
+                    Text(problem).font(BrowserTypography.reading(14 * textSize.scale)).foregroundStyle(palette.muted)
+                        .lineLimit(2)
+                        .padding(.leading, 4 + CGFloat(level + 1) * 12 + 22)
                 }
             }
-            .buttonStyle(.plain)
-            .help(url.path)
         }
-        .accessibilityLabel(title)
-        .accessibilityAddTraits(here ? .isSelected : [])
-        .accessibilityValue(missing ? "Missing" : "")
-        .accessibilityAction(named: "Open Folder") { open(url) }
         .task(id: current) {
             guard isPin else { return }
             let location = url
@@ -2076,16 +2421,99 @@ private struct FolderTreeRow: View {
             }.value
             if !Task.isCancelled { missing = !available }
         }
-        .onAppear { if childToReveal != nil { expanded = true } }
-        .onChange(of: reveal?.id) { _ in if childToReveal != nil { expanded = true } }
-        .task(id: LoadRequest(expanded: expanded, showHidden: showHidden, child: childToReveal)) {
+        .task(id: ProbeRequest(showHidden: showHidden, revision: revision)) {
+            let found = await BrowserModel.hasChildFolders(of: url, showHidden: showHidden)
+            if !Task.isCancelled { hasFolders = found }
+        }
+        .onAppear { if childToReveal != nil { tree.setOpen(id, true) } }
+        .onChange(of: reveal?.id) { _ in if childToReveal != nil { tree.setOpen(id, true) } }
+        .task(id: LoadRequest(expanded: expanded, showHidden: showHidden, child: childToReveal, revision: revision)) {
             guard expanded else { return }
             do {
                 let loaded = try await BrowserModel.folderChildren(of: url, showHidden: showHidden,
                                                                    revealing: childToReveal)
-                if !Task.isCancelled { children = loaded; problem = "" }
+                guard !Task.isCancelled else { return }
+                children = loaded
+                problem = ""
+                hasFolders = !loaded.isEmpty
+                if loaded.isEmpty { tree.setOpen(id, false) }
+                if showOpened, let last = loaded.last {
+                    showOpened = false
+                    opened([id + "/" + last.url.lastPathComponent, id])
+                }
             } catch {
                 if !Task.isCancelled { children = []; problem = error.localizedDescription }
+            }
+        }
+    }
+
+    private func row(_ palette: BrowserPalette, here: Bool) -> some View {
+        HStack(alignment: volume == nil ? .center : .top, spacing: 4) {
+            if hasFolders == true && !missing {
+                Button {
+                    showOpened = !expanded
+                    tree.setOpen(id, !expanded)
+                } label: {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                        .animation(.easeOut(duration: 0.12), value: expanded)
+                        .foregroundStyle(arrowPointed ? palette.ink : palette.muted)
+                        .frame(width: 18, height: 20)
+                        .background(arrowPointed ? palette.hover : .clear, in: RoundedRectangle(cornerRadius: 4))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onHover { arrowPointed = $0 }
+                .accessibilityLabel(expanded ? "Close \(title) in the sidebar" : "Open \(title) in the sidebar")
+            } else {
+                Color.clear.frame(width: 18, height: 20).accessibilityHidden(true)
+            }
+            Button { open(url) } label: {
+                label(palette)
+                    .frame(maxWidth: .infinity, minHeight: 24 * textSize.scale, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(url.path)
+            .accessibilityLabel(title)
+            .accessibilityAddTraits(here ? .isSelected : [])
+            .accessibilityValue(missing ? "Missing" : "")
+            .accessibilityAction(named: "Open Folder") { open(url) }
+        }
+        .fontWeight(here ? .semibold : .regular)
+        .padding(.leading, 4 + CGFloat(level) * 12)
+        .padding(.trailing, 6)
+        .padding(.vertical, volume == nil ? 0 : 3)
+        .background(here ? palette.selected : (rowPointed && !arrowPointed ? palette.hover : .clear),
+                    in: RoundedRectangle(cornerRadius: 5))
+        .overlay(alignment: .leading) {
+            if here { Capsule().fill(palette.signal).frame(width: 3).padding(.vertical, 2).allowsHitTesting(false) }
+        }
+        .onHover { rowPointed = $0 }
+    }
+
+    private func label(_ palette: BrowserPalette) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Image(systemName: missing ? "exclamationmark.triangle" : symbol)
+                    .foregroundStyle(missing ? palette.attention : palette.folder)
+                Text(title).lineLimit(1)
+                if missing {
+                    Text("Missing").font(BrowserTypography.reading(14 * textSize.scale))
+                        .foregroundStyle(palette.attention)
+                }
+            }
+            if let volume, let available = volume.availableBytes, let total = volume.totalBytes, total > 0 {
+                Text("\(formattedBytes(available)) free of \(formattedBytes(total))")
+                    .font(BrowserTypography.reading(14 * textSize.scale))
+                    .fontWeight(.regular)
+                    .foregroundStyle(palette.muted).lineLimit(1)
+                GeometryReader { geometry in
+                    Capsule().fill(palette.controlLine.opacity(0.35))
+                    Capsule().fill(palette.folder)
+                        .frame(width: geometry.size.width * min(1, max(0, Double(total - available) / Double(total))))
+                }.frame(height: 4).accessibilityHidden(true)
             }
         }
     }
