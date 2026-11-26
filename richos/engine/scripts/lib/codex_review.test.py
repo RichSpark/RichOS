@@ -90,6 +90,26 @@ class Reviews(unittest.TestCase):
         self.assertEqual(incoming, result)
         self.assertEqual(list(rw.due(items, rw.Book([row], {}, []), 102, {}, 3600)), [])
 
+    def test_app_reviews_a_handover_only_once_it_was_handed_to_the_team(self):
+        """Opening the app starts no review: a READY the app's Codex watcher still holds (written
+        while the app was closed) is not read, queued or answered until it is accepted."""
+        watch = self.state / "codex-watch"
+        c.mkdir(watch)
+        state = {}
+        self.assertEqual(self.world.codex_items(100, state), ([], []))
+        self.assertEqual(state["channel_pending"], [])
+        self.assertEqual(state["channels"], {}, "a held handover moved the review position")
+        self.assertEqual(len(c.read(self.path)["records"]), 1, "a held handover got a review notice")
+        # The app handed the READY to the team: the next look reviews it, once. A report written
+        # after it is not handed over yet and stays unread.
+        source = self.path / "to-rich.jsonl"
+        ends = [end for _, end, _ in c.records(source, 0)]
+        c.send(self.path, "ready-later", "## READY TO LAND: codex/fixture\nRepository: work\nCommit: " + self.tip + "\nClaims: a later report")
+        c.save(watch / "accepted" / (self.path.name + ".json"), dict(source_identity=c.identity(source), through=ends[-1]))
+        items, problems = self.world.codex_items(102, state)
+        self.assertFalse(problems)
+        self.assertEqual([item.channel for item in items], [dict(locator=str(self.path), message_id="ready")])
+
     def test_unheaded_ready_uses_the_existing_scoped_handler(self):
         path = Path(c.connect("Original plain-message task", "fixture source", scope=self.scope)["locator"])
         text = "READY TO LAND: codex/fixture\nRepository: work\nCommit: " + self.tip + "\nClaims: same work"

@@ -775,6 +775,10 @@ class World(object):
         return {"work": work, "repo": repo, "branch": branch, "tip": tip,
                 "words": [wpath], "claims": [cpath], "at": now, "title": header[3:].strip()[:120]}
 
+    def handed_over(self, endpoint, source):
+        """How far into `source` handovers may be read; None: all of it (the terminal's watcher)."""
+        return None
+
     def channel_items(self, now, codex_state, connections):
         """The shared READY handler, with its own advisory reading position.
 
@@ -804,6 +808,10 @@ class World(object):
                 offset = channels.position(source, saved)
                 if offset == source.stat().st_size:
                     continue
+                # Only what the app has handed to the team is read (AppWorld.handed_over).
+                handed = self.handed_over(endpoint, source)
+                if handed is not None and offset >= handed:
+                    continue
                 repos = self.channel_repositories(endpoint)
                 # Source evidence is always recoverable from the journals. No
                 # timestamp association and no assumption that replies are tasks.
@@ -813,6 +821,8 @@ class World(object):
                         if row.get("kind") == "task_context" or (row.get("kind", "message") == "message" and row.get("reply_to") == "task-context"):
                             words.append(("Source excerpt (%s; %s)" % (direction, row.get("provenance", "explicit task amendment")), row["text"]))
                 for _, end, row in channels.records(source, offset):
+                    if handed is not None and end > handed:
+                        break
                     if row.get("kind", "message") == "message":
                         text = row["text"]
                         first = text.lstrip().split("\n", 1)[0]
@@ -959,6 +969,29 @@ class AppWorld(World):
             (path, endpoint) for path, endpoint in channels.registered()
             if endpoint["entity_id"] != channels.TERMINAL
         ))
+
+    def handed_over(self, endpoint, source):
+        """A HANDOVER IS REVIEWED ONCE THE APP HAS HANDED IT TO THE TEAM, NEVER BEFORE (the CEO,
+        2026-11-26: "there should have been absolutely zero usage after me just opening the app").
+
+        This watcher starts with the app and read each connection's journal by itself, so a
+        READY TO LAND written while the app was closed went straight to a reviewer at launch:
+        a model run nobody asked for, while the app's Codex watcher was holding that same
+        report back from the team (richos-core codex_bridge.rs accept_when_asked). The journal
+        is now read only as far as that watcher's accepted position for the connection
+        (<app state>/codex-watch/accepted/<connection>.json), which it saves when a report
+        reaches the team's inbox. A held report is not past it, so nothing reviews it and no
+        notice about it is written; a report handed over is reviewed at the next look.
+
+        None where the app's Codex watcher has never run (no codex-watch folder in the app
+        state): nothing is being held there."""
+        watch = os.path.join(self.app_state, "codex-watch")
+        if not os.path.isdir(watch):
+            return None
+        try:
+            return channels.position(source, channels.load(os.path.join(watch, "accepted", endpoint["connection_id"] + ".json")))
+        except (OSError, ValueError, KeyError):
+            return 0
 
     def channel_repositories(self, endpoint):
         app = stall_watch._load("review_watch_app", os.path.join(self.engine_root, "mega-lander", "app.py"))
