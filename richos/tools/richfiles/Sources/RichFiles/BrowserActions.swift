@@ -48,6 +48,10 @@ final class BrowserActions: ObservableObject {
     @Published private(set) var mutationRevision = UUID()
     /// The copies the last paste made into the folder their sources are in, for the list to select.
     @Published private(set) var lastDuplicates: BrowserDuplicates?
+    /// What the last Undo or Redo moved on disk, from where to where, in the order it moved
+    /// them, so a view that keeps state by path (the sidebar's open folders) can follow, as
+    /// the forward rename already does. Empty after any other change.
+    private(set) var mutationMoves: [BrowserMovedPath] = []
 
     var canRestartAfterUpdate: Bool {
         !busy && transfer?.running != true && transferTask == nil && preparingQueue.isEmpty
@@ -939,13 +943,14 @@ final class BrowserActions: ObservableObject {
                 status += " " + issue
                 issues = [issue]
             }
-            notifyMutation()
+            notifyMutation(moves: result.inverse.reversed().compactMap(\.movedPath))
         }
     }
 
     @discardableResult
-    private func notifyMutation() -> Bool {
+    private func notifyMutation(moves: [BrowserMovedPath] = []) -> Bool {
         let saved = persistRecovery()
+        mutationMoves = moves
         mutationRevision = UUID()
         didMutate?()
         return saved
@@ -993,6 +998,11 @@ final class BrowserActions: ObservableObject {
         var seen: Set<String> = []
         return sources.filter { seen.insert($0.url.path).inserted }
     }
+}
+
+struct BrowserMovedPath: Equatable, Sendable {
+    let from: URL
+    let to: URL
 }
 
 private func moveHistory(for moves: [BrowserCompletedMove]) -> (undo: [HistoryStep], trash: [TrashChange]) {
@@ -1051,6 +1061,13 @@ private enum HistoryStep: Codable, Sendable {
     case crossVolumeMove(CrossVolumeMoveReceipt, BrowserTrashItem)
     case undoCrossVolumeReplacement(CrossVolumeReplacementReceipt, BrowserTrashItem, BrowserTrashItem)
     case redoCrossVolumeReplacement(ReversedCrossVolumeReplacementReceipt, BrowserTrashItem)
+
+    /// A step that undoes a move carries that move's receipt; in a replay's inverse, that is the
+    /// move the replay just made.
+    var movedPath: BrowserMovedPath? {
+        guard case .undoMove(let receipt, _) = self else { return nil }
+        return BrowserMovedPath(from: receipt.original.url, to: receipt.moved.url)
+    }
 
     func perform() throws -> (inverse: HistoryStep?, trashChanges: [TrashChange]) {
         switch self {

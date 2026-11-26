@@ -656,6 +656,43 @@ final class BrowserActionsTests: XCTestCase {
                                    "place:/Users/a/Desktop/Projects Old"])
     }
 
+    /// Catalog entry 15: Undo Rename puts the open branches back under the old name, and Redo
+    /// moves them again, as the rename itself did: the replay reports the move it made.
+    @MainActor
+    func testUndoAndRedoRenameKeepTheOpenSidebarBranchesOpen() async throws {
+        try await withFixture { root, _, board in
+            let projects = root.appendingPathComponent("Projects", isDirectory: true)
+            try FileManager.default.createDirectory(at: projects.appendingPathComponent("Active"),
+                                                    withIntermediateDirectories: true)
+            let renamed = root.appendingPathComponent("Client Projects", isDirectory: true)
+            let actions = BrowserActions(pasteboard: board)
+            let tree = FolderTreeState()
+            tree.setOpen("place:" + projects.path, true)
+            tree.setOpen("place:" + projects.appendingPathComponent("Active").path, true)
+            @MainActor func state(_ folder: URL) -> (Bool, Bool) {
+                (tree.isOpen("place:" + folder.path), tree.isOpen("place:" + folder.appendingPathComponent("Active").path))
+            }
+            // What BrowserView does with each change: a rename moves the keys in its completion,
+            // every change applies the moves the actions report.
+            @MainActor func follow() { for move in actions.mutationMoves { tree.move(from: move.from, to: move.to) } }
+
+            var moved: FileReference?
+            try await perform(actions) { actions.rename(try! FileReference(url: projects), to: "Client Projects") { moved = $0 } }
+            tree.move(from: projects, to: try XCTUnwrap(moved).url)
+            follow()
+            XCTAssertTrue(state(renamed) == (true, true), "renamed=\(state(renamed))")
+
+            try await perform(actions) { actions.undo() }
+            follow()
+            XCTAssertTrue(FileManager.default.fileExists(atPath: projects.appendingPathComponent("Active").path))
+            XCTAssertTrue(state(projects) == (true, true), "after Undo=\(state(projects))")
+
+            try await perform(actions) { actions.redo() }
+            follow()
+            XCTAssertTrue(state(renamed) == (true, true), "after Redo=\(state(renamed))")
+        }
+    }
+
     /// Catalog entry 2: Enter keeps a new name, refuses one macOS cannot use or one already in the
     /// folder (ignoring case), and leaves an empty or unchanged name alone; the box selects the
     /// part before the extension.

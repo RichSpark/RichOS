@@ -164,6 +164,8 @@ struct BrowserView: View {
         .onChange(of: model.tabs.map(\.folder)) { _ in sessionChanged() }
         .onChange(of: model.currentTabID) { _ in sessionChanged() }
         .onChange(of: actions.mutationRevision) { _ in
+            // Undo Rename (and Redo) keep the sidebar's open branches open, as the rename did.
+            for move in actions.mutationMoves { folderTree.move(from: move.from, to: move.to) }
             model.refresh()
             treeRevision = UUID()
         }
