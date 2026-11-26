@@ -26,10 +26,14 @@ function installFixture({ scene, failSave }) {
     const hist = Array.from({ length: 60 }, (_, i) => Math.round((mb + sway * Math.sin(i / 7)) * MB));
     return { now: hist[59], avg: Math.round(hist.reduce((a, b) => a + b, 0) / 60), peak: Math.max.apply(null, hist), hist };
   };
+  // In round 109's order, as `suite_memory::apps()` gives them; RichFinder and RichPass are pages
+  // in RichOS's window (`within`), RichCleaner is not open.
   const APPS = [
-    ["richos", "RichOS", 2, 1320, 30], ["richfiles", "RichFiles", 1, 118, 4], ["richglance", "RichGlance", 1, 93, 2],
-    ["richglance-capture", "RichGlance Capture", 0, 0, 0], ["richscribe", "RichScribe", 1, 604, 10], ["window-gestures", "Window Gestures", 1, 21, 0],
-    ["richdoctor", "RichDoctor", 1, 46, 1], ["claude-code", "Claude Code", 6, 1480, 60], ["codex", "Codex", 0, 0, 0],
+    ["richos", "RichOS", 2, 1320, 30], ["richscribe", "RichScribe", 1, 604, 10], ["richbrief", "RichBrief", 1, 142, 3],
+    ["richfiles", "RichFiles", 1, 118, 4], ["richglance", "RichGlance", 1, 93, 2], ["richfinder", "RichFinder", 0, 0, 0, "richos"],
+    ["richpass", "RichPass", 0, 0, 0, "richos"], ["richcleaner", "RichCleaner", 0, 0, 0], ["richglance-capture", "RichGlance Capture", 0, 0, 0],
+    ["window-gestures", "Window Gestures", 1, 21, 0], ["richdoctor", "RichDoctor", 1, 46, 1], ["claude-code", "Claude Code", 6, 1480, 60],
+    ["codex", "Codex", 0, 0, 0],
   ];
   window.__RICHOS_MOCK_MONITOR__ = (args) => {
     window.calls.push(["richos_monitor", args]);
@@ -54,7 +58,7 @@ function installFixture({ scene, failSave }) {
           ],
         }
       : null;
-    const apps = APPS.map(([id, name, processes, mb, sway]) => Object.assign({ id, name, processes }, processes ? line(mb, sway) : { now: 0, avg: 0, peak: 0, hist: [] }));
+    const apps = APPS.map(([id, name, processes, mb, sway, within]) => Object.assign({ id, name, processes, within: within || null }, processes ? line(mb, sway) : within ? { now: null, avg: null, peak: null, hist: [] } : { now: 0, avg: 0, peak: 0, hist: [] }));
     const all = line(APPS.reduce((a, x) => a + x[3], 0), 80);
     return {
       on: true,
@@ -237,10 +241,11 @@ async function main() {
     assertEqual(card.chip, "Using tokens", "the chip");
     assertEqual(card.hero, "1.26M tokens a minute", "the speed");
     assertEqual(card.wins, ["", "Speed", "Used", "Last minute", "1.26M/min", "1.26M", "Last 5 minutes", "826k/min", "4.13M", "Last 15 minutes", "349k/min", "5.23M"], "the three windows");
-    assertEqual(card.memNow, "3.7 GB", "all RichOS apps now");
+    assertEqual(card.memNow, "3.8 GB", "all RichOS apps now");
     assert(/GB$/.test(card.memAvg), "the 2-minute average: " + card.memAvg);
-    assertEqual(card.apps.slice(0, 4), ["RichOS", "1.3 GB", "RichFiles", "121 MB"], "the first apps");
+    assertEqual(card.apps.slice(0, 4), ["RichOS", "1.3 GB", "RichScribe", "612 MB"], "the first apps");
     assert(card.apps.includes("RichGlance Capture") && card.apps.includes("Not open"), "an app that is not open: " + card.apps.join(" | "));
+    assert(card.apps.includes("RichFinder") && card.apps.includes("In RichOS"), "a page in RichOS's window: " + card.apps.join(" | "));
     const asked = await page.evaluate(() => window.calls.filter((c) => c[0] === "richos_monitor").pop()[1]);
     assertEqual(asked.card, true, "the open card did not ask for its graph and the memory");
   });
@@ -275,10 +280,10 @@ async function main() {
       rows: Array.from(document.querySelectorAll("#rom-sheet .rom-app-name"), (n) => n.textContent),
       share: document.querySelector('#rom-sheet [data-s="m-ledger"]').textContent,
     }));
-    assertEqual(m.big, "3.7 GB", "all apps now");
-    assertEqual(m.line, "All RichOS apps together. 7 of 9 are open.", "the line under it");
-    assertEqual(m.rows, ["RichOS", "RichFiles", "RichGlance", "RichGlance Capture", "RichScribe", "Window Gestures", "RichDoctor", "Claude Code", "Codex", "All together"], "each app");
-    assert(/Share of this Mac10% of 36 GB/.test(m.share), "the share of the Mac: " + m.share);
+    assertEqual(m.big, "3.8 GB", "all apps now");
+    assertEqual(m.line, "All RichOS apps together. 10 of 13 are open.", "the line under it");
+    assertEqual(m.rows, ["RichOS", "RichScribe", "RichBrief", "RichFiles", "RichGlance", "RichFinder", "RichPass", "RichCleaner", "RichGlance Capture", "Window Gestures", "RichDoctor", "Claude Code", "Codex", "All together"], "each app");
+    assert(/Share of this Mac11% of 36 GB/.test(m.share), "the share of the Mac: " + m.share);
     await page.keyboard.press("Escape");
     await page.waitForFunction(() => window.RichosMonitor.state().sheet === null);
   });

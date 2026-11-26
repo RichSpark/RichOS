@@ -24,8 +24,66 @@ pub fn set_richos_monitor(state: State<crate::AppState>, show: bool) -> Result<(
 /// once a second while it is on and the window is visible). Answers `on: false` and nothing else
 /// while it is off.
 #[richos_command::command]
-pub fn richos_monitor(card: Option<bool>, detail: Option<Detail>) -> View {
-    my_richos::view(card.unwrap_or(false), detail)
+pub fn richos_monitor(app: tauri::AppHandle, card: Option<bool>, detail: Option<Detail>) -> View {
+    let view = my_richos::view(card.unwrap_or(false), detail);
+    if view.on {
+        refresh_hosted(&app);
+    }
+    view
+}
+
+/// The suite apps that run inside RichOS's processes, found again at most every
+/// [`HOSTED_EVERY_MS`]: RichCleaner's and RichBrief's panels have web processes of their own (when
+/// one shares the conversation window's, it is RichOS's and is not moved), and RichBrief's capture
+/// companion its own processes. The memory reader reads them with the rest.
+const HOSTED_EVERY_MS: u64 = 10_000;
+
+fn refresh_hosted(app: &tauri::AppHandle) {
+    static LAST: Mutex<u64> = Mutex::new(0);
+    let now = richos_core::util::now_millis();
+    {
+        let mut last = LAST.lock().unwrap_or_else(|p| p.into_inner());
+        if now.saturating_sub(*last) < HOSTED_EVERY_MS {
+            return;
+        }
+        *last = now;
+    }
+    my_richos::set_hosted(hosted(app));
+}
+
+#[cfg(target_os = "macos")]
+fn hosted(app: &tauri::AppHandle) -> Vec<richos_core::suite_memory::Hosted> {
+    use tauri::Manager;
+    let main = web_process(app, "main");
+    let own = |label: &str| web_process(app, label).filter(|pid| Some(*pid) != main).into_iter().collect::<Vec<_>>();
+    let companion = app.try_state::<std::sync::Arc<crate::meetings::Meetings>>().map(|m| m.companion_pids()).unwrap_or_default();
+    vec![
+        richos_core::suite_memory::Hosted { id: "richcleaner", web: own(crate::cleaner_host::PANEL), helpers: Vec::new() },
+        richos_core::suite_memory::Hosted { id: "richbrief", web: own(crate::meetings::PANEL), helpers: companion },
+    ]
+}
+
+#[cfg(not(target_os = "macos"))]
+fn hosted(_app: &tauri::AppHandle) -> Vec<richos_core::suite_memory::Hosted> {
+    Vec::new()
+}
+
+/// The WebKit content process behind one window's web view, as the window itself reports it
+/// (`dictation/bar.rs`'s reader, on the main thread). `None` when the window is not built.
+#[cfg(target_os = "macos")]
+fn web_process(app: &tauri::AppHandle, label: &str) -> Option<i32> {
+    use tauri::Manager;
+    let (send, receive) = std::sync::mpsc::channel();
+    app.get_webview_window(label)?
+        .with_webview(move |view| {
+            let webview = view.inner().cast::<objc2::runtime::AnyObject>();
+            // Tauri supplies the live WKWebView on its main thread for this callback.
+            let pids = unsafe { webview.as_ref().map(crate::dictation::bar::webkit_view_pids) };
+            send.send(pids).ok();
+        })
+        .ok()?;
+    let pids = receive.recv_timeout(std::time::Duration::from_millis(250)).ok()??;
+    (pids[0] > 1).then_some(pids[0])
 }
 
 fn read(config: &Mutex<ConfigStore>, state_root: &Path) -> bool {

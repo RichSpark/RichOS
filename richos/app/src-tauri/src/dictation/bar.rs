@@ -231,7 +231,7 @@ fn webkit_pids(app: &AppHandle) -> Option<Vec<i32>> {
     Some(collected)
 }
 
-fn webkit_view_pids(view: &objc2::runtime::AnyObject) -> [i32; 4] {
+pub(crate) fn webkit_view_pids(view: &objc2::runtime::AnyObject) -> [i32; 4] {
     use objc2::runtime::{AnyObject, Bool, Sel};
     use objc2::{msg_send, sel};
 

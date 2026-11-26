@@ -721,6 +721,19 @@ impl Meetings {
         logged("the panel event", self.app.emit_to(PANEL, EVENT_PANEL, &view));
     }
 
+    /// The capture companion's processes this app started and is holding now (the watcher, the
+    /// recording and those still finishing, the voice bar's level reader): RichBrief's own
+    /// processes, for My RichOS's memory figures (round 109).
+    pub fn companion_pids(&self) -> Vec<i32> {
+        let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        inner.watcher_pid.into_iter()
+            .chain(inner.capture.iter().map(|c| c.pid))
+            .chain(inner.draining.iter().map(|c| c.pid))
+            .chain(inner.level.iter().map(|l| l.pid))
+            .filter_map(|pid| i32::try_from(pid).ok())
+            .collect()
+    }
+
     pub fn state(&self) -> MeetingState {
         let inner = self.inner.lock().unwrap();
         MeetingState {

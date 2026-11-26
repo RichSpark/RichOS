@@ -235,9 +235,11 @@
     el.dataset.tone = R.active ? "using" : "idle";
     el.textContent = R.active ? "Using tokens" : "Idle";
   }
+  /// RichFinder and RichPass are pages in RichOS's own window: their memory is in RichOS's figure.
+  const IN_RICHOS = "In RichOS";
   /// Each suite app as the memory reading names it, open or not.
   function apps() {
-    return ((M && M.apps) || []).map((a) => ({ id: a.id, name: a.name, open: a.processes > 0, now: a.now, avg: a.avg, peak: a.peak, hist: a.hist || [] }));
+    return ((M && M.apps) || []).map((a) => ({ id: a.id, name: a.name, open: a.processes > 0 || !!a.within, within: a.within || null, now: a.now, avg: a.avg, peak: a.peak, hist: a.hist || [] }));
   }
   let lastWins = "", lastApps = "";
   function paintCard() {
@@ -260,7 +262,9 @@
     const top = Math.max.apply(null, list.map((a) => a.now || 0).concat([1]));
     const html = list
       .map((a) =>
-        a.open
+        a.within
+          ? '<span>' + esc(a.name) + '</span><span></span><span class="is-off">' + IN_RICHOS + "</span>"
+          : a.open
           ? "<span>" + esc(a.name) + '</span><span class="rom-bar"><i style="width:' + Math.max(2, ((a.now || 0) / top) * 100).toFixed(1) + '%"></i></span><b>' + ram(a.now) + "</b>"
           : '<span class="is-off">' + esc(a.name) + '</span><span></span><span class="is-off">Not open</span>'
       )
@@ -444,9 +448,10 @@
     const fill = (rowEl, a) => {
       rowEl.classList.toggle("is-off", a.open === false);
       const cv = rowEl.querySelector("canvas");
-      if (a.open === false) {
+      if (a.open === false || a.within) {
         sizeCanvas(cv, 150, 26);
-        rowEl.querySelector('[data-c="now"]').textContent = "Not open";
+        rowEl.classList.toggle("is-off", true);
+        rowEl.querySelector('[data-c="now"]').textContent = a.within ? IN_RICHOS : "Not open";
         rowEl.querySelector('[data-c="avg"]').textContent = "";
         rowEl.querySelector('[data-c="peak"]').textContent = "";
         return;
@@ -614,7 +619,7 @@
       });
       c.addEventListener("pointerleave", () => { view[litKey] = -1; paintSheet(); });
     };
-    point("t-graph", "tokLit", () => TOK_RANGES.find((r) => r.id === view.tok).n);
+    point("t-graph", "tokLit", () => (T && T.detail ? T.detail.series.bars.length : TOK_RANGES.find((r) => r.id === view.tok).n));
     point("m-graph", "memLit", () => MEM_RANGES.find((r) => r.id === view.mem).n);
 
     // Escape: the details first, then the card, before the window's own Escape sees it.
