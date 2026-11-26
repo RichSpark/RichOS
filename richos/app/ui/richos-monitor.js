@@ -100,6 +100,9 @@
   let on = false, built = false;
   let btn, tileCanvas, speedEl, card, scrim, sheet, $, $s;
   let pinned = false, hovering = false, hideTimer = 0;
+  // Escape (or closing the details) put focus back on the square: its card stays closed until
+  // focus leaves the square and comes back.
+  let focusDismissed = false;
   const cardOpen = () => built && card.classList.contains("is-open");
   const sheetOpen = () => built && !sheet.hidden;
 
@@ -294,7 +297,7 @@
     if (!built) return;
     const home = document.body.classList.contains("home-open");
     if (home || !on) { pinned = false; hovering = false; }
-    const open = on && !home && sheet.hidden && (pinned || hovering || btn.matches(":focus-visible"));
+    const open = on && !home && sheet.hidden && (pinned || hovering || (btn.matches(":focus-visible") && !focusDismissed));
     const was = cardOpen();
     if (open) { card.hidden = false; place(); }
     card.classList.toggle("is-open", open);
@@ -326,7 +329,7 @@
     const m = MEM_RANGES.find((r) => r.id === view.mem);
     return { token_span_s: t.span, token_bars: t.n, memory_span_s: m.span, memory_points: m.n };
   }
-  const ICONS = { richscribe: "richscribe", richfiles: "richfiles", richglance: "richglance", "richglance-capture": "richglance", "window-gestures": "richfiles" };
+  const ICONS = { richscribe: "richscribe", richbrief: "richbrief", richfiles: "richfiles", richglance: "richglance", richfinder: "richfinder", richpass: "richpass", richcleaner: "richcleaner", "richglance-capture": "richglance", "window-gestures": "richfiles" };
   const ICON = (id) =>
     id === "richos"
       ? '<svg class="rom-ico rom-ico-r" viewBox="-130 -125 1004 1004" aria-hidden="true"><use href="#R" fill="currentColor"/><use href="#arrow"/></svg>'
@@ -457,12 +460,22 @@
     const fill = (rowEl, a) => {
       rowEl.classList.toggle("is-off", a.open === false);
       const cv = rowEl.querySelector("canvas");
-      if (a.open === false || a.within) {
+      // An app closed in the last two minutes keeps its line, average and highest of them: a
+      // spike just before it closed is still there to read.
+      const recent = (a.hist || []).some((v) => v != null && v > 0);
+      if (a.within || (a.open === false && !recent)) {
         sizeCanvas(cv, 150, 26);
         rowEl.classList.toggle("is-off", true);
         rowEl.querySelector('[data-c="now"]').textContent = a.within ? IN_RICHOS : "Not open";
         rowEl.querySelector('[data-c="avg"]').textContent = "";
         rowEl.querySelector('[data-c="peak"]').textContent = "";
+        return;
+      }
+      if (a.open === false) {
+        paintLine(cv, 150, 26, a.hist, P, false);
+        rowEl.querySelector('[data-c="now"]').textContent = "Not open";
+        rowEl.querySelector('[data-c="avg"]').textContent = ram(a.avg);
+        rowEl.querySelector('[data-c="peak"]').textContent = ram(a.peak);
         return;
       }
       paintLine(cv, 150, 26, a.hist || [], P, false);
@@ -493,8 +506,12 @@
     if (!sheetOpen()) return;
     sheet.hidden = true;
     scrim.hidden = true;
-    if (returnTo && returnTo.isConnected && on) btn.focus({ preventScroll: true });
-    btn.blur();
+    // Focus goes back to the square (never to nowhere), without opening its card again until
+    // focus leaves the square and comes back (resources.js's rule).
+    if (on) {
+      focusDismissed = true;
+      btn.focus({ preventScroll: true });
+    }
     sync();
   }
 
@@ -546,7 +563,6 @@
     sheet.id = "rom-sheet";
     sheet.hidden = true;
     sheet.setAttribute("role", "dialog");
-    sheet.setAttribute("aria-modal", "true");
     sheet.setAttribute("aria-labelledby", "rom-sheet-title");
     sheet.setAttribute("data-dismiss", "control:#rom-close");
     sheet.innerHTML =
@@ -585,7 +601,7 @@
     card.addEventListener("pointerenter", () => { clearTimeout(hideTimer); if (cardOpen()) hovering = true; });
     card.addEventListener("pointerleave", leaveSoon);
     btn.addEventListener("focus", sync);
-    btn.addEventListener("blur", () => setTimeout(sync, 0));
+    btn.addEventListener("blur", () => { focusDismissed = false; setTimeout(sync, 0); });
     btn.addEventListener("click", (e) => {
       pinned = !pinned;
       if (!pinned) hovering = false;
@@ -641,8 +657,10 @@
       const inside = card.contains(document.activeElement);
       pinned = false;
       hovering = false;
-      if (inside) btn.focus();
-      if (document.activeElement === btn) btn.blur();
+      if (inside || document.activeElement === btn) {
+        focusDismissed = true;
+        btn.focus();
+      }
       sync();
     }, true);
     new MutationObserver(() => {

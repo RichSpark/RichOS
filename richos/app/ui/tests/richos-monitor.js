@@ -58,7 +58,11 @@ function installFixture({ scene, failSave }) {
           ],
         }
       : null;
-    const apps = APPS.map(([id, name, processes, mb, sway, within]) => Object.assign({ id, name, processes, within: within || null }, processes ? line(mb, sway) : within ? { now: null, avg: null, peak: null, hist: [] } : { now: 0, avg: 0, peak: 0, hist: [] }));
+    // RichGlance Capture closed a moment ago: its last two minutes are still its own.
+    const closed = (id) => id === "richglance-capture"
+      ? { now: 0, avg: 100 * MB, peak: 200 * MB, hist: [200 * MB, 100 * MB, 0] }
+      : { now: 0, avg: 0, peak: 0, hist: [] };
+    const apps = APPS.map(([id, name, processes, mb, sway, within]) => Object.assign({ id, name, processes, within: within || null }, processes ? line(mb, sway) : within ? { now: null, avg: null, peak: null, hist: [] } : closed(id)));
     const all = line(APPS.reduce((a, x) => a + x[3], 0), 80);
     return {
       on: true,
@@ -284,8 +288,13 @@ async function main() {
     assertEqual(m.line, "All RichOS apps together. 10 of 13 are open.", "the line under it");
     assertEqual(m.rows, ["RichOS", "RichScribe", "RichBrief", "RichFiles", "RichGlance", "RichFinder", "RichPass", "RichCleaner", "RichGlance Capture", "Window Gestures", "RichDoctor", "Claude Code", "Codex", "All together"], "each app");
     assert(/Share of this Mac11% of 36 GB/.test(m.share), "the share of the Mac: " + m.share);
+    const capture = await page.evaluate(() => Array.from(document.querySelectorAll('#rom-sheet [data-app="richglance-capture"] [data-c]'), (n) => n.textContent));
+    assertEqual(capture, ["Not open", "100 MB", "200 MB"], "an app closed within the two minutes keeps its figures");
+    assertEqual(await page.evaluate(() => document.getElementById("rom-sheet").getAttribute("aria-modal")), null, "the details claim aria-modal, which leaves Settings out of the accessibility tree");
     await page.keyboard.press("Escape");
     await page.waitForFunction(() => window.RichosMonitor.state().sheet === null);
+    assertEqual(await page.evaluate(() => document.activeElement && document.activeElement.id), "rom-square", "closing the details from Memory left focus nowhere");
+    assertEqual(await page.evaluate(() => window.RichosMonitor.state().card), false, "the card reopened on the returned focus");
   });
 
   await run.check("contrast, dark: the rail's figure, the card and the details clear WCAG AA", async () => {
