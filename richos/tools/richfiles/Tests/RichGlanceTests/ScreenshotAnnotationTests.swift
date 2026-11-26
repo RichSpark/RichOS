@@ -198,6 +198,47 @@ final class ScreenshotAnnotationTests: XCTestCase {
         XCTAssertEqual(reopened.size, .small)
     }
 
+    func testRound108ASizeChosenAfterPlacingAStepIsForTheNextStep() async throws {
+        try withStore { store in
+            let editor = try makeEditor(store)
+            let canvas = try XCTUnwrap(editor.canvas)
+            let root = try XCTUnwrap(editor.window.contentView)
+            @MainActor func choose(_ title: String) throws {
+                try XCTUnwrap(controls(in: root).first { $0.title == title && !$0.isHiddenOrHasHiddenAncestor })
+                    .performClick(nil)
+            }
+            @MainActor func sizes(_ tool: ScreenshotTool) -> [ScreenshotMarkSize] {
+                canvas.document.edits.marks.filter { $0.tool == tool }.map(\.markSize)
+            }
+            prepare(canvas)
+            // Steps, without picking the tool again between placements: the placed step stays Small.
+            canvas.tool = .steps
+            try choose("Small")
+            try mouse(.leftMouseDown, at: CGPoint(x: 60, y: 75), on: canvas)
+            try mouse(.leftMouseUp, at: CGPoint(x: 60, y: 75), on: canvas)
+            XCTAssertNil(canvas.selectedMark)
+            try choose("Large")
+            try mouse(.leftMouseDown, at: CGPoint(x: 200, y: 75), on: canvas)
+            try mouse(.leftMouseUp, at: CGPoint(x: 200, y: 75), on: canvas)
+            XCTAssertEqual(sizes(.steps), [.small, .large])
+
+            // A step selected on purpose through Select still takes the size chosen.
+            canvas.tool = .select
+            try mouse(.leftMouseDown, at: CGPoint(x: 60, y: 75), on: canvas)
+            try mouse(.leftMouseUp, at: CGPoint(x: 60, y: 75), on: canvas)
+            XCTAssertEqual(canvas.selectedMark?.tool, .steps)
+            try choose("Medium")
+            XCTAssertEqual(sizes(.steps), [.medium, .large])
+
+            // Arrows as round 108 has them: a newly drawn arrow stays selected and takes the size chosen.
+            canvas.tool = .arrow
+            try choose("Small")
+            try drag(from: CGPoint(x: 30, y: 30), to: CGPoint(x: 260, y: 30), on: canvas)
+            try choose("Large")
+            XCTAssertEqual(sizes(.arrow), [.large])
+        }
+    }
+
     func testDefaultsFollowTheEditedToolIntoANewEditAndReopenedEditor() async throws {
         try withStore { store in
             let editor = try makeEditor(store)

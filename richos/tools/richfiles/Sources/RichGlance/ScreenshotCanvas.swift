@@ -294,7 +294,8 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
                                       large: size != .small, thickness: styles[tool]?.thickness, size: size)
             gesture = Gesture(anchor: point, before: document.edits, handle: .end)
             document.edits.marks.append(mark)
-            selected = mark.id
+            // Round 108: a placed step is not left selected, so a size chosen next is for the next step.
+            selected = tool == .steps ? nil : mark.id
         } else {
             selected = nil
         }
