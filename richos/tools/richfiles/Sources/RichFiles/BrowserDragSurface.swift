@@ -108,7 +108,8 @@ struct BrowserDragSurface: NSViewRepresentable {
                 if modifiers == .control && !consumedClick && inside { secondaryPress(point) }
                 down = nil
                 blankDown = nil
-                if inside && !consumedClick, let start = prepare?(point) {
+                // A press in the inline name box is the box's own: a drag there selects text.
+                if inside && !consumedClick && !target.text, let start = prepare?(point) {
                     let wasKey = window.isKeyWindow
                     let selected = wasKey && event.clickCount == 1 && press?(point, event) == true
                     down = (event, start, selected, wasKey)
