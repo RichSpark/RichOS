@@ -6677,7 +6677,10 @@ while True:
         use crate::entity::{Entity, EntityId, EntityRegistry};
         use crate::ledger::Ledger;
 
-        let root = fixture_root().join(crate::util::new_id("resume-codex"));
+        // The repair opens the continuity database with `SQLITE_OPEN_NOFOLLOW`, which refuses a
+        // path through any symbolic link (error 1550); macOS's `$TMPDIR` sits under the `/var`
+        // link, so the test works under its real path, as an app data folder is.
+        let root = std::fs::canonicalize(fixture_root()).unwrap().join(crate::util::new_id("resume-codex"));
         let coordination = root.join("coordination");
         let repo = root.join("RichOS");
         let exporter = root.join("Exporter");
