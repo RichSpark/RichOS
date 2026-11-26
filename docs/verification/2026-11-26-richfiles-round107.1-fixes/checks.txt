@@ -1,0 +1,22 @@
+PASS app bundle signature verifies in the guest
+PASS guest Music folder holds no folder (the no-arrow case): 0 folders
+PASS fixture holds 129 items: 129 items
+PASS daybreak: RichFiles opened the fixture: pid 1152
+PASS daybreak: clicking todo.txt saved the rename
+PASS daybreak: the clicked file (todo.txt) stays selected after the rename is saved: Ctrl+C, Ctrl+V made todo - Copy.txt
+PASS daybreak: Down before the name box opened canceled it and the selection stayed moved: Down 0.1 s after the second click; Ctrl+C, Ctrl+V made renamed-one - Copy.txt
+PASS daybreak: Open With lists the apps (their icons are in the screenshot): Safari (Default), Notes, TextEdit
+PASS daybreak: the chooser's Open label clears 4.5:1 on its fill: fill (113, 87, 21), label (253, 252, 248), 6.65:1
+PASS daybreak: the selected line under the pointer clears 3:1 against its fill: fill (237, 228, 205), line (143, 122, 72), 3.29:1
+PASS daybreak: after Undo Rename the folder and what is open inside stay open in the sidebar: open after rename True
+PASS guest Music folder holds no folder (the no-arrow case): 0 folders
+PASS fixture holds 129 items: 129 items
+PASS sovereign: RichFiles opened the fixture: pid 2206
+PASS sovereign: clicking todo.txt saved the rename
+PASS sovereign: the clicked file (todo.txt) stays selected after the rename is saved: Ctrl+C, Ctrl+V made todo - Copy.txt
+PASS sovereign: Down before the name box opened canceled it and the selection stayed moved: Down 0.1 s after the second click; Ctrl+C, Ctrl+V made renamed-one - Copy.txt
+PASS sovereign: Open With lists the apps (their icons are in the screenshot): Safari (Default), Notes, TextEdit
+PASS sovereign: the chooser's Open label clears 4.5:1 on its fill: fill (194, 163, 92), label (10, 17, 32), 7.80:1
+PASS sovereign: the selected line under the pointer clears 3:1 against its fill: fill (34, 43, 62), line (132, 117, 76), 3.12:1
+PASS sovereign: after Undo Rename the folder and what is open inside stay open in the sidebar: open after rename True
+PASS RichFiles is quit and its process is gone

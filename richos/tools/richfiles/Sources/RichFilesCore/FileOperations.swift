@@ -77,6 +77,22 @@ public struct NestedCopyProgress: Sendable {
 public enum CopyConflictPolicy: Sendable {
     case refuse
     case keepBoth
+    /// A copy into the folder that already holds the name, named the way Windows File
+    /// Explorer names a pasted duplicate: `name - Copy.ext`, then `name - Copy (2).ext`.
+    case duplicate
+}
+
+/// The names Windows File Explorer gives a copy pasted into a folder where its name is taken.
+public enum DuplicateName {
+    /// `attempt` 1 is `name - Copy.ext`; 2 and later are `name - Copy (attempt).ext`. A folder's
+    /// name has no extension, so a folder `Plans` becomes `Plans - Copy`.
+    public static func candidate(for name: String, directory: Bool, attempt: Int) -> String {
+        let target = URL(fileURLWithPath: name)
+        let ext = directory ? "" : target.pathExtension
+        let stem = ext.isEmpty ? name : String(name.dropLast(ext.count + 1))
+        let suffix = attempt <= 1 ? " - Copy" : " - Copy (\(attempt))"
+        return stem + suffix + (ext.isEmpty ? "" : "." + ext)
+    }
 }
 
 public struct TrashReceipt: Codable, Sendable {
@@ -1109,7 +1125,7 @@ public enum FileOperations {
         }
         do {
             return try publish(named: name)
-        } catch FileOperationError.destinationExists where policy == .keepBoth {
+        } catch FileOperationError.destinationExists where policy == .keepBoth || policy == .duplicate {
             // The staged copy remains in place after a name collision, so try another
             // name without copying the source a second time.
         }
@@ -1118,9 +1134,11 @@ public enum FileOperations {
         let ext = kind == .directory ? "" : target.pathExtension
         let basename = ext.isEmpty ? name : target.deletingPathExtension().lastPathComponent
         let suffix = ext.isEmpty ? "" : "." + ext
-        for index in 2...9_999 {
+        for index in (policy == .duplicate ? 1 : 2)...9_999 {
             if isCancelled() { throw CancellationError() }
-            let candidate = "\(basename) (\(index))" + suffix
+            let candidate = policy == .duplicate
+                ? DuplicateName.candidate(for: name, directory: kind == .directory, attempt: index)
+                : "\(basename) (\(index))" + suffix
             if try destination.existingStatus(named: candidate) != nil { continue }
             do {
                 return try publish(named: candidate)

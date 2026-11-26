@@ -235,6 +235,8 @@ enum BrowserCompletedMove: Codable, Sendable {
 struct BrowserTransferResult: Sendable {
     var progress: BrowserTransfer
     var moves: [BrowserCompletedMove] = []
+    /// Copies made into the folder their source is in, named `name - Copy.ext`.
+    var duplicates: [FileReference] = []
     var retry: [BrowserTransferSource] = []
     var destination: BrowserTransferDestination?
     var journal: TransferJournal?
@@ -385,14 +387,18 @@ enum BrowserTransferJob {
                         }
                     }
                 } else {
+                    // A copy pasted into the folder it came from is a duplicate, as in Windows
+                    // File Explorer: Ctrl+C, Ctrl+V makes `name - Copy.ext`, then `- Copy (2)`.
+                    let duplicate = Self.isSameFolder(source.url, destination.url)
                     let receipt = try FileOperations.copy(
                         source,
                         into: destination.url,
                         expectedFolder: destination.identity,
-                        conflictPolicy: request.conflict == .keepBoth ? .keepBoth : .refuse,
+                        conflictPolicy: duplicate ? .duplicate : request.conflict == .keepBoth ? .keepBoth : .refuse,
                         isCancelled: { Task.isCancelled }, onNestedProgress: showNestedBytes,
                         onActivity: reportActivity, onProgress: showBytes
                     )
+                    if duplicate { result.duplicates.append(receipt.copied) }
                     if let staging = receipt.remainingStagingFolder {
                         result.progress.issues.append(BrowserTransferIssue(
                             name: name,
@@ -445,6 +451,11 @@ enum BrowserTransferJob {
         result.progress.verifyingCopy = false
         result.progress.running = false
         return result
+    }
+
+    static func isSameFolder(_ item: URL, _ folder: URL) -> Bool {
+        item.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL.path
+            == folder.resolvingSymlinksInPath().standardizedFileURL.path
     }
 
     private static func retainUnstarted(

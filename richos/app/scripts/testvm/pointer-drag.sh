@@ -5,6 +5,12 @@
 #   testvm/pointer-drag.sh <vm> <x>,<y> --scroll LINES [--ctrl]
 #   testvm/pointer-drag.sh <vm> <x>,<y> --double
 #   ... [--app NAME | --as-is]
+#   ... [--then-key KEYCODE [--then-after S]]   (after a click or drag with the left or right button)
+#
+#   --then-key presses the key with that key code --then-after seconds (default 0.1, at most 5)
+#   after the button comes up, from the same guest process as the click. A key sent by a
+#   separate command arrives too late for a window as short as the 0.5 s between a click and the
+#   inline rename it arms. Added with RichFiles round 107.1's fixes walk (2026-11-26).
 #
 #   --scroll LINES turns the wheel LINES lines (a whole number, -50..50, not 0; negative is toward
 #   the user) with the pointer resting on the one point; --ctrl holds Control on each wheel event,
@@ -57,12 +63,12 @@ if [ "${TESTVM_AX_SUPERVISED:-}" != 1 ]; then
 fi
 . "$HERE/lib.sh"
 
-usage="usage: pointer-drag.sh <vm> <x>,<y> <x>,<y> [<x>,<y> ...] [--step PX] [--pause S] [--rest S] [--right | --hover] | <vm> <x>,<y> --scroll LINES [--ctrl] | <vm> <x>,<y> --double; any with [--app NAME | --as-is]"
+usage="usage: pointer-drag.sh <vm> <x>,<y> <x>,<y> [<x>,<y> ...] [--step PX] [--pause S] [--rest S] [--right | --hover] [--then-key KEYCODE [--then-after S]] | <vm> <x>,<y> --scroll LINES [--ctrl] | <vm> <x>,<y> --double; any with [--app NAME | --as-is]"
 VM="${1:-}"
 [ -n "$VM" ] || die "$usage"
 shift
 POINTS=()
-STEP=8; PAUSE=0.02; REST=0.15; RIGHT=0; HOVER=0; SCROLL=0; CTRL=0; APP=""; DOUBLE=0; ASIS=0
+STEP=8; PAUSE=0.02; REST=0.15; RIGHT=0; HOVER=0; SCROLL=0; CTRL=0; APP=""; DOUBLE=0; ASIS=0; THEN_KEY=""; THEN_AFTER=0.1
 while [ $# -gt 0 ]; do
   case "$1" in
     --step) STEP="${2:-}"; shift 2 ;;
@@ -74,6 +80,8 @@ while [ $# -gt 0 ]; do
     --ctrl) CTRL=1; shift ;;
     --double) DOUBLE=1; shift ;;
     --as-is) ASIS=1; shift ;;
+    --then-key) THEN_KEY="${2:-}"; shift 2 ;;
+    --then-after) THEN_AFTER="${2:-}"; shift 2 ;;
     --app) APP="${2:-}"; [ -n "$APP" ] || die "--app needs a process name — $usage"; shift 2 ;;
     *,*) POINTS+=("$1"); shift ;;
     *) die "unknown argument: $1 — $usage" ;;
@@ -81,6 +89,10 @@ while [ $# -gt 0 ]; do
 done
 [ "$ASIS" = 0 ] || [ -z "$APP" ] || die "--as-is raises no app, so it names none with --app — $usage"
 [ "$HOVER" = 0 ] || [ "$RIGHT" = 0 ] || die "--hover moves with no button, so it cannot also be --right — $usage"
+if [ -n "$THEN_KEY" ]; then
+  [ "$HOVER" = 0 ] && [ "$DOUBLE" = 0 ] && [ "$SCROLL" = 0 ] || die "--then-key follows a click or drag, so it takes no --hover, --double or --scroll — $usage"
+  case "$THEN_KEY" in [0-9]|[0-9][0-9]|1[0-2][0-9]) ;; *) die "--then-key takes a key code from 0 to 129 — $usage" ;; esac
+fi
 case "$SCROLL" in
   0) [ "$CTRL" = 0 ] || die "--ctrl holds Control on a wheel turn, so it needs --scroll — $usage" ;;
   -[1-9]|-[1-4][0-9]|-50|[1-9]|[1-4][0-9]|50) ;;
@@ -130,14 +142,16 @@ DEADLINE
 
 # Every number is parsed here, so the guest program only ever receives JSON.
 PARAMS="$(PD_PID="$PID" PD_STEP="$STEP" PD_PAUSE="$PAUSE" PD_REST="$REST" PD_RIGHT="$RIGHT" PD_HOVER="$HOVER" \
-           PD_SCROLL="$SCROLL" PD_CTRL="$CTRL" PD_APP="$APP" PD_DOUBLE="$DOUBLE" PD_ASIS="$ASIS" python3 - "${POINTS[@]}" <<'PY'
+           PD_SCROLL="$SCROLL" PD_CTRL="$CTRL" PD_APP="$APP" PD_DOUBLE="$DOUBLE" PD_ASIS="$ASIS" \
+           PD_THEN_KEY="$THEN_KEY" PD_THEN_AFTER="$THEN_AFTER" python3 - "${POINTS[@]}" <<'PY'
 import json, os, sys
 try:
     points = [[float(v) for v in p.split(',', 1)] for p in sys.argv[1:]]
     step, pause, rest = float(os.environ['PD_STEP']), float(os.environ['PD_PAUSE']), float(os.environ['PD_REST'])
-    assert step > 0 and 0 <= pause <= 1 and 0 <= rest <= 5
+    then_after = float(os.environ['PD_THEN_AFTER'])
+    assert step > 0 and 0 <= pause <= 1 and 0 <= rest <= 5 and 0 <= then_after <= 5
 except (ValueError, AssertionError):
-    raise SystemExit("points are x,y numbers; --step > 0, --pause 0..1 s, --rest 0..5 s")
+    raise SystemExit("points are x,y numbers; --step > 0, --pause 0..1 s, --rest 0..5 s, --then-after 0..5 s")
 print("var DRAG_PARAMS = " + json.dumps({"pid": int(os.environ['PD_PID']), "points": points,
                                          "step": step, "pause": pause, "rest": rest,
                                          "right": os.environ['PD_RIGHT'] == '1',
@@ -146,6 +160,8 @@ print("var DRAG_PARAMS = " + json.dumps({"pid": int(os.environ['PD_PID']), "poin
                                          "ctrl": os.environ['PD_CTRL'] == '1',
                                          "double": os.environ['PD_DOUBLE'] == '1',
                                          "asis": os.environ['PD_ASIS'] == '1',
+                                         "thenKey": int(os.environ['PD_THEN_KEY']) if os.environ['PD_THEN_KEY'] else None,
+                                         "thenAfter": then_after,
                                          "app": os.environ['PD_APP'] or None}) + ";")
 PY
 )"
