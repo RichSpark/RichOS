@@ -349,7 +349,7 @@ struct DiskCleanupView: View {
 
     private var moveButton: some View {
         Button { model.moveToTrash() } label: { Label("Move to Trash", systemImage: "trash") }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(SheetButtonStyle(primary: true))
             .disabled(!model.ready || !model.batch.contains { !$0.changed })
             .accessibilityIdentifier("cleanup-move-trash")
     }

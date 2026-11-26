@@ -20,6 +20,12 @@ finish a rename leaves that file selected, Down cancels a pending click, pause, 
 Undo Rename keeps the open sidebar branches open, the Open With submenu shows app icons, and the
 chooser's Open button and the selected line under the pointer clear their contrast floors,
 measured from the guest's own screen pixels.
+
+--sheets opens every sheet with a default button instead (Connect to Server, File Actions,
+Search Filters, Create ZIP, New Folder, the Open With chooser, the new file's name sheet) and
+Disk Cleanup's Move to Trash, and measures from the guest's pixels each default button's label
+on its fill (4.5:1) and its fill against what is around it (3:1), and each Cancel's label. The
+Change the File Extension? alert, drawn by macOS, is measured as a finding in notes.json.
 """
 import argparse
 import json
@@ -78,6 +84,7 @@ class Walk:
     def __init__(self, vm, out):
         self.vm, self.out = vm, out
         self.checks = []
+        self.notes = []
 
     # -- the guest ------------------------------------------------------------------------
     def guest(self, command, timeout=120):
@@ -664,6 +671,201 @@ class Walk:
         if not self.quit():
             self.record(f"{t}: RichFiles quit", False)
 
+    # -- every sheet's default button (--sheets) -----------------------------------------------
+    def menu(self, menu, item):
+        self.guest("osascript -e " + shlex.quote(f'tell application id "{BUNDLE}" to activate'))
+        time.sleep(0.4)
+        return self.guest("osascript -e " + shlex.quote(
+            f'tell application "System Events" to tell process "{APP}" to '
+            f'click menu item "{item}" of menu "{menu}" of menu bar 1'))
+
+    def sheet_button(self, title, seconds=15):
+        """The enabled button drawn by SheetButtonStyle (at least 84 x 32 points) named TITLE."""
+        deadline = time.monotonic() + seconds
+        found = []
+        while time.monotonic() < deadline:
+            found = [n for n in self.nodes("--title", title, "--role", "AXButton") if n["w"] >= 83 and n["h"] >= 31]
+            if any(n.get("enabled") is True for n in found):
+                return next(n for n in found if n.get("enabled") is True)
+            time.sleep(1)
+        return found[0] if found else None
+
+    def measure(self, shot, button, what, primary, note=False):
+        """A button's label against its fill and, for a default button, its fill against what is
+        around it, read from the guest's own screen pixels. With NOTE the reading is recorded as a
+        finding (notes.json), not as a check."""
+        if not button:
+            self.record(f"{what}: the button was found", False)
+            return
+        picture, scale = self.image(shot)
+        x, y, w, h = (button[k] * scale for k in ("x", "y", "w", "h"))
+        fill = self.median_color(picture, (x + 4 * scale, y + 6 * scale, x + 9 * scale, y + h - 6 * scale))
+        label = picture.crop(tuple(round(v) for v in (x + 12 * scale, y + 6 * scale, x + w - 12 * scale, y + h - 6 * scale))).getdata()
+        ink = max(label, key=lambda p: self.contrast(p, fill))
+        ratio = self.contrast(ink, fill)
+        detail = f"label {ink} on fill {fill}, {ratio:.2f}:1"
+        passed = ratio >= 4.5
+        if primary:
+            around = self.median_color(picture, (x - 7 * scale, y + h / 2 - 2 * scale, x - 3 * scale, y + h / 2 + 2 * scale))
+            edge = self.contrast(fill, around)
+            detail += f"; fill against {around} around it, {edge:.2f}:1"
+            passed = passed and edge >= 3
+        if note:
+            self.notes.append({"finding": what, "detail": detail})
+            (self.out / "notes.json").write_text(json.dumps(self.notes, indent=2) + "\n")
+            print("NOTE " + what + ": " + detail, flush=True)
+        else:
+            enabled = button.get("enabled")
+            self.record(f"{what} clears AA ({'label 4.5:1, fill 3:1' if primary else 'label 4.5:1'})",
+                        passed and enabled is True, detail + ("" if enabled is True else f"; enabled {enabled!r}"))
+
+    def sheet(self, t, slug, default, what, cancel="Cancel"):
+        shot = f"{t}-sheet-{slug}"
+        button = self.sheet_button(default)
+        time.sleep(0.5)
+        self.shot(shot)
+        self.measure(shot, button, f"{t}: {what}'s {default}", primary=True)
+        if cancel:
+            self.measure(shot, self.sheet_button(cancel, 3), f"{t}: {what}'s {cancel}", primary=False)
+        self.key(53)
+        time.sleep(1.0)
+
+    def sheets(self, theme):
+        t = theme
+        self.launch(theme)
+
+        connect = self.node("Connect to Server", "--role", "AXButton")
+        if connect:
+            self.click(*self.center(connect))
+            time.sleep(1.5)
+            self.sheet(t, "connect", "Connect", "Connect to Server")
+        else:
+            self.record(f"{t}: the Connect to Server button was found", False)
+
+        self.menu("Files", "File Actions…")
+        time.sleep(1.5)
+        self.sheet(t, "file-actions", "Run", "File Actions")
+
+        scope = self.node("Search Scope")
+        if scope:
+            filters = None
+            for _ in range(2):  # the first open of a menu can be slow to reach the tree
+                self.click(*self.center(scope))
+                time.sleep(1.5)
+                filters = self.node("Search Filters…", "--role", "AXMenuItem")
+                if filters:
+                    break
+                self.key(53)
+                time.sleep(0.5)
+            if filters:
+                self.click(*self.center(filters))
+                time.sleep(1.5)
+                self.sheet(t, "search-filters", "Search", "Search Filters")
+            else:
+                self.record(f"{t}: the Search Scope menu has Search Filters…", False)
+                self.key(53)
+        else:
+            self.record(f"{t}: the Search Scope menu was found", False)
+
+        html = self.node("landing-page-v1.html")
+        self.right(*self.name_point(html))
+        time.sleep(1.0)
+        zip_item = self.node("Create ZIP…", "--role", "AXMenuItem")
+        if zip_item:
+            self.click(*self.center(zip_item))
+            time.sleep(1.5)
+            self.sheet(t, "create-zip", "Create", "Create ZIP", cancel="Close")
+        else:
+            self.record(f"{t}: the right-click menu has Create ZIP…", False)
+            self.key(53)
+
+        self.menu("File", "New Folder")
+        time.sleep(1.5)
+        self.sheet(t, "new-folder", "Create", "New Folder")
+
+        self.right(*self.name_point(self.node("landing-page-v1.html")))
+        time.sleep(1.0)
+        open_with = self.node("Open With", "--role", "AXMenuItem")
+        another = None
+        if open_with:
+            self.pointer("%d,%d" % self.center(open_with), "--hover")
+            time.sleep(1.2)
+            another = self.node("Choose Another App…", "--role", "AXMenuItem")
+        if another:
+            self.pointer("%d,%d" % (another["x"] + 10, another["y"] + another["h"] // 2), "--hover")
+            time.sleep(0.4)
+            self.click(*self.center(another))
+            time.sleep(2.5)
+            self.sheet(t, "open-with", "Open", "Open With chooser")
+        else:
+            self.record(f"{t}: the right-click menu has Open With, Choose Another App…", False)
+            self.key(53)
+            self.key(53)
+
+        # Disk Cleanup's Move to Trash is enabled once one measured item is in review.
+        self.menu("Files", "Disk Usage…")
+        add = []
+        for _ in range(60):
+            add = [n for n in self.nodes("--title", " to review", "--contains", "--role", "AXButton")
+                   if (n.get("title") or n.get("desc") or "").startswith("Add ") and n.get("enabled") is True]
+            if add:
+                break
+            time.sleep(1)
+        if add:
+            self.click(*self.center(add[0]))
+            time.sleep(1.5)
+            self.sheet(t, "disk-cleanup-move-to-trash", "Move to Trash", "Disk Cleanup", cancel=None)
+        else:
+            self.record(f"{t}: Disk Cleanup listed an item to add to review", False)
+        # Back to the browser by Disk Usage's own back button (Esc reaches it only with focus inside).
+        back = [n for n in self.nodes("--title", "Home107", "--role", "AXButton") if n["x"] < 200 and n["y"] < 120]
+        if back:
+            self.click(*self.center(back[0]))
+        time.sleep(1.5)
+
+        # New Text File in an empty folder opens the name sheet (Rename or Create). Changing the
+        # extension there asks in a system alert, which takes no SwiftUI button style: its default
+        # button is measured as a finding, not as a check of this change.
+        webinars = self.node("Webinars")
+        if webinars:
+            self.double(*self.name_point(webinars))
+            time.sleep(2.0)
+            self.right(1000, 520)
+            time.sleep(1.0)
+            new_text = self.node("New Text File", "--role", "AXMenuItem")
+            if new_text:
+                self.click(*self.center(new_text))
+                time.sleep(2.0)
+                title = "Rename" if self.sheet_button("Rename", 5) else "Create"
+                shot = f"{t}-sheet-new-file-name"
+                button = self.sheet_button(title)
+                self.shot(shot)
+                self.measure(shot, button, f"{t}: New File's {title}", primary=True)
+                self.measure(shot, self.sheet_button("Cancel", 3), f"{t}: New File's Cancel", primary=False)
+                self.keystroke("a", COMMAND)
+                self.keystroke("New File.md")
+                self.key(36)
+                time.sleep(1.5)
+                alert = [n for n in self.nodes("--title", "Change Extension", "--role", "AXButton")]
+                shot = f"{t}-alert-change-extension"
+                self.shot(shot)
+                if alert:
+                    self.measure(shot, alert[0], f"{t}: the Change the File Extension? alert's default button "
+                                 "(system-drawn, not changed here)", primary=False, note=True)
+                else:
+                    self.notes.append({"finding": f"{t}: the extension alert did not appear", "detail": ""})
+                self.key(53)
+                time.sleep(1.0)
+                self.key(53)
+                time.sleep(1.0)
+            else:
+                self.record(f"{t}: the empty folder's right-click menu has New Text File", False)
+                self.key(53)
+        else:
+            self.record(f"{t}: Webinars is listed", False)
+        if not self.quit():
+            self.record(f"{t}: RichFiles quit", False)
+
     def window_title(self):
         code, text = self.guest("osascript -e " + shlex.quote(
             'tell application "System Events" to tell process "RichFiles" to get name of window 1'))
@@ -683,7 +885,9 @@ def main():
     parser.add_argument("--standalone-zip", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--themes", default="daybreak,sovereign", help="RichFiles themes to walk, in order")
-    parser.add_argument("--fixes", action="store_true", help="walk only the handover review's fixes")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--fixes", action="store_true", help="walk only the handover review's fixes")
+    mode.add_argument("--sheets", action="store_true", help="open every sheet with a default button and measure it")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     walk = Walk(args.vm, args.out)
@@ -691,7 +895,7 @@ def main():
         walk.prepare(args.standalone_zip)
         for theme in args.themes.split(","):
             try:
-                (walk.fixes if args.fixes else walk.walk)(theme)
+                (walk.fixes if args.fixes else walk.sheets if args.sheets else walk.walk)(theme)
             except Exception as error:  # record and go on to the next theme
                 walk.record(f"{theme}: walk step raised", False, repr(error)[:300])
                 walk.quit()
