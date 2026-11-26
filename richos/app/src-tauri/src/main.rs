@@ -11641,8 +11641,13 @@ fn questions_pending(state: &AppState) -> bool {
 /// What the assignment register says, using the same derivation as the update gate.
 fn registered_work(state: &AppState) -> lifecycle::Registered {
     let view = state.reader.snapshot();
-    registered_from(&state.work, &state.control, &|record| view.ledger().turn_for_intake(record.id())
-        .is_some_and(|turn| !matches!(turn.state, richos_core::ledger::TurnState::Received | richos_core::ledger::TurnState::InFlight)))
+    registered_from(&state.work, &state.control, &|record| match record {
+        // A Stop is his control over a turn, never work of its own: the turn it stops, if any
+        // still runs, is counted as that turn.
+        richos_core::steering::IntakeRecord::Stop { .. } | richos_core::steering::IntakeRecord::Drained { .. } => true,
+        _ => view.ledger().turn_for_intake(record.id())
+            .is_some_and(|turn| !matches!(turn.state, richos_core::ledger::TurnState::Received | richos_core::ledger::TurnState::InFlight)),
+    })
 }
 
 /// [`registered_work`] from the two handles it reads, so a test drives the quit question's
