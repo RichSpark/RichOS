@@ -7,6 +7,7 @@ use richos_core::{
     cognition::MockCognition,
     entity::EntityId,
     ledger::{Ledger, Source},
+    steering::TurnControl,
     turn_gate::TurnGate,
 };
 use std::sync::Arc;
@@ -48,6 +49,42 @@ fn a_message_saved_before_the_app_opened_waits_until_the_user_speaks_in_that_cha
     let sent = prompts.lock().unwrap().clone();
     assert_eq!(sent.len(), 2, "after his words the saved message did not follow: {sent:?}");
     assert_eq!(sent[0], "What did Codex say?");
+    assert!(sent[1].contains("a report from yesterday"));
+    drop(spine);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// A message an agent left in Rich's intake before the app opened is not even filed as a turn
+/// at launch (a turn in the ledger shows its chat as working); after the user's first words in
+/// that chat it is, and it follows them.
+#[test]
+fn an_agents_message_left_in_the_intake_is_no_turn_until_the_user_speaks() {
+    let (root, path) = opened();
+    let intake = root.join("intake.jsonl");
+    let mut ledger = Ledger::open(&path).unwrap();
+    let entity = EntityId::parse("femcboost").unwrap();
+    let thread = ledger.create_thread("fixture", &entity).unwrap();
+    drop(ledger);
+    let control = TurnControl::open(&intake).unwrap();
+    control.submit_agent_message(&thread, Some(entity), "{\"from\":\"stu\",\"text\":\"a report from yesterday\"}", "stu", "peer:fixture:1").unwrap();
+    drop(control);
+    // load-bound: this only moves the millisecond clock past what was saved; host load makes the gap larger, never smaller.
+    std::thread::sleep(std::time::Duration::from_millis(3));
+
+    let mut spine = support::spine(Ledger::open(&path).unwrap());
+    spine.set_turn_control(TurnControl::open(&intake).unwrap());
+    spine.set_turn_gate(Arc::new(TurnGate::at_launch(&root.join("engine-state"))));
+    let mock = MockCognition::new("after-launch", vec!["Here is what Codex said", "Noted"]);
+    let prompts = mock.prompts.clone();
+    spine.switch_thread(&thread).unwrap();
+    spine.attach_lease(Box::new(mock));
+    spine.reconcile_intake().unwrap();
+    assert!(prompts.lock().unwrap().is_empty(), "opening the app sent Rich an agent's saved message");
+    assert!(spine.ledger().thread_turns(&thread).unwrap().is_empty(), "the saved message was filed as a turn, showing the chat as working");
+
+    spine.submit_prompt("What did Codex say?", Source::Text).unwrap();
+    let sent = prompts.lock().unwrap().clone();
+    assert_eq!(sent.len(), 2, "after his words the saved message did not follow: {sent:?}");
     assert!(sent[1].contains("a report from yesterday"));
     drop(spine);
     std::fs::remove_dir_all(root).unwrap();

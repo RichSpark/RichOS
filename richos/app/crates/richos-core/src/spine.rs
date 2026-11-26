@@ -2408,14 +2408,15 @@ impl Spine {
     /// surfaces honestly after one attempt rather than looping forever.
     fn deliver(&mut self,turn_id:&str,binding:&ThreadBinding,text:&str,allow_recovery:bool)->Result<(),SpineError> {
         // THE ONE RULE ([`crate::turn_gate`]), at the one road every turn of Rich's takes to his
-        // session: a turn filed before the app opened (an input saved and never started, a
-        // message an agent left) waits until the user is active in its chat. His own words of
-        // this run, input filed while the app is open, a turn replayed because it was running
-        // when the app ended (`replay_turn` files it now), and an internal turn of a turn
-        // already running go.
+        // session: an agent's message filed before the app opened waits until the user is
+        // active in its chat. His own words go: those of this run, and those he sent before the
+        // app ended that were still waiting their turn behind work then running (his request in
+        // progress, as a turn replayed because it was running is: `replay_turn` files it now).
+        // Input filed while the app is open and an internal turn of a turn already running go.
         if let Some(gate)=self.turn_gate.get() {
             let origin=match self.ledger.turn(turn_id) {
-                Some(turn) if turn.source!=Source::Internal && turn.created_at<gate.since_ms() => crate::turn_gate::Origin::FromBefore,
+                Some(turn) if turn.source==Source::Agent && turn.created_at<gate.since_ms() => crate::turn_gate::Origin::FromBefore,
+                Some(turn) if matches!(turn.source, Source::Text|Source::Jam) && turn.created_at<gate.since_ms() => crate::turn_gate::Origin::CarriesOn,
                 _ => crate::turn_gate::Origin::Now,
             };
             if !gate.may_start(binding,origin) {
@@ -3180,6 +3181,14 @@ impl Spine {
                     }
                     let binding = self.fence_binding(&thread_id)?;
                     let source = source.unwrap_or(Source::Text);
+                    // THE ONE RULE: an agent's message filed before the app opened stays in the
+                    // intake log, not yet a turn in the ledger (where it would show its chat as
+                    // working), until the user is active in its chat; this drain runs again at
+                    // every turn boundary. `deliver` asks the same rule of every turn.
+                    if source == Source::Agent && self.turn_gate.get().is_some_and(|gate| at < gate.since_ms()
+                        && !gate.may_start(&binding, crate::turn_gate::Origin::FromBefore)) {
+                        continue;
+                    }
                     let kept = (self.keep_intake_channel || source == Source::Agent).then_some(channel.as_str());
                     let turn_id = self.ledger.record_prompt_received_from_client_provenance(&binding, &text, source, id, kept, client_id.as_deref(), (voice_note, crate::swearmeter::Authorship { bytes: authored_bytes, ranges: authored_ranges }, Some(at)))?;
                     self.input_channels.insert(turn_id.clone(), channel);
