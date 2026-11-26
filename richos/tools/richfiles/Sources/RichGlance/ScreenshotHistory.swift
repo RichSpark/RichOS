@@ -97,7 +97,10 @@ struct ScreenshotStore: Sendable {
         try withLock {
             var style = annotationStyle(for: tool)
             if let ink = changes.ink { style.ink = ink }
-            if let large = changes.large { style.large = large }
+            if let size = changes.size {
+                style.size = size
+                style.large = size != .small
+            }
             if let thickness = changes.thickness { style.thickness = thickness }
             try JSONEncoder().encode(style).write(to: annotationStyleFile(for: tool), options: .atomic)
         }
