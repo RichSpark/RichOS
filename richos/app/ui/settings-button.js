@@ -33,6 +33,7 @@ window.RichSettings = (function () {
   var techy = null; // { read(), write(on) }
   var swearmeter = null;
   var contextMeter = null; // { read(), write(on) }: the context meter in each chat (CEO, 2026-11-16)
+  var richosMonitor = null; // { read(), write(on) }: My RichOS on the navigation rail (CEO, 2026-11-26, round 109)
   var oxford = null; // { read(), write(on) }: the Oxford comma in what Claude writes (CEO, 2026-10-19)
   var bug = null; // { open() } — what "Bust a bug" actually opens, when that exists
   var updates = null; // { render(container), onOpen() } — the update surface fills its own row
@@ -280,6 +281,26 @@ window.RichSettings = (function () {
     block.appendChild(hint);
     input.checked = !!contextMeter.read();
     input.addEventListener("change", function () { contextMeter.write(input.checked); });
+    return block;
+  }
+
+  // MY RICHOS (CEO, 2026-11-26, round 109): "This whole feature would be off by default, but if
+  // turned on in the settings ... would sit on the navigation rail". The last switch of this
+  // column, under Context meter; `richos-monitor.js` is its host and draws the monitor itself.
+  function buildRichosMonitor() {
+    var block = elem("div", "", { id: "set-richosmon-block" });
+    var row = elem("div", "set-row");
+    var label = elem("label", "set-name", { for: "set-richosmon" });
+    label.textContent = "Show My RichOS";
+    var input = elem("input", "set-switch", { type: "checkbox", id: "set-richosmon", "aria-describedby": "richosmon-hint" });
+    row.appendChild(label);
+    row.appendChild(input);
+    block.appendChild(row);
+    var hint = elem("p", "popover-hint", { id: "richosmon-hint" });
+    hint.textContent = "Puts a live monitor on the navigation rail, under My Mac: whether tokens are being used right now and how fast and how much memory the RichOS apps are using.";
+    block.appendChild(hint);
+    input.checked = !!richosMonitor.read();
+    input.addEventListener("change", function () { richosMonitor.write(input.checked); });
     return block;
   }
 
@@ -584,6 +605,8 @@ window.RichSettings = (function () {
     if (swearmeter) { look.push(divider()); look.push(buildSwearMeter()); }
     // The context meter: the bottom of the column, where the switches that show something extra are.
     if (contextMeter) { look.push(divider()); look.push(buildContextMeter()); }
+    // My RichOS (round 109): the last switch, under the context meter.
+    if (richosMonitor) { look.push(divider()); look.push(buildRichosMonitor()); }
     addColumn(cols, "set-group-look", "How it looks", look);
 
     // ---- COLUMN 2: working with Rich ------------------------------------------------------
@@ -831,6 +854,8 @@ window.RichSettings = (function () {
     if (swearmeter) swearmeter.paint();
     var ctx = menuEl.querySelector("#set-ctxmeter");
     if (ctx && contextMeter) ctx.checked = !!contextMeter.read();
+    var rom = menuEl.querySelector("#set-richosmon");
+    if (rom && richosMonitor) rom.checked = !!richosMonitor.read();
     var quotaRow = menuEl.querySelector("#set-quota-open");
     if (quotaRow) { quotaRow.hidden = !(techy && techy.read()); if (quota.paint) quota.paint(); }
     if (accounts && accounts.paint && menuEl.querySelector("#set-accounts-open")) accounts.paint();
@@ -1219,6 +1244,13 @@ window.RichSettings = (function () {
      *  `host.write(on)` saves the choice. Registering is what makes the row exist. */
     registerContextMeter: function (host) {
       contextMeter = host || null;
+      rebuild();
+    },
+
+    /** MY RICHOS (CEO, 2026-11-26, round 109): `host.read()` is whether the rail shows it,
+     *  `host.write(on)` saves the choice. Registering is what makes the row exist. */
+    registerRichosMonitor: function (host) {
+      richosMonitor = host || null;
       rebuild();
     },
 

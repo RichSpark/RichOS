@@ -111,7 +111,7 @@ async function main() {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: "dark", reducedMotion: "reduce" });
   let page = await openApp(context);
 
-  await run.check("off by default: no meter in the chat, and the switch is the last setting of the first column, off", async () => {
+  await run.check("off by default: no meter in the chat, and the switch sits at the foot of the first column, above Show My RichOS, off", async () => {
     const state = await meter(page);
     assertEqual([state.on, state.visible], [false, false], "the meter shows before it is switched on");
     assertEqual(await page.locator("#ctx-meter").isVisible(), false, "the meter is on screen");
@@ -120,10 +120,12 @@ async function main() {
     const place = await page.evaluate(() => {
       const col = document.querySelector('#set-menu .sm-col[aria-labelledby="set-group-look"]');
       const block = document.getElementById("set-ctxmeter-block");
-      return { last: col.lastElementChild === block, label: block.querySelector(".set-name").textContent,
-        hint: block.querySelector(".popover-hint").textContent };
+      // Show My RichOS (round 109) is the one switch after it, the column's last.
+      const after = Array.from(col.children).slice(Array.from(col.children).indexOf(block) + 1).filter((n) => n.id);
+      return { last: after.map((n) => n.id).join() === "set-richosmon-block" && col.lastElementChild.id === "set-richosmon-block",
+        label: block.querySelector(".set-name").textContent, hint: block.querySelector(".popover-hint").textContent };
     });
-    assert(place.last, "Context meter is not the last setting of How it looks");
+    assert(place.last, "Context meter is not the last setting of How it looks before Show My RichOS");
     assertEqual(place.label, "Context meter", "the switch's name");
     assertEqual(place.hint, "Shows how full Rich’s context window is at the top of each chat, for when he talks with you and when he directs your team.", "the switch's one line");
     await closeSettings(page);

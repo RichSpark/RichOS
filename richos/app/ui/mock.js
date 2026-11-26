@@ -230,7 +230,7 @@
     // `oxford_comma` stands in for config.rs's Oxford comma setting: absent reads as off (CEO, 2026-10-19).
     // `resources_view` stands in for config.rs's resources square view: absent reads as Ink (round 47).
     // `show_context_meter` stands in for config.rs's context meter switch: absent reads as off (CEO, 2026-11-16).
-    const fresh = { theme: "system", font_scale: 100, user_name: null, rich_model: "fable", stu_model: "fable", oxford_comma: false, show_swearmeter: false, show_context_meter: false, resources_view: "ink", lease_effort: null }; // ROUND 86: lease_effort, each row's effort per model (absent reads as the defaults)
+    const fresh = { theme: "system", font_scale: 100, user_name: null, rich_model: "fable", stu_model: "fable", oxford_comma: false, show_swearmeter: false, show_context_meter: false, show_richos_monitor: false, resources_view: "ink", lease_effort: null }; // `show_richos_monitor`: config.rs's My RichOS switch, absent reads as off (round 109) // ROUND 86: lease_effort, each row's effort per model (absent reads as the defaults)
     try {
       const raw = window.localStorage.getItem(MOCK_CONFIG_KEY);
       if (!raw) return fresh;
@@ -245,6 +245,7 @@
         oxford_comma: parsed.oxford_comma === true,
         show_swearmeter: parsed.show_swearmeter === true,
         show_context_meter: parsed.show_context_meter === true,
+        show_richos_monitor: parsed.show_richos_monitor === true,
         resources_view: parsed.resources_view === "readout" ? "readout" : "ink",
         lease_effort: parsed.lease_effort && typeof parsed.lease_effort === "object" ? parsed.lease_effort : null,
         lease_chosen: Array.isArray(parsed.lease_chosen) ? parsed.lease_chosen : [],
@@ -3770,6 +3771,29 @@
           return null;
         case "chat_context":
           return contextOf(args.threadId ?? args.thread_id);
+        // My RichOS (round 109): the switch, and its one read in `my_richos.rs`'s shape. The
+        // figures are `window.__RICHOS_MOCK_MONITOR__` (an answer, or a function of the request)
+        // when a suite gives one; otherwise nothing has been used and memory is being measured.
+        // `window.__richosMonitorReads` counts the reads, so "off runs nothing" can be measured.
+        case "get_richos_monitor":
+          return mockConfig.show_richos_monitor;
+        case "set_richos_monitor":
+          mockConfig.show_richos_monitor = args.show === true;
+          persistMockConfig();
+          return null;
+        case "richos_monitor": {
+          window.__richosMonitorReads = (window.__richosMonitorReads || 0) + 1;
+          const now = Date.now();
+          if (!mockConfig.show_richos_monitor) return { on: false, now_ms: now, tokens: null, memory: null };
+          const given = window.__RICHOS_MOCK_MONITOR__;
+          const view = typeof given === "function" ? given(args) : given;
+          if (view) return JSON.parse(JSON.stringify(view));
+          return {
+            on: true, now_ms: now,
+            tokens: { since_ms: now, last_ms: null, active: false, m1: 0, m5: 0, m15: 0, tile: new Array(10).fill(0), scale: 0, card: args.card ? new Array(60).fill(0) : [], detail: null },
+            memory: args.card || args.detail ? { status: "measuring", detail: "", at_ms: null, mac_total_bytes: null, apps: [], all: { now: null, avg: null, peak: null, hist: [] }, series: null } : null,
+          };
+        }
         case "get_keep_chat_alive":
           return navPrefs.keep_alive_threads.includes(args.threadId ?? args.thread_id);
         case "set_keep_chat_alive":

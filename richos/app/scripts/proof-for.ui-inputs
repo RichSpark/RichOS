@@ -65,7 +65,7 @@
 #               reading a new place cannot land with nothing to select it.
 # ========================================================================================
 
-@shell   richos/app/ui/index.html richos/app/ui/main.js richos/app/ui/authored-input.js richos/app/ui/style.css richos/app/ui/attachments.js richos/app/ui/output-panel.js richos/app/ui/rich-profile.js richos/app/ui/rich-profile.css richos/app/ui/suite-tools.js richos/app/ui/suite-tools.css richos/app/ui/video-anywhere.js richos/app/ui/video-anywhere.css richos/app/ui/context-meter.js richos/app/ui/context-meter.css richos/app/ui/keep-alive.js richos/app/ui/keep-alive.css
+@shell   richos/app/ui/index.html richos/app/ui/main.js richos/app/ui/authored-input.js richos/app/ui/style.css richos/app/ui/attachments.js richos/app/ui/output-panel.js richos/app/ui/rich-profile.js richos/app/ui/rich-profile.css richos/app/ui/suite-tools.js richos/app/ui/suite-tools.css richos/app/ui/video-anywhere.js richos/app/ui/video-anywhere.css richos/app/ui/context-meter.js richos/app/ui/context-meter.css richos/app/ui/keep-alive.js richos/app/ui/keep-alive.css richos/app/ui/richos-monitor.js richos/app/ui/richos-monitor.css
 @home   richos/app/ui/home.js richos/app/ui/home-growth.js richos/app/ui/home-video.js richos/app/ui/home.css richos/app/ui/swearmeter.js richos/app/ui/home/field-engine.js richos/app/ui/home/field-ghost.js richos/app/ui/home/field-prep.js richos/app/ui/home/field-ref.js
 @splash  richos/app/ui/splash.js richos/app/ui/splash-library.js richos/app/ui/splash.css richos/app/ui/theme-boot.js
 @phone   richos/app/ui/phone.js richos/app/ui/qr.js
@@ -126,6 +126,7 @@ rich-model.js           @shell richos/app/ui/mock.js richos/app/ui/settings-butt
 swearmeter.js           @shell @home richos/app/ui/authored-input.js richos/app/ui/swearmeter.js richos/app/ui/settings-button.js richos/app/ui/mock.js richos/app/ui/theme-boot.js
 oxford-comma.js         @shell richos/app/ui/oxford-comma.js richos/app/ui/timeline.js richos/app/ui/questions.js richos/app/ui/settings-button.js richos/app/ui/mock.js
 context-meter.js        @shell richos/app/ui/settings-button.js richos/app/ui/mock.js
+richos-monitor.js       @shell richos/app/ui/settings-button.js richos/app/ui/nav-rail.js richos/app/ui/resources.js richos/app/ui/mock.js richos/app/ui/assets/app-icons/
 keep-alive.js           @shell richos/app/ui/settings-button.js richos/app/ui/codex-reviews.js richos/app/ui/mock.js
 onboarding.js           @shell richos/app/ui/mock.js richos/app/src-tauri/src/main.rs
 onboarding-lifecycle.js @shell richos/app/ui/mock.js
