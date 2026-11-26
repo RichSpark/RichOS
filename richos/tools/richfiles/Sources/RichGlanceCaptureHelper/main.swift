@@ -247,7 +247,7 @@ final class CaptureHelper: NSObject, NSApplicationDelegate {
             return
         }
         if item == nil { item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength) }
-        item?.button?.image = NSImage(systemSymbolName: "viewfinder", accessibilityDescription: "RichGlance Capture")
+        item?.button?.image = GlanceEye.templateImage()
         item?.button?.setAccessibilityLabel("RichGlance Capture")
         let pins = GlancePins.active()
         item?.length = pins.isEmpty ? NSStatusItem.squareLength : NSStatusItem.variableLength
