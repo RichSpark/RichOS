@@ -27,7 +27,8 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
         }
     }
     var ink: ScreenshotInk { styles[tool]?.ink ?? tool.defaultInk ?? .red }
-    var large: Bool { styles[tool]?.large ?? (tool == .arrow) }
+    /// A new arrow starts at Medium until a size is chosen; every other tool starts at Small (Regular).
+    var size: ScreenshotMarkSize { styles[tool]?.markSize ?? (tool == .arrow ? .medium : .small) }
     var thickness: CGFloat {
         if let selectedMark { return selectedMark.strokeWidth(at: document.scale) }
         return ScreenshotMark(tool: tool, start: .zero, end: .zero, thickness: styles[tool]?.thickness)
@@ -152,7 +153,7 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
         ScreenshotRenderer.drawMarks(drawing, scale: document.scale, in: context)
         if tool == .steps, let hover, shown.contains(hover), gesture == nil {
             context.setAlpha(0.65)
-            ScreenshotRenderer.draw(ScreenshotMark(tool: .steps, start: hover, end: hover, ink: ink, large: large),
+            ScreenshotRenderer.draw(ScreenshotMark(tool: .steps, start: hover, end: hover, ink: ink, large: size != .small, size: size),
                                     number: document.edits.marks.filter { $0.tool == .steps }.count + 1,
                                     scale: document.scale, in: context)
         }
@@ -289,11 +290,12 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
                 pointer = CGPoint(x: max(shown.minX, point.x - 12 * document.scale),
                                   y: min(shown.maxY, end.y + 22 * document.scale))
             }
-            let mark = ScreenshotMark(tool: tool, start: point, end: end, pointer: pointer, ink: ink, large: large,
-                                      thickness: styles[tool]?.thickness)
+            let mark = ScreenshotMark(tool: tool, start: point, end: end, pointer: pointer, ink: ink,
+                                      large: size != .small, thickness: styles[tool]?.thickness, size: size)
             gesture = Gesture(anchor: point, before: document.edits, handle: .end)
             document.edits.marks.append(mark)
-            selected = mark.id
+            // Round 108: a placed step is not left selected, so a size chosen next is for the next step.
+            selected = tool == .steps ? nil : mark.id
         } else {
             selected = nil
         }
@@ -405,25 +407,27 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
         refresh()
     }
 
-    func setStyle(ink: ScreenshotInk? = nil, large: Bool? = nil, thickness: Int? = nil) {
+    func setStyle(ink: ScreenshotInk? = nil, size: ScreenshotMarkSize? = nil, thickness: Int? = nil) {
         let editedTool = selectedMark?.tool ?? tool
         guard editedTool.defaultInk != nil else { return }
         var style = styles[editedTool] ?? ScreenshotMarkStyle()
         var changes = ScreenshotMarkStyle()
         if let ink { style.ink = ink; changes.ink = ink }
-        if let large, editedTool.hasSizeChoice {
-            style.large = large
-            changes.large = large
+        if let size, editedTool.hasSizeChoice {
+            // Text has only Regular and Large.
+            let chosen: ScreenshotMarkSize = editedTool == .text && size == .large ? .medium : size
+            style.size = chosen
+            changes.size = chosen
         }
         if let thickness, editedTool.hasThickness, ScreenshotMark.thicknessOptions.contains(thickness) {
             style.thickness = thickness
             changes.thickness = thickness
         }
         styles[editedTool] = style
-        if changes.ink != nil || changes.large != nil || changes.thickness != nil { saveStyle?(changes, editedTool) }
+        if changes.ink != nil || changes.size != nil || changes.thickness != nil { saveStyle?(changes, editedTool) }
         editSelected { mark in
             if let ink { mark.ink = ink }
-            if let large = changes.large { mark.large = large }
+            if let size = changes.size { mark.markSize = size }
             if let thickness = changes.thickness { mark.thickness = thickness }
         }
         if selectedMark == nil { refresh() }
@@ -469,7 +473,7 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
               let index = document.edits.marks.firstIndex(where: { $0.id == selected }) else { return }
         var mark = document.edits.marks[index]
         mark.text = view.string
-        let unit = document.scale * (mark.large ? 1.5 : 1)
+        let unit = document.scale * mark.sizeFactor
         let font = NSFont.systemFont(ofSize: 16 * unit, weight: .semibold)
         let widthLimit = max(1, min(360 * unit, shown.maxX - mark.rect.minX))
         let padding = 16 * document.scale
@@ -510,7 +514,7 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
 
     private func placeTextEntry() {
         guard let field = textEntry, let mark = selectedMark else { return }
-        let font = NSFont.systemFont(ofSize: 16 * document.scale * (mark.large ? 1.5 : 1) * factor, weight: .semibold)
+        let font = NSFont.systemFont(ofSize: 16 * document.scale * mark.sizeFactor * factor, weight: .semibold)
         if field.font != font { field.font = font }
         if field.textColor != mark.ink.outline { field.textColor = mark.ink.outline }
         field.insertionPointColor = mark.ink.outline
@@ -582,7 +586,7 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
 
     private func markBounds(_ mark: ScreenshotMark) -> CGRect {
         if mark.tool == .steps {
-            let radius = 15 * document.scale * (mark.large ? 1.5 : 1)
+            let radius = 15 * document.scale * mark.sizeFactor
             return CGRect(x: mark.start.x - radius, y: mark.start.y - radius, width: 2 * radius, height: 2 * radius)
         }
         if mark.tool == .arrow {
