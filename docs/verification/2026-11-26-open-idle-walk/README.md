@@ -4,9 +4,9 @@ The CEO's words: "there should have been absolutely zero usage after me just ope
 
 ## What ran
 
-- **App:** `richos/app/scripts/testvm/branch-bundle.sh` at `0f8e7e254`, pinned to nightly 118's engine
-  (1.2.0). The running app reported `built_from: 0f8e7e254479abda88780e7edcbc495b1b708258`.
-- **Scenario:** `richos/app/scripts/testvm/open-idle-walk.py` under `run-walk.py`, one guest, 709 s,
+- **App:** `richos/app/scripts/testvm/branch-bundle.sh` at `cfa2a307a`, pinned to nightly 118's engine
+  (1.2.0). The running app reported `built_from: cfa2a307ae8067e2935aa39ddb21b249a752cae6`.
+- **Scenario:** `richos/app/scripts/testvm/open-idle-walk.py` under `run-walk.py`, one guest, 505 s,
   exit 0, on fixture data (company "Acme"). Nothing was shown on the host's screen and no sound played.
 - **Result:** all nine steps passed; the figures below are from its `report.json`.
 
@@ -23,5 +23,5 @@ The CEO's words: "there should have been absolutely zero usage after me just ope
 
 No answer from a Fable model appears anywhere in the run.
 
-**Test instance:** `run-walk.py` quit the guest app (pid 7525), stopped the VM and deleted the clone
+**Test instance:** `run-walk.py` quit the guest app (pid 7413), stopped the VM and deleted the clone
 ("clean: app quit, VM stopped, clone deleted, state removed").
