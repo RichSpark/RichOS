@@ -39,7 +39,10 @@ its exit status, its output and the clock, so a walk's evidence is one file and 
                                        then only names whose tree "find" reads, e.g. "Dock"; the window-gesture walk);
                                        "from": true with "find" STARTS the drag on the found control's
                                        center and reads each point as a "dx,dy" offset from it (a
-                                       column's resize handle, a window's title bar; the nightly 114 walk)
+                                       column's resize handle, a window's title bar; the nightly 114 walk);
+                                       "within": true with "find" reads every point as a "dx,dy" offset
+                                       from the found control's center and starts at the first of them:
+                                       a drag inside a canvas, such as RichGlance's picture (round 108)
   openlink pattern [app] [seconds]     read the app window's tree until an https:// address containing
                                        PATTERN is drawn, then open it in the guest with APP (default
                                        Safari): the Mac's pairing address handed to the guest's phone
@@ -136,7 +139,10 @@ def step_run(vm, step, out):
             if node is None:
                 return 1, f'pointer find: nothing with a position matched; ax said {text[:300]!r}'
             cx, cy = round(node['x'] + node['w'] / 2), round(node['y'] + node['h'] / 2)
-            if step.get('from'):
+            if step.get('within'):
+                # A drag inside the found control (a canvas): every point is an offset from its center.
+                points = [f'{cx + int(dx)},{cy + int(dy)}' for dx, dy in (pt.split(',') for pt in points)]
+            elif step.get('from'):
                 # A drag that STARTS on the found control (a column's resize handle, a window's
                 # title bar): its center is the first point and each given point is an offset
                 # "dx,dy" from it, so the drag follows the control wherever the app drew it.
@@ -204,7 +210,7 @@ REQUIRED = {
 }
 OPTIONAL = {'tree': {'app': str}, 'shot': {'ocr': bool}, 'handfile': {'to': str},
             'pointer': {'right': bool, 'hover': bool, 'find': list, 'scroll': int, 'ctrl': bool, 'double': bool, 'app': str,
-                        'asis': bool, 'from': bool},
+                        'asis': bool, 'from': bool, 'within': bool},
             'relaunch': {'env': list}, 'openlink': {'app': str, 'seconds': (int, float)},
             'until': {'seconds': (int, float)}, '*': {'allow_fail': bool}}
 
@@ -230,6 +236,13 @@ def problems(steps):
                                 or (isinstance(step[key], bool) and kind != bool)):
                 found.append(f'step {i} ({op}): {key!r} has the wrong type')
         found_point = 1 if isinstance(step.get('find'), list) and step['find'] else 0
+        if op == 'pointer' and step.get('within') is True and (
+                not found_point or step.get('from') or not isinstance(step.get('points'), list) or not step['points']
+                or step.get('scroll') or step.get('double')
+                or not all(isinstance(pt, str) and re.fullmatch(r'-?\d+,-?\d+', pt) for pt in step['points'])):
+            found.append(f'step {i} (pointer): "within" reads "points" as "dx,dy" offsets of whole numbers from the '
+                         f'"find" control\'s center, needs at least one, and takes no "from", "scroll" or "double"')
+            continue
         if op == 'pointer' and step.get('from') is True and (
                 not found_point or not isinstance(step.get('points'), list) or not step['points']
                 or step.get('scroll') or step.get('double') or step.get('hover') is True
