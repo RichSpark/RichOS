@@ -16,7 +16,8 @@ struct BrowserDragSurface: NSViewRepresentable {
     /// A click on empty space in the pane, never on a scroll bar or a text box.
     var blankClick: (CGPoint) -> Void = { _ in }
     /// A right-click (or a Control-click the Windows keys did not take), before its menu opens.
-    var secondaryPress: (CGPoint) -> Void = { _ in }
+    /// It returns the frame of the item it selected, so the menu can open clear of its name.
+    var secondaryPress: (CGPoint) -> CGRect? = { _ in nil }
     /// Every press anywhere in the window, with whether it landed in a text box.
     var anyPress: (_ inText: Bool) -> Void = { _ in }
 
@@ -43,8 +44,11 @@ struct BrowserDragSurface: NSViewRepresentable {
         var click: ((CGPoint, CGPoint, NSEvent, Bool) -> Bool)?
         var controlClick: ((CGPoint?, NSPoint, NSWindow) -> Bool)?
         var blankClick: (CGPoint) -> Void = { _ in }
-        var secondaryPress: (CGPoint) -> Void = { _ in }
+        var secondaryPress: (CGPoint) -> CGRect? = { _ in nil }
         var anyPress: (Bool) -> Void = { _ in }
+        /// An event to dispatch in place of the one being tracked (a right-click moved to the
+        /// clicked item's edge, so its menu opens below or above the item and leaves its name readable).
+        private var replacement: NSEvent?
         private var monitor: Any?
         private var down: (event: NSEvent, prepare: () -> Payload?, selected: Bool, wasKey: Bool)?
         private var blankDown: NSEvent?
@@ -64,12 +68,32 @@ struct BrowserDragSurface: NSViewRepresentable {
                 matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .rightMouseDown]
             ) { [weak self] event in
                 guard let self else { return event }
-                return self.track(event) ? nil : event
+                self.replacement = nil
+                let consumed = self.track(event)
+                defer { self.replacement = nil }
+                return consumed ? nil : (self.replacement ?? event)
             }
         }
 
         deinit {
             if let monitor { NSEvent.removeMonitor(monitor) }
+        }
+
+        /// The same press moved to the bottom edge of the clicked item (its top edge near the bottom
+        /// of the screen, where macOS opens the menu upward), still inside the item, so the menu
+        /// is the item's and opens below or above it instead of over its name (catalog entry 8).
+        private func menuEvent(_ event: NSEvent, at point: CGPoint, clearOf item: CGRect, in window: NSWindow) -> NSEvent? {
+            let below = convert(CGPoint(x: point.x, y: item.maxY - 1), to: nil)
+            let above = convert(CGPoint(x: point.x, y: item.minY + 1), to: nil)
+            let floor = (window.screen ?? NSScreen.main)?.visibleFrame.minY ?? 0
+            // A context menu here is about 500 points tall; with less room than that below the
+            // item, macOS opens it upward from the press, so the press goes to the item's top edge.
+            let roomBelow = window.convertPoint(toScreen: below).y - floor
+            let target = roomBelow < 520 ? above : below
+            return NSEvent.mouseEvent(with: event.type, location: target, modifierFlags: event.modifierFlags,
+                                      timestamp: event.timestamp, windowNumber: event.windowNumber, context: nil,
+                                      eventNumber: event.eventNumber, clickCount: event.clickCount,
+                                      pressure: event.pressure)
         }
 
         /// The deepest view under a window point is a scroll bar or a text box, which take
@@ -94,7 +118,9 @@ struct BrowserDragSurface: NSViewRepresentable {
             if event.type == .rightMouseDown {
                 anyPress(landsOnControl(event, in: window).text)
                 let point = convert(event.locationInWindow, from: nil)
-                if bounds.contains(point) { secondaryPress(point) }
+                if bounds.contains(point), let item = secondaryPress(point) {
+                    replacement = menuEvent(event, at: point, clearOf: item, in: window)
+                }
                 return false
             }
             if event.type == .leftMouseDown {
@@ -105,7 +131,9 @@ struct BrowserDragSurface: NSViewRepresentable {
                 let modifiers = event.modifierFlags.intersection([.control, .command, .option, .shift])
                 consumedClick = modifiers == .control &&
                     controlClick?(inside ? point : nil, event.locationInWindow, window) == true
-                if modifiers == .control && !consumedClick && inside { secondaryPress(point) }
+                if modifiers == .control && !consumedClick && inside, let item = secondaryPress(point) {
+                    replacement = menuEvent(event, at: point, clearOf: item, in: window)
+                }
                 down = nil
                 blankDown = nil
                 // A press in the inline name box is the box's own: a drag there selects text.

@@ -776,7 +776,7 @@ struct BrowserView: View {
         }, secondaryPress: { point in
             // Catalog entry 8: a right-click selects the item before its menu opens, so the menu
             // plainly belongs to it. On empty space it deselects and the folder menu opens.
-            guard model.viewMode != .details else { return }
+            guard model.viewMode != .details else { return nil }
             renaming.cancelArm()
             quickInfo.hide()
             if let url = rowAt(point), let entry = model.entries.first(where: { $0.url == url }) {
@@ -784,11 +784,13 @@ struct BrowserView: View {
                 if !model.selected.contains(url) { select(entry, modifiers: []) }
                 else { model.selection.moveCursor(to: url) }
                 if focus != .items { focus = .items }
+                return rowFrames[url]
             } else if canSelectFromBlankSpace(at: point) {
                 workspace.select(side)
                 if !model.selected.isEmpty { model.selected = [] }
                 if focus != .items { focus = .items }
             }
+            return nil
         }, anyPress: { inText in
             renaming.cancelArm()
             if renaming.item != nil && !inText { commitInlineRename(quiet: true) }
