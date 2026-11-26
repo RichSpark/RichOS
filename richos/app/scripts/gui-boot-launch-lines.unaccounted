@@ -615,3 +615,7 @@
 [richos] Settings was still open: Rich's model and effort were saved as it showed them
 [richos] the saved model and effort reach the sessions at their next start: {}
 [richos] Rich's model and effort, as Settings showed them, could not be saved: {}
+[richos] a saved turn from before RichOS opened waits until the user is active in its chat
+[richos] the conversation's turn gate was already set
+[richos] the open chats could not be written for the review watcher: {}
+[richos] the work host's turn gate was already set
