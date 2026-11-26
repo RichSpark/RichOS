@@ -812,9 +812,24 @@ async function main() {
     await page.click(".efw-anyway");
     await page.waitForFunction(() => window.__calls.filter((x) => x.cmd === "hold_lease_models").pop().args.effort.rich.opus === "max");
     assertEqual(await calls(page, "set_lease_models"), [], "a press saved or applied the choice");
+    // A SAVED Max, lowered and chosen again, waits for its new warning too: what is held is the
+    // level it was chosen from, never the saved Max (review rv-20261126T112554Z-6b571438-ca3d,
+    // finding 3, still open at b201d2803).
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => window.__calls.some((x) => x.cmd === "set_lease_models"));
+    await openPrefs(page);
+    await levelIs(page, "rich", "max");
+    await page.click('#ef-rich .ef-step[data-l="high"]');
+    await levelIs(page, "rich", "high");
+    await page.click('#ef-rich .ef-step[data-l="max"]');
+    await page.waitForFunction(() => { const w = document.querySelector(".efw"); return !!w && !w.hidden; });
+    const fromSaved = (await calls(page, "hold_lease_models")).map((c) => c.args).pop();
+    assertEqual(fromSaved.effort.rich.opus, "high", "a saved Max chosen again was held before its new warning was answered");
+    await page.click(".efw-anyway");
+    await page.waitForFunction(() => window.__calls.filter((x) => x.cmd === "hold_lease_models").pop().args.effort.rich.opus === "max");
     assertEqual(page.__errors, [], "no page errors");
     await page.close();
-    return "held after each press, saved by none; Max held only once confirmed";
+    return "held after each press, saved by none; Max held only once confirmed, a saved Max too";
   });
 
   await browser.close();
