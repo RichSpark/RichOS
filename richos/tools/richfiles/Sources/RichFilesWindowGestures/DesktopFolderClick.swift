@@ -8,7 +8,7 @@ final class DesktopFolderClick {
         let icon: AXUIElement
         let reference: URL
         let point: CGPoint
-        var ready = false
+        var folder: URL?
 
         init(icon: AXUIElement, reference: URL, point: CGPoint) {
             self.icon = icon
@@ -18,7 +18,7 @@ final class DesktopFolderClick {
     }
 
     private var first: Candidate?
-    private var second: (reference: URL, point: CGPoint)?
+    private var second: (folder: URL, point: CGPoint)?
     private var opening = 0
     var busy: Bool { second != nil || opening > 0 }
 
@@ -53,14 +53,14 @@ final class DesktopFolderClick {
         reset()
         guard let element, richFiles != nil else { return }
         if clicks == 2 {
-            guard let previous, previous.ready, element == previous.icon,
+            guard let previous, let folder = previous.folder, element == previous.icon,
                   let pid = element.processID, NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
                   let selection: [AXUIElement] = element.element(kAXParentAttribute)?.value(kAXSelectedChildrenAttribute),
                   selection == [element], let current: URL = element.value(kAXURLAttribute),
                   current == previous.reference else { return }
             // Finder still receives a normal press, so dragging this icon works.
             event.setIntegerValueField(.mouseEventClickState, value: 1)
-            second = (current, event.location)
+            second = (folder, event.location)
             return
         }
 
@@ -73,12 +73,13 @@ final class DesktopFolderClick {
         let candidate = Candidate(icon: element, reference: reference, point: event.location)
         first = candidate
         DispatchQueue.global(qos: .userInitiated).async {
-            // A package such as an application is also a directory on disk.
-            guard let values = try? reference.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey, .isVolumeKey, .isSymbolicLinkKey]),
+            // Validate the destination but match the second click against the original icon.
+            let folder = reference.resolvingSymlinksInPath()
+            guard let values = try? folder.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey, .isVolumeKey, .isSymbolicLinkKey]),
                   values.isDirectory == true, values.isPackage == false, values.isVolume == false,
                   values.isSymbolicLink == false else { return }
             DispatchQueue.main.async { [weak self, weak candidate] in
-                if let candidate, self?.first === candidate { candidate.ready = true }
+                if let candidate, self?.first === candidate { candidate.folder = folder }
             }
         }
     }
@@ -97,13 +98,13 @@ final class DesktopFolderClick {
         guard !moved(from: second.point, to: event.location), let richFiles else { return }
         let started = ProcessInfo.processInfo.systemUptime
         opening += 1
-        NSWorkspace.shared.open([second.reference], withApplicationAt: richFiles, configuration: .init()) { _, error in
+        NSWorkspace.shared.open([second.folder], withApplicationAt: richFiles, configuration: .init()) { _, error in
             DispatchQueue.main.async {
                 self.opening -= 1
                 RichFilesDiagnostics.record(.desktopFolderOpen, id: UUID(), outcome: error == nil ? .complete : .issues,
                                             started: started, total: 1, confirmed: error == nil ? 1 : 0)
                 if error != nil, let finder = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.finder") {
-                    NSWorkspace.shared.open([second.reference], withApplicationAt: finder, configuration: .init(), completionHandler: nil)
+                    NSWorkspace.shared.open([second.folder], withApplicationAt: finder, configuration: .init(), completionHandler: nil)
                 }
             }
         }
