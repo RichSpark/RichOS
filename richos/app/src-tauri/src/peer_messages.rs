@@ -48,8 +48,13 @@ fn waiting_bridge(state: &AppState) -> Result<richos_core::ecs::EcsBridge, Strin
         .map_err(|error| error.to_string())
 }
 
+/// Whether the first look at waiting work since the app opened has run: what that look finds
+/// ready came true while the app was closed.
+static WAITING_LOOKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn reconcile_waiting(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
+    let at_launch = !WAITING_LOOKED.swap(true, std::sync::atomic::Ordering::SeqCst);
     let ecs = state.data_dir.join("ecs");
     if !ecs.join("ecs.sqlite3").try_exists().map_err(|error| error.to_string())? { return Ok(()); }
     let bridge = waiting_bridge(&state)?;
@@ -122,10 +127,14 @@ fn reconcile_waiting(app: &AppHandle) -> Result<(), String> {
             };
             action = Some(next);
         }
+        // THE ONE RULE (richos-core `turn_gate`): an order whose condition the first look at
+        // launch finds already true came true while the app was closed, so its notice says so
+        // and waits for the user in its chat (`drain_inboxes`); one that comes true while the
+        // app is open runs at once.
         if let Err(error) = session_tools::observe_waiting(&scope, json!({
             "event": "waiting_condition", "input_id": format!("{id}:{status}"),
             "obligation_id": id, "status": status, "conditions": conditions,
-            "next_action": action,
+            "next_action": action, "found_at_launch": at_launch,
         }), original.filter(|_| action.is_some())) {
             deferred.get_or_insert_with(|| format!("waiting notice {id} remains pending: {error}"));
         }
@@ -210,7 +219,11 @@ fn drain_inboxes(app:&AppHandle,state:&AppState,thread:&str,binding:&richos_core
             // holds its turn until the user is active in this chat (richos-core `turn_gate`,
             // `Spine::deliver`); one written since (an order whose condition came true now, a
             // report of work running now) is filed as now and goes.
-            let written=if state.turn_gate.arrived_while_open(&inbox,through) {richos_core::util::now_millis()}
+            // An order's notice found at launch is about a condition that came true while the app
+            // was closed (`reconcile_waiting`): from before, like a row saved then.
+            let found_at_launch = message.from == "ecs-waiting" && serde_json::from_str::<Value>(&message.text)
+                .is_ok_and(|facts| facts["found_at_launch"] == true);
+            let written=if state.turn_gate.arrived_while_open(&inbox,through) && !found_at_launch {richos_core::util::now_millis()}
                 else {state.turn_gate.since_ms().saturating_sub(1)};
             state.control.submit_agent_message_written_at(thread,Some(binding.entity_id().clone()),
                 &serde_json::to_string(&message).map_err(|e|e.to_string())?,&message.from,
