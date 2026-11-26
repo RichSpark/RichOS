@@ -193,9 +193,20 @@ async function cutOff(page, scope, edge) {
       for (let e = t.parentElement; e && e !== root; e = e.parentElement) {
         if (getComputedStyle(e).textOverflow === "ellipsis") { r = e.getBoundingClientRect(); break; }
       }
-      if (!r) { const range = document.createRange(); range.selectNodeContents(t); r = range.getBoundingClientRect(); }
-      if (!r.width) continue;
-      if (r.left < left || r.right > right) cut.push(t.textContent.trim() + " (" + Math.round(r.left) + ".." + Math.round(r.right) + ")");
+      // word by word, so the space a wrapped line ends with (which hangs past the line) is not
+      // taken for text past the edge
+      const boxes = [];
+      if (r) boxes.push(r);
+      else {
+        for (const m of t.textContent.matchAll(/\S+/g)) {
+          const range = document.createRange();
+          range.setStart(t, m.index);
+          range.setEnd(t, m.index + m[0].length);
+          boxes.push(range.getBoundingClientRect());
+        }
+      }
+      const out = boxes.filter((b) => b.width && (b.left < left || b.right > right));
+      if (out.length) cut.push(t.textContent.trim() + " (" + Math.round(Math.min(...out.map((b) => b.left))) + ".." + Math.round(Math.max(...out.map((b) => b.right))) + ")");
     }
     for (const c of root.querySelectorAll("canvas, .rom-bar")) {
       const r = c.getBoundingClientRect();
@@ -474,13 +485,16 @@ async function main() {
   // The handover review at cbb69f6ab: Bust a bug started over Memory details opened its panel
   // over the readings ("1400px window: bug dock x=930..1382, right-aligned Highest readings end
   // at x=981"). The details leave the panel its room, as every other overlay does, and at the
-  // smallest window (1024px) every reading still fits beside it, in both tabs.
+  // smallest window (1024px) every reading still fits beside it, in both tabs. The second review
+  // at e285e8258: at the 150% text size the app table's fixed columns left its names 0px at
+  // 1024px and 1280px, so every app and chat name is held to showing in full there too.
   await run.check("Bust a bug over the details: its panel has its room and every reading stays in view beside it", async () => {
     const out = [];
-    for (const [width, height] of [[1400, 900], [1024, 700]]) {
+    for (const [width, height, scale] of [[1400, 900, 100], [1024, 700, 100], [1280, 800, 150], [1024, 700, 150]]) {
       const p = await openApp(context);
       try {
         await p.setViewportSize({ width, height });
+        await p.evaluate((sc) => document.documentElement.style.setProperty("--app-font-scale", String(sc / 100)), scale);
         await switchTo(p, true);
         await p.waitForFunction(() => window.RichosMonitor.state().rail);
         await p.evaluate(() => window.RichosMonitor.openSheet("memory"));
@@ -498,18 +512,26 @@ async function main() {
             await p.waitForFunction(() => document.querySelector('#rom-sheet [data-s="t-where"] .rom-where-row'));
           }
           const place = await p.evaluate(() => ({ dock: document.getElementById("bugdock").getBoundingClientRect().left, sheet: document.getElementById("rom-sheet").getBoundingClientRect().right }));
-          assert(place.sheet <= place.dock, width + "px, " + tab + ": the details reach under Bust a bug's panel: details end at x=" + place.sheet + ", the panel starts at x=" + place.dock);
+          const at = width + "px at " + scale + "%, " + tab;
+          assert(place.sheet <= place.dock, at + ": the details reach under Bust a bug's panel: details end at x=" + place.sheet + ", the panel starts at x=" + place.dock);
           // the header: its title and chip, its tabs and its close button stay on the details
           const head = await p.evaluate(() => {
             const r = (sel) => { const b = document.querySelector(sel).getBoundingClientRect(); return [Math.round(b.left), Math.round(b.right)]; };
             return { sheet: r("#rom-sheet"), tabs: r("#rom-sheet .rom-tabs"), close: r("#rom-close") };
           });
-          assert(head.tabs[1] <= head.sheet[1] && head.close[0] >= head.sheet[0] && head.close[1] <= head.sheet[1], width + "px, " + tab + ": the tabs or the close button leave the details: " + JSON.stringify(head));
-          assertEqual((await cutOff(p, "#rom-sheet .rom-sh-head", "#rom-sheet")).cut, [], width + "px, " + tab + ": the details' title or chip cut off");
+          assert(head.tabs[1] <= head.sheet[1] && head.close[0] >= head.sheet[0] && head.close[1] <= head.sheet[1], at + ": the tabs or the close button leave the details: " + JSON.stringify(head));
+          assertEqual((await cutOff(p, "#rom-sheet .rom-sh-head", "#rom-sheet")).cut, [], at + ": the details' title or chip cut off");
           const fit = await cutOff(p, '#rom-sheet [data-pane="' + tab + '"]', "#rom-sheet .rom-sh-body");
-          assertEqual(fit.cut, [], width + "px, " + tab + ": readings cut off at the details' edge (" + fit.left + ".." + fit.right + ")");
-          assert(fit.sideways <= 1, width + "px, " + tab + ": the details need a sideways scroll of " + fit.sideways + "px");
-          out.push(width + "px " + tab + ": details end x=" + Math.round(place.sheet) + ", panel starts x=" + Math.round(place.dock));
+          assertEqual(fit.cut, [], at + ": readings cut off at the details' edge (" + fit.left + ".." + fit.right + ")");
+          assert(fit.sideways <= 1, at + ": the details need a sideways scroll of " + fit.sideways + "px");
+          // every app's name shows whole; a chat's, whose title can be any length, keeps at least
+          // 8em of room before round 109's ellipsis shortens it: none is squeezed to nothing
+          const names = await p.evaluate((tab) => Array.from(document.querySelectorAll(tab === "memory" ? "#rom-sheet .rom-app-name" : "#rom-sheet .rom-where-chat b"),
+            (n) => ({ name: n.textContent, shown: n.clientWidth, needs: n.scrollWidth, room: 8 * parseFloat(getComputedStyle(n).fontSize) })), tab);
+          assert(names.length > 0, at + ": no names to measure");
+          const short = (n) => (tab === "memory" ? n.needs > n.shown + 1 : n.shown + 1 < Math.min(n.needs, n.room));
+          assertEqual(names.filter((n) => !n.shown || short(n)).map((n) => n.name + " " + n.shown + "/" + n.needs + "px"), [], at + ": names squeezed or cut short");
+          out.push(at + ": details end x=" + Math.round(place.sheet) + ", panel starts x=" + Math.round(place.dock));
         }
         assertEqual(p.errors, [], "page errors");
       } finally { await p.close(); }
