@@ -237,7 +237,7 @@ impl Asked {
     ///
     /// A reply on an old Markdown channel (`legacy_live`) names the lines it came from, and it
     /// is from before when it starts within the file's length at launch. It waits only while
-    /// that file has not grown, for the same reason.
+    /// none of those files has grown, for the same reason: they share one spool.
     fn nobody_wrote_since(&self, event: &Value) -> bool {
         let kind = event["record"]["kind"].as_str();
         match kind {
@@ -261,7 +261,9 @@ impl Asked {
         else { return true };
         let file = PathBuf::from(file);
         let Some(length) = self.markdown.get(&file) else { return false };
-        if std::fs::metadata(&file).is_ok_and(|now| now.len() > *length) {
+        // Every Markdown channel shares one spool, offered one reply at a time: a reply
+        // written on ANY of them while the app is open is behind this one.
+        if self.markdown.iter().any(|(file, length)| std::fs::metadata(file).is_ok_and(|now| now.len() > *length)) {
             return false;
         }
         let mut lines = self.markdown_lines.lock().unwrap();
@@ -750,6 +752,36 @@ mod tests {
         accept_when_asked(&f.state, &f.binding, &backlog, &f.coord, &asked).unwrap();
         accept_when_asked(&f.state, &f.binding, &live, &f.coord, &asked).unwrap();
         assert_eq!(f.rows().len(), 2, "a reply written while the app is open, or the one before it, was held");
+    }
+
+    /// The two default Markdown channels share one spool: a reply held on one never holds back
+    /// a reply written on the other while the app is open.
+    #[test]
+    fn a_markdown_reply_held_on_one_channel_never_blocks_a_live_reply_on_the_other() {
+        let f = Fixture::new();
+        let (first, second) = (f.root.join("rich-codex/to-rich.md"), f.root.join("rich-codex-questions/to-rich.md"));
+        for (channel, text) in [(&first, "## written while closed\nbacklog\n"), (&second, "## read long ago\nold\n")] {
+            std::fs::create_dir_all(channel.parent().unwrap()).unwrap();
+            std::fs::write(channel, text).unwrap();
+        }
+        let places = f.state.join(MARKDOWN_PLACES);
+        std::fs::create_dir_all(places.parent().unwrap()).unwrap();
+        std::fs::write(&places, json!({
+            first.to_str().unwrap(): {"offset": 0, "inode": 1, "seen": 0},
+            second.to_str().unwrap(): {"offset": 21, "inode": 2, "seen": 21},
+        }).to_string()).unwrap();
+        let asked = opened(&f);
+        let mut backlog = f.event.clone();
+        backlog["record"] = json!({"version":1,"kind":"legacy_live","message_id":"legacy-live-a",
+            "text":format!("CODEX-WATCH 10:04Z: Codex wrote a new entry to you in rich-codex/to-rich.md (lines 1-2 of {}); every new line follows:\n## written while closed\nbacklog", first.display())});
+        assert_eq!(
+            accept_when_asked(&f.state, &f.binding, &backlog, &f.coord, &asked).unwrap_err(),
+            WAITS_FOR_THE_USER
+        );
+        use std::io::Write;
+        std::fs::OpenOptions::new().append(true).open(&second).unwrap().write_all(b"## a question, written while open\nlive\n").unwrap();
+        accept_when_asked(&f.state, &f.binding, &backlog, &f.coord, &asked).unwrap();
+        assert_eq!(f.rows().len(), 1, "the held reply still blocks the other channel's live reply");
     }
 
     /// With nothing waiting at launch, the first Markdown reply written while the app is open
