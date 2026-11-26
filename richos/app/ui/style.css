@@ -7591,6 +7591,31 @@ body.bp-narrow .tl-user-bubble {
   font-weight: 600;
   white-space: nowrap;
 }
+/* NO JITTER (CEO 2026-11-26): the name, and under it every name this row can show on this model
+   (`.ef-size`, unseen, filled by main.js's paintEffort), in one cell. The box is as wide and as
+   tall as the widest of them, so the name the pointer previews never changes the head's height
+   and the steps never move under the pointer. Beside the label the name ends where the head
+   ends; on its own line under the label it starts where the label starts (`is-stacked`). The
+   unseen names are text, not generated `content` (contrast.js check 11b measures every string a
+   stylesheet renders), and `visibility: hidden` keeps them out of what is seen, read and walked. */
+.ef-name-box {
+  display: grid;
+  justify-items: end;
+  text-align: end;
+}
+.ef.is-stacked .ef-name-box {
+  justify-items: start;
+  text-align: start;
+}
+.ef-name-box > .ef-name,
+.ef-name-box > .ef-size {
+  grid-area: 1 / 1;
+}
+.ef-size {
+  visibility: hidden;
+  font-weight: 600;
+  white-space: nowrap;
+}
 .ef.is-peek .ef-name,
 .ef.is-peek .ef-say {
   color: var(--ink-soft);
@@ -8037,7 +8062,8 @@ body.bp-narrow .tl-user-bubble {
 .ef-head {
   flex-wrap: wrap;
 }
-.ef-name {
+.ef-name,
+.ef-size {
   white-space: normal;
 }
 

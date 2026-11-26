@@ -2402,7 +2402,8 @@ impl NativeClient {
             args[position] = "--resume".into();
             args[position+1] = path.to_string_lossy().into_owned();
         }
-        // The selected model, with low effort for replies and high effort for work.
+        // The selected model, at the effort chosen for its row on that model (its recommended
+        // level when nobody chose one).
         args.extend(lease_model_args(role, profile));
         let search_endpoint = if role == LeaseRole::Conversation && onboarding.is_some() {
             profile.and_then(|profile| profile.search_binding.as_ref()
@@ -6676,7 +6677,10 @@ while True:
         use crate::entity::{Entity, EntityId, EntityRegistry};
         use crate::ledger::Ledger;
 
-        let root = fixture_root().join(crate::util::new_id("resume-codex"));
+        // The repair opens the continuity database with `SQLITE_OPEN_NOFOLLOW`, which refuses a
+        // path through any symbolic link (error 1550); macOS's `$TMPDIR` sits under the `/var`
+        // link, so the test works under its real path, as an app data folder is.
+        let root = std::fs::canonicalize(fixture_root()).unwrap().join(crate::util::new_id("resume-codex"));
         let coordination = root.join("coordination");
         let repo = root.join("RichOS");
         let exporter = root.join("Exporter");
