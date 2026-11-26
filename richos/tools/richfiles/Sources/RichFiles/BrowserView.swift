@@ -1761,7 +1761,10 @@ struct BrowserView: View {
             let folder = model.folder
             actions.rename(source, to: name) { moved in
                 folderTree.move(from: item, to: moved.url)
-                guard model.folder == folder else { return }
+                // The item clicked to finish the edit keeps the selection and the cursor.
+                guard model.folder == folder,
+                      InlineRename.selection(afterRenaming: item, to: moved.url, current: model.selected) != nil
+                else { return }
                 model.selectCreatedItem(moved)
                 model.selection.rangeAnchor = moved.url
                 model.selection.moveCursor(to: moved.url, scrolling: true)

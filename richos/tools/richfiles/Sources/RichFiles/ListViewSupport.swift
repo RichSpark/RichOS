@@ -453,6 +453,14 @@ final class InlineRename: ObservableObject {
         return .rename(name)
     }
 
+    /// The selection once the disk has renamed `original` to `moved`: the new name takes the
+    /// selection only if the renamed item is still the only selected one. When the user
+    /// finished the edit by clicking another item, or empty space, that click's selection
+    /// stays, as in round 107.1; `nil` leaves the selection as it is.
+    nonisolated static func selection(afterRenaming original: URL, to moved: URL, current: Set<URL>) -> Set<URL>? {
+        current == [original] ? [moved] : nil
+    }
+
     /// The part of `name` before its extension, in UTF-16 units, which the box selects at first.
     nonisolated static func stemLength(_ name: String, directory: Bool) -> Int {
         let text = name as NSString

@@ -676,6 +676,20 @@ final class BrowserActionsTests: XCTestCase {
         XCTAssertEqual(InlineRename.stemLength("README", directory: false), 6)
     }
 
+    /// Catalog entry 2: finishing an inline rename by clicking another file leaves that file
+    /// selected; Enter (the renamed file still the only selection) selects the new name.
+    func testClickingAnotherFileToFinishARenameKeepsThatFileSelected() {
+        let folder = URL(fileURLWithPath: "/fixture", isDirectory: true)
+        let report = folder.appendingPathComponent("report.txt")
+        let renamed = folder.appendingPathComponent("report-final.txt")
+        let budget = folder.appendingPathComponent("budget.txt")
+        XCTAssertNil(InlineRename.selection(afterRenaming: report, to: renamed, current: [budget]),
+                     "The click on budget.txt that finished the edit keeps budget.txt selected")
+        XCTAssertNil(InlineRename.selection(afterRenaming: report, to: renamed, current: []),
+                     "A click on empty space that finished the edit leaves nothing selected")
+        XCTAssertEqual(InlineRename.selection(afterRenaming: report, to: renamed, current: [report]), [renamed])
+    }
+
     @MainActor
     func testCopyConflictOffersTheExactReviewedFilesWithoutReplacingThem() async throws {
         try await withFixture { root, destination, board in
