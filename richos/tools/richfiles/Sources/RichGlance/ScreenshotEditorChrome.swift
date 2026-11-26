@@ -87,6 +87,8 @@ final class ScreenshotButton: NSButton {
     var style: Style = .outline
     var swatch: NSColor?
     var sampleWidth: CGFloat?
+    /// A small picture of a size beside its name: a bar as thick as half the arrow, or a dot for a step.
+    var sizeSample: SizeSample? { didSet { needsDisplay = true } }
     var onHover: ((Bool) -> Void)?
     var onPress: (() -> Void)?
     var onArrow: ((Int) -> Void)?
@@ -94,6 +96,7 @@ final class ScreenshotButton: NSButton {
     private var tracking: NSTrackingArea?
 
     enum Style { case outline, plain, tool, primary, segment, swatch, deleteCapture }
+    enum SizeSample: Equatable { case bar(CGFloat), dot(CGFloat) }
 
     init(_ text: String, symbol: String? = nil, hint: String? = nil, style: Style = .outline) {
         super.init(frame: .zero)
@@ -148,7 +151,7 @@ final class ScreenshotButton: NSButton {
         let text = (title as NSString).size(withAttributes: [.font: font]).width
         let key = keyHint.map { ($0 as NSString).size(withAttributes: [.font: font]).width + 21 } ?? 0
         let decorations: CGFloat = (counter == nil ? 0 : 31) + (trailingSymbol == nil ? 0 : 16)
-        return ceil(text + key + decorations + (symbol == nil ? 0 : 25) + 24)
+        return ceil(text + key + decorations + (symbol == nil ? 0 : 25) + (sizeSample == nil ? 0 : 23) + 24)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -204,11 +207,22 @@ final class ScreenshotButton: NSButton {
             label.draw(at: CGPoint(x: bounds.midX - label.size().width / 2, y: top + glyphSize + 2))
             return
         }
-        let imageWidth: CGFloat = glyph == nil ? 0 : iconOnly ? 18 : 25
+        let imageWidth: CGFloat = sizeSample != nil ? 23 : glyph == nil ? 0 : iconOnly ? 18 : 25
         let keyWidth = key.map { $0.size().width + 12 } ?? 0
         let decorations: CGFloat = (counter == nil ? 0 : 31) + (trailingSymbol == nil ? 0 : 16)
         var x = bounds.midX - (imageWidth + label.size().width + decorations + (key == nil ? 0 : keyWidth + 9)) / 2
         draw(glyph, in: CGRect(x: x, y: bounds.midY - 9, width: 18, height: 18))
+        if let sizeSample {
+            ink.setFill()
+            switch sizeSample {
+            case .bar(let height):
+                NSBezierPath(roundedRect: CGRect(x: x, y: bounds.midY - height / 2, width: 16, height: height),
+                             xRadius: 1, yRadius: 1).fill()
+            case .dot(let diameter):
+                NSBezierPath(ovalIn: CGRect(x: x + 8 - diameter / 2, y: bounds.midY - diameter / 2,
+                                            width: diameter, height: diameter)).fill()
+            }
+        }
         x += imageWidth
         label.draw(at: CGPoint(x: x, y: bounds.midY - label.size().height / 2))
         x += label.size().width
