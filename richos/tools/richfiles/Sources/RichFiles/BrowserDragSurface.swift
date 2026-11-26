@@ -49,6 +49,13 @@ struct BrowserDragSurface: NSViewRepresentable {
         /// An event to dispatch in place of the one being tracked (a right-click moved to the
         /// clicked item's edge, so its menu opens below or above the item and leaves its name readable).
         private var replacement: NSEvent?
+        /// The inline name box and the character a press in it started at, while the press lasts.
+        private var textAnchor: (editor: NSTextView, index: Int)?
+
+        private func textIndex(_ event: NSEvent, in editor: NSTextView) -> Int {
+            let index = editor.characterIndexForInsertion(at: editor.convert(event.locationInWindow, from: nil))
+            return max(0, min(index, (editor.string as NSString).length))
+        }
         private var monitor: Any?
         private var down: (event: NSEvent, prepare: () -> Payload?, selected: Bool, wasKey: Bool)?
         private var blankDown: NSEvent?
@@ -128,6 +135,7 @@ struct BrowserDragSurface: NSViewRepresentable {
             guard !isHiddenOrHasHiddenAncestor, let window, event.window === window, window.attachedSheet == nil else {
                 down = nil
                 blankDown = nil
+                textAnchor = nil
                 consumedClick = false
                 return false
             }
@@ -139,16 +147,38 @@ struct BrowserDragSurface: NSViewRepresentable {
                 }
                 return false
             }
+            // A press in the inline name box places the caret there, a drag selects the part of the
+            // name it crosses and a double-click selects a word, as in any text box. SwiftUI's
+            // hosting view takes presses over the row, so the box never sees them; the selection is
+            // set on its field editor here instead (catalog entry 2).
             if event.type == .leftMouseDown, let editor = editingField(under: event, in: window) {
-                // A press in the inline name box goes to its field editor, whose own tracking places
-                // the caret or selects the dragged part of the name. SwiftUI's hosting view takes the
-                // press over the row otherwise, and the box never sees it (catalog entry 2).
                 anyPress(true)
                 down = nil
                 blankDown = nil
                 consumedClick = false
-                editor.mouseDown(with: event)
+                let index = textIndex(event, in: editor)
+                if event.clickCount >= 2 {
+                    let word = editor.selectionRange(forProposedRange: NSRange(location: index, length: 0),
+                                                     granularity: event.clickCount == 2 ? .selectByWord : .selectByParagraph)
+                    editor.setSelectedRange(word)
+                    textAnchor = nil
+                } else {
+                    editor.setSelectedRange(NSRange(location: index, length: 0))
+                    textAnchor = (editor, index)
+                }
                 return true
+            }
+            if let anchor = textAnchor {
+                if event.type == .leftMouseDragged {
+                    let index = textIndex(event, in: anchor.editor)
+                    anchor.editor.setSelectedRange(NSRange(location: min(index, anchor.index),
+                                                           length: abs(index - anchor.index)))
+                    return true
+                }
+                if event.type == .leftMouseUp {
+                    textAnchor = nil
+                    return true
+                }
             }
             if event.type == .leftMouseDown {
                 let point = convert(event.locationInWindow, from: nil)
