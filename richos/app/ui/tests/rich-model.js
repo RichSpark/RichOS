@@ -18,7 +18,8 @@
 // levels (Fable at Low and Medium, Opus at Low and High); choosing Max opens a warning.
 //
 // CEO 2026-11-26: "for Rich let's change our recommendation (and default setting) to "High" when the
-// user selects Opus instead of Fable for Rich." So Opus is at High in both rows.
+// user selects Opus instead of Fable for Rich." So Opus is at High in both rows. And the jitter he
+// showed over "Recommended" (check 9): the pointer over a step never moves the steps.
 //
 // WHAT THIS SUITE PROVES is the browser half, through the real renderer and mock.js's stand-in
 // for config.rs:
@@ -43,6 +44,11 @@
 //   8. the Max warning: his words, the safe button focused, Escape and a press outside going
 //      back to the recommended level with Settings still open, "Use Max anyway" keeping Max,
 //      no second warning on a Max already chosen or saved, and the line on close.
+//   9. the pointer over a step never moves the steps, at every Text size and window width, in
+//      both rows on both models: the level's name it previews is held in a box as wide as the
+//      widest name that row can show, so it never moves to or from its own line under the
+//      label (CEO 2026-11-26, his recording: over "Recommended" the steps jumped up a line
+//      under the pointer, out from under it and back, again and again).
 // The APPLYING half — the lease in use moves to the stored model at its next boundary — is
 // Rust: `the_model_he_chose_in_preferences_answers_his_next_reply`
 // (crates/richos-core/tests/rotation_tests.rs, his next reply) and
@@ -122,7 +128,9 @@ async function effort(page, who) {
     const mid = def.left + def.width / 2;
     return {
       level: on ? on.dataset.l : null,
-      head: ef.querySelector(".ef-head").textContent,
+      // What the head shows: its label and the level's name (the head also holds every other
+      // name that row can show, unseen, as the width of the name's box; check 9).
+      head: ef.querySelector(".ef-label").textContent + ef.querySelector(".ef-name").textContent,
       say: ef.querySelector(".ef-say").textContent,
       steps: ef.querySelectorAll(".ef-step").length,
       peek: ef.querySelectorAll(".ef-step.is-peek").length,
@@ -687,6 +695,79 @@ async function main() {
       await page.close();
     }
     return "both themes: his words, Escape, outside, End, Use Max anyway, the line on close";
+  });
+
+  // ---- 9. no jitter: the pointer over a step never moves the steps ------------------------------
+  await run.check('9. the pointer over a step never moves the steps: no jitter over "Recommended" at any Text size or width', async () => {
+    // His recording (CEO 2026-11-26, 1380px wide): Rich on Opus, the head "Effort on Opus" over
+    // "Low · recommended for Opus" on a line of its own. The pointer just under the steps, above
+    // "Recommended", previewed a level with a short name ("High"), which fits beside the label:
+    // the head lost a line, the steps jumped up out from under the pointer, the preview ended,
+    // the head took its line back, the steps came back under the pointer, and so on. Every level
+    // of every row on both models is hovered here, at the bottom of its step where his pointer
+    // was, and the steps must not move. The theme changes no geometry, so one theme is walked.
+    const widths = [1024, 1280, 1380, 1440];
+    const problems = [];
+    let cases = 0;
+    for (const width of widths) {
+      const page = await openApp(browser, { viewport: { width, height: 900 }, reducedMotion: "reduce" });
+      await openPrefs(page);
+      await rowsShow(page, { rich: "fable", stu: "fable" });
+      const scales = await page.evaluate(() => window.RichTheme.STEPS);
+      for (const scale of scales) {
+        for (const who of ["rich", "stu"]) {
+          for (const model of ["opus", "fable"]) {
+            await page.mouse.move(2, 2);
+            const where = (w) => {
+              const ef = document.getElementById("ef-" + w);
+              const head = ef.querySelector(".ef-head").getBoundingClientRect();
+              const label = ef.querySelector(".ef-label").getBoundingClientRect();
+              const range = document.createRange();
+              range.selectNodeContents(ef.querySelector(".ef-name"));
+              const name = range.getBoundingClientRect();
+              const steps = ef.querySelector(".ef-steps").getBoundingClientRect();
+              return {
+                stepsTop: steps.top,
+                name: ef.querySelector(".ef-name").textContent,
+                // On its own line under the label it starts where the label starts; beside the
+                // label it ends where the head ends (round 86.1, and the app's narrow case).
+                aligned: name.top >= label.bottom - 1 ? Math.abs(name.left - head.left) <= 1 : Math.abs(name.right - head.right) <= 1,
+                at: [...ef.querySelectorAll(".ef-step")].map((s) => {
+                  const r = s.getBoundingClientRect();
+                  return { x: r.left + r.width / 2, y: steps.bottom - 2 };
+                }),
+              };
+            };
+            const base = await page.evaluate(
+              async ([s, w, m, read]) => {
+                window.RichTheme.setScale(s);
+                document.querySelector(`#md-${w} .seg-opt[data-v="${m}"]`).click();
+                document.getElementById("ef-" + w).scrollIntoView({ block: "center" });
+                await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+                return new Function("return (" + read + ")")()(w);
+              },
+              [scale, who, model, where.toString()]
+            );
+            const tag = `${width}px ${scale}% ${who} on ${model}`;
+            if (!base.aligned) problems.push(`${tag}: "${base.name}" is out of place in its head`);
+            for (const [i, level] of ["Low", "Medium", "High", "Extra high", "Max"].entries()) {
+              await page.mouse.move(base.at[i].x, base.at[i].y);
+              const now = await page.evaluate(([w, read]) => new Function("return (" + read + ")")()(w), [who, where.toString()]);
+              cases++;
+              if (!now.name.startsWith(level)) problems.push(`${tag}: the pointer over ${level} previewed "${now.name}"`);
+              if (Math.abs(now.stepsTop - base.stepsTop) > 0.5)
+                problems.push(`${tag}: the pointer over ${level} ("${now.name}") moved the steps ${(now.stepsTop - base.stepsTop).toFixed(1)}px from under it ("${base.name}")`);
+              if (!now.aligned) problems.push(`${tag}: "${now.name}" is out of place in its head`);
+            }
+          }
+        }
+      }
+      await page.mouse.move(2, 2);
+      assertEqual(page.__errors, [], "no page errors");
+      await page.close();
+    }
+    assertEqual(problems, [], "the steps stay where they are under the pointer");
+    return `${cases} hovers: ${widths.length} widths x 7 Text sizes x 2 rows x 2 models x 5 levels`;
   });
 
   await browser.close();

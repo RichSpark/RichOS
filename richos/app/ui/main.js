@@ -6042,6 +6042,13 @@ function modelValue(v, who) {
   return v === "fable" || v === "opus" ? v : MODEL_DEFAULT[who];
 }
 
+/// A level's name as the row's head shows it. ROUND 86.1: the default level is the recommended
+/// one; "recommended" alone on the row's default model, and on the other model it says whose.
+function effortName(who, model, level) {
+  const def = EFFORT_DEFAULT[who][model];
+  const defWord = model === MODEL_DEFAULT[who] ? " · recommended" : ` · recommended for ${MODEL_NAME[model]}`;
+  return EFFORT_NAME[level] + (level === def ? defWord : level === "max" ? " · not recommended" : "");
+}
 function paintEffort(who, efId, rising) {
   const ef = el(efId);
   if (!ef) return;
@@ -6062,14 +6069,22 @@ function paintEffort(who, efId, rising) {
     void modelEl.offsetWidth;
     modelEl.classList.add("is-new");
   }
-  // ROUND 86.1: the default level is the recommended one. "recommended" alone on the row's
-  // default model; on the other model it says whose it is.
-  const defWord = model === MODEL_DEFAULT[who] ? " · recommended" : ` · recommended for ${MODEL_NAME[model]}`;
   const defIdx = EFFORT_LEVELS.indexOf(def);
   const shownIdx = EFFORT_LEVELS.indexOf(shown);
   ef.dataset.def = String(defIdx);
   ef.dataset.shown = shownIdx > defIdx ? (shown === "max" ? "max" : "above") : shown === def ? "rec" : "below";
-  ef.querySelector(".ef-name").textContent = EFFORT_NAME[shown] + (shown === def ? defWord : shown === "max" ? " · not recommended" : "");
+  ef.querySelector(".ef-name").textContent = effortName(who, model, shown);
+  // NO JITTER (CEO 2026-11-26, his recording: "a weird jittering issue when moving the mouse above
+  // "Recommended""). The name sits in a box as wide as the widest name this row can show on this
+  // model (each level's name, held unseen in `.ef-size`, style.css), so the pointer's preview never
+  // moves the name to or from a line of its own under "Effort on Opus". It used to: in his window
+  // "Low · recommended for Opus" had its own line, the pointer just under the steps previewed a
+  // level with a short name that fits beside the label, the head lost that line, the steps jumped
+  // up out from under the pointer, the preview ended, the line came back, and so on.
+  ef.querySelectorAll(".ef-size").forEach((size, i) => {
+    const text = effortName(who, model, EFFORT_LEVELS[i]);
+    if (size.textContent !== text) size.textContent = text;
+  });
   const say = ef.querySelector(".ef-say");
   say.textContent = "";
   if (shownIdx > defIdx) {
@@ -6287,6 +6302,23 @@ function warnMax(who) {
   for (const ef of document.querySelectorAll("#md .ef")) {
     const who = ef.dataset.who;
     const steps = ef.querySelector(".ef-steps");
+    // The unseen names that size the name's box (paintEffort fills them), and which side of its
+    // box the name sits on: beside the label it ends where the head ends, as round 86.1 drew it;
+    // on its own line under the label (a narrow column or a large Text size) it starts where the
+    // label starts. Read again whenever the head changes size, which is every time the box moves
+    // onto or off a line of its own; the side changes no size, so one read settles it.
+    const box = ef.querySelector(".ef-name-box");
+    for (let i = 0; i < EFFORT_LEVELS.length; i++) {
+      const size = document.createElement("span");
+      size.className = "ef-size";
+      box.appendChild(size);
+    }
+    const head = ef.querySelector(".ef-head");
+    const label = ef.querySelector(".ef-label");
+    new ResizeObserver(() => {
+      if (!head.getClientRects().length) return;
+      ef.classList.toggle("is-stacked", box.getBoundingClientRect().top >= label.getBoundingClientRect().bottom - 1);
+    }).observe(head);
     EFFORT_LEVELS.forEach((level, i) => {
       const b = document.createElement("button");
       b.type = "button";
