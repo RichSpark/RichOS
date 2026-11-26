@@ -137,6 +137,14 @@ function run() {
   }
   var last = pts[pts.length - 1];
   mouse(UP, last[0], last[1]);
+  // P.thenKey: a key pressed P.thenAfter seconds after the button comes up, from this same guest
+  // process, so it lands inside a short window a key sent by a separate command cannot hit (the
+  // 0.5 s between a click and the rename it arms).
+  if (P.thenKey !== null && P.thenKey !== undefined) {
+    delay(P.thenAfter);
+    [true, false].forEach(function (down) { $.CGEventPost(0, $.CGEventCreateKeyboardEvent($(), P.thenKey, down)); });
+  }
   delay(0.3);
-  return out({ dragged: true, button: P.right ? "right" : "left", points: pts, moves: sent, pid: pid });
+  return out({ dragged: true, button: P.right ? "right" : "left", points: pts, moves: sent, pid: pid,
+               thenKey: P.thenKey === undefined ? null : P.thenKey });
 }
