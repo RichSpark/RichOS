@@ -170,6 +170,144 @@ pub fn accept(
     Ok(())
 }
 
+/// **Which conversations the user has asked something in since the app opened**, read from the
+/// conversation ledger: a `PromptReceived` row written at or after `since_ms` whose source is
+/// his own words (`text` or `jam`), by whichever road they came (the composer, the phone,
+/// voice). An agent's message, a re-prime and Rich speaking unprompted are not his asking.
+///
+/// The first look reads the ledger once; every later one reads only what was appended since, so
+/// a look costs nothing while nothing was written. Once a conversation is in, it stays in.
+pub struct Asked {
+    ledger: PathBuf,
+    since_ms: u64,
+    read: std::sync::Mutex<(u64, std::collections::HashSet<String>)>,
+    /// How long each connection's journal was when the app opened ([`Self::written_before`]).
+    journals: std::sync::Mutex<Option<std::collections::HashMap<PathBuf, u64>>>,
+}
+
+impl Asked {
+    /// `since_ms` is when the app opened.
+    pub fn since(ledger: PathBuf, since_ms: u64) -> Self {
+        Self { ledger, since_ms, read: std::sync::Mutex::new((0, Default::default())), journals: Default::default() }
+    }
+
+    /// **Was this report already in its journal when the app opened?** The journals carry no
+    /// clock, so their lengths are read once, at the watcher's first offer after launch (its
+    /// first scan), and a report that ends within that length was written before. A journal
+    /// that did not exist then, and the old Markdown channels' spool, hold nothing from before.
+    fn written_before(&self, coordination: &Path, event: &Value) -> bool {
+        let mut journals = self.journals.lock().unwrap();
+        let lengths = journals.get_or_insert_with(|| {
+            let mut lengths = std::collections::HashMap::new();
+            let mut folders = vec![coordination.join("connections")];
+            // connections/<company>/<conversation>/<connection>/to-rich.jsonl
+            for _ in 0..3 {
+                folders = folders.iter().filter_map(|folder| std::fs::read_dir(folder).ok())
+                    .flat_map(|entries| entries.flatten().map(|entry| entry.path())).collect();
+            }
+            for folder in folders {
+                let journal = folder.join(JOURNAL);
+                if let (Ok(length), Ok(journal)) = (std::fs::metadata(&journal).map(|file| file.len()), journal.canonicalize()) {
+                    lengths.insert(journal, length);
+                }
+            }
+            lengths
+        });
+        if event["record"]["kind"].as_str().is_some_and(|kind| kind.starts_with("legacy_")) {
+            return false;
+        }
+        let Some(journal) = event["locator"].as_str().and_then(|locator| Path::new(locator).join(JOURNAL).canonicalize().ok())
+        else { return false };
+        match (lengths.get(&journal), event["through"].as_u64()) {
+            (Some(length), Some(through)) => through <= *length,
+            _ => false,
+        }
+    }
+
+    /// An unreadable ledger answers no: the report waits and stays in its journal.
+    pub fn in_thread(&self, thread: &str) -> bool {
+        use std::io::{BufRead, Seek, SeekFrom};
+        let mut read = self.read.lock().unwrap();
+        if read.1.contains(thread) {
+            return true;
+        }
+        let Ok(mut file) = std::fs::File::open(&self.ledger) else { return false };
+        let length = file.metadata().map(|file| file.len()).unwrap_or(0);
+        // A ledger shorter than what was read was rewritten: read it again from its start.
+        if length < read.0 {
+            read.0 = 0;
+        }
+        if length == read.0 || file.seek(SeekFrom::Start(read.0)).is_err() {
+            return false;
+        }
+        let mut reader = std::io::BufReader::new(file);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            // A concurrent append may not have completed its last record yet.
+            match reader.read_line(&mut line) {
+                Ok(count) if count > 0 && line.ends_with('\n') => read.0 += count as u64,
+                _ => break,
+            }
+            if !line.contains("PromptReceived") {
+                continue;
+            }
+            let Ok(row) = serde_json::from_str::<Value>(&line) else { continue };
+            if row["event"] == "PromptReceived"
+                && matches!(row["source"].as_str(), Some("text" | "jam"))
+                && row["at"].as_u64().is_some_and(|at| at >= self.since_ms)
+            {
+                if let Some(asked) = row["thread_id"].as_str() {
+                    read.1.insert(asked.to_string());
+                }
+            }
+        }
+        read.1.contains(thread)
+    }
+}
+
+/// The file in a connection's folder Codex and the review watcher write to Rich's team in.
+const JOURNAL: &str = "to-rich.jsonl";
+
+/// What the watcher's log says once for a report that waits ([`accept_when_asked`]).
+pub const WAITS_FOR_THE_USER: &str =
+    "written before RichOS opened, for a conversation with no open job in which nothing was asked since; the report stays in its journal";
+
+/// Does this conversation have a job that has not ended? A record that cannot be read is not
+/// counted: a report that waits can still be given later, a model turn cannot be taken back.
+fn has_open_job(state: &Path, binding: &crate::entity::ThreadBinding) -> bool {
+    crate::assignment::scan_all(state, binding.entity_id().as_str(), binding.thread_id())
+        .is_ok_and(|scan| scan.rows.iter().any(|job| job.reported_state().is_some_and(|state| state.is_open())))
+}
+
+/// **[`accept`], unless the report is from before the app opened and nobody is waiting for it**
+/// (CEO 2026-11-26: "Everything was either stopped, finished, ended or paused in the RichOS
+/// app. [...] there should have been absolutely zero usage after me just opening the app.").
+///
+/// Every accepted report is a turn of Stu's, on his whole session, and usually one of Rich's
+/// after it. On 2026-11-26 the app opened after two days closed, with no job open, and the
+/// watcher handed Stu six Codex and review reports written meanwhile: 23 requests and 5.19
+/// million tokens on Fable before the user had typed a word. So a report that was already in
+/// its journal when the app opened, for a conversation with no open job, in which the user has
+/// asked nothing since, is refused here and stays in that journal, where it already waited
+/// while the app was closed. The watcher offers it again at every scan, and the first offer
+/// after the user's next message in that conversation accepts it, in order.
+///
+/// Nothing else changes: a report written while the app is open reaches Stu by itself, and so
+/// does one from before for a conversation whose job has not ended.
+pub fn accept_when_asked(
+    state: &Path,
+    binding: &crate::entity::ThreadBinding,
+    event: &Value,
+    coordination: &Path,
+    asked: &Asked,
+) -> Result<(), String> {
+    if asked.written_before(coordination, event) && !asked.in_thread(binding.thread_id()) && !has_open_job(state, binding) {
+        return Err(WAITS_FOR_THE_USER.into());
+    }
+    accept(state, binding, event, coordination)
+}
+
 // Test-only process-death probes at the real persistence calls. Nothing is
 // compiled into the delivered app, and only the explicitly launched child has
 // the stage variable. No timer simulates a durability boundary.
@@ -379,6 +517,143 @@ mod tests {
             .unwrap_err()
             .contains("conflict"));
         assert_eq!(f.rows().len(), 1);
+    }
+
+    /// The app as it opened: the ledger already holds the chat, the connection's journal
+    /// already holds the fixture's report (it ends at byte 100), and nothing since.
+    fn opened(f: &Fixture) -> Asked {
+        std::fs::write(Path::new(f.event["locator"].as_str().unwrap()).join(JOURNAL), [b'\n'; 100]).unwrap();
+        // The ledger's clock is in milliseconds: what was written before is strictly earlier.
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        Asked::since(f.root.join("ledger.jsonl"), crate::util::now_millis())
+    }
+
+    fn prompt(f: &Fixture, text: &str, source: crate::ledger::Source) {
+        let mut ledger = crate::ledger::Ledger::open(f.root.join("ledger.jsonl")).unwrap();
+        ledger.record_prompt_received(&f.binding, text, source).unwrap();
+    }
+
+    /// **Opening the app spends nothing** (CEO 2026-11-26): a Codex report for a conversation
+    /// with no open job, in which he has asked nothing since the app opened, is not handed to
+    /// Stu. It stays in its journal, unaccepted, and is taken at the first offer after his next
+    /// message there. What he typed before the app opened, and an agent's message, open nothing.
+    #[test]
+    fn a_codex_report_nobody_waits_for_stays_in_its_journal_until_the_user_asks_in_that_chat() {
+        let f = Fixture::new();
+        prompt(&f, "Yesterday's request", crate::ledger::Source::Text);
+        let asked = opened(&f);
+        for _ in 0..2 {
+            assert_eq!(
+                accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap_err(),
+                WAITS_FOR_THE_USER
+            );
+        }
+        prompt(&f, "{\"from\":\"stu\",\"text\":\"a report\"}", crate::ledger::Source::Agent);
+        assert_eq!(
+            accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap_err(),
+            WAITS_FOR_THE_USER,
+            "an agent's message is not the user asking"
+        );
+        assert!(!session_tools::inbox(&f.scope(), "stu").unwrap().exists(), "a held report reached Stu's inbox");
+        assert!(!f.state.join("codex-watch/accepted").exists(), "a held report was marked accepted");
+
+        prompt(&f, "What did Codex say?", crate::ledger::Source::Text);
+        accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap();
+        assert_eq!(f.rows().len(), 1, "the report was not handed over after he asked");
+        assert!(f.state.join("codex-watch/accepted/pair.json").exists());
+    }
+
+    /// He asked in one chat: another chat's reports still wait.
+    #[test]
+    fn asking_in_one_chat_releases_no_other_chats_reports() {
+        let f = Fixture::new();
+        let asked = opened(&f);
+        let mut ledger = crate::ledger::Ledger::open(f.root.join("ledger.jsonl")).unwrap();
+        let other = ledger.create_thread("Another chat", &crate::EntityId::parse("company-a").unwrap()).unwrap();
+        let other = ledger.thread_binding(&other).unwrap();
+        ledger.record_prompt_received(&other, "Hello", crate::ledger::Source::Jam).unwrap();
+        drop(ledger);
+        assert!(asked.in_thread(other.thread_id()), "his spoken words were not read as asking");
+        assert_eq!(
+            accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap_err(),
+            WAITS_FOR_THE_USER
+        );
+    }
+
+    /// Codex's entries still reach Stu by themselves while the app is open: a report written
+    /// after it opened is handed over at once, with no job open and no message from him. So is
+    /// one on a connection made after it opened.
+    #[test]
+    fn a_report_written_while_the_app_is_open_reaches_stu_by_itself() {
+        let f = Fixture::new();
+        let asked = opened(&f);
+        assert_eq!(
+            accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap_err(),
+            WAITS_FOR_THE_USER
+        );
+        let mut later = f.event.clone();
+        later["record"]["message_id"] = json!("message-2");
+        later["through"] = json!(200);
+        accept_when_asked(&f.state, &f.binding, &later, &f.coord, &asked).unwrap();
+        assert_eq!(f.rows().len(), 1, "a report written after the app opened was held");
+
+        let new = f.coord.join("connections/company-a").join(f.binding.thread_id()).join("new");
+        std::fs::create_dir_all(&new).unwrap();
+        std::fs::write(new.join(JOURNAL), [b'\n'; 100]).unwrap();
+        let mut fresh = f.event.clone();
+        fresh["locator"] = json!(new);
+        fresh["connection"]["connection_id"] = json!("new");
+        fresh["record"]["message_id"] = json!("message-3");
+        accept_when_asked(&f.state, &f.binding, &fresh, &f.coord, &asked).unwrap();
+        assert_eq!(f.rows().len(), 2, "a report on a connection made after the app opened was held");
+    }
+
+    /// A job of his that has not ended is waiting for its reports: one from before the app
+    /// opened arrives at once, as before, with no message from him.
+    #[test]
+    fn a_chat_with_an_open_job_gets_its_codex_reports_at_once() {
+        let f = Fixture::new();
+        let asked = opened(&f);
+        let scope = f.scope();
+        crate::assignment::register(&f.state, &crate::assignment::Registration {
+            entity_id: scope.entity_id.clone(),
+            thread_id: scope.thread_id.clone(),
+            obligation_id: "obligation-1".into(),
+            instruction_ledger_ref: format!("ledger:{}:turn-1", scope.thread_id),
+            instruction_sha256: "0".repeat(64),
+            title: "the Desktop fix".into(),
+            repositories: Vec::new(),
+            needs_screen: false,
+        })
+        .unwrap();
+        accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap();
+        assert_eq!(f.rows().len(), 1);
+    }
+
+    /// The same report, the job ended: it waits.
+    #[test]
+    fn a_chat_whose_job_has_ended_waits_like_one_that_never_had_a_job() {
+        let f = Fixture::new();
+        let asked = opened(&f);
+        let scope = f.scope();
+        let job = crate::assignment::register(&f.state, &crate::assignment::Registration {
+            entity_id: scope.entity_id.clone(),
+            thread_id: scope.thread_id.clone(),
+            obligation_id: "obligation-1".into(),
+            instruction_ledger_ref: format!("ledger:{}:turn-1", scope.thread_id),
+            instruction_sha256: "0".repeat(64),
+            title: "the Desktop fix".into(),
+            repositories: Vec::new(),
+            needs_screen: false,
+        })
+        .unwrap();
+        crate::assignment::advance(&f.state, &scope.entity_id, &scope.thread_id, &job.id,
+            crate::assignment::AssignmentState::Settled, "done").unwrap();
+        assert_eq!(
+            accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap_err(),
+            WAITS_FOR_THE_USER
+        );
+        assert!(!session_tools::inbox(&scope, "stu").unwrap().exists());
     }
 
     #[test]
