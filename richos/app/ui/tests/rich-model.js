@@ -770,6 +770,68 @@ async function main() {
     return `${cases} hovers: ${widths.length} widths x 7 Text sizes x 2 rows x 2 models x 5 levels`;
   });
 
+  // ---- 10. what Settings shows is held by the app, so a window closed with it open saves it ---
+  await run.check("10. each press hands the app what Settings now shows, to save if the window closes or the app quits with Settings open; nothing is saved or applied by the press", async () => {
+    const page = await openApp(browser);
+    await openPrefs(page);
+    await rowsShow(page, { rich: "fable", stu: "fable" });
+    await page.click('#md-rich .seg-opt[data-v="opus"]');
+    await rowsShow(page, { rich: "opus", stu: "fable" });
+    await page.click('#md-stu .seg-opt[data-v="opus"]');
+    await rowsShow(page, { rich: "opus", stu: "opus" });
+    const held = (await calls(page, "hold_lease_models")).map((c) => c.args);
+    assertEqual(held, [
+      { rich: "opus", stu: "fable", effort: RECOMMENDED, chosen: ["rich_model"] },
+      { rich: "opus", stu: "opus", effort: RECOMMENDED, chosen: ["rich_model", "stu_model"] },
+    ], "what the app holds after each press");
+    assertEqual(await calls(page, "set_lease_models"), [], "a press saved or applied the choice");
+    assertEqual(await stored(page), { rich: "fable", stu: "fable" }, "the store changed while Settings was open");
+    assertEqual(await toastText(page), null, "a toast fired before Settings closed");
+    // A level pressed is held too, with the models as they are shown.
+    await page.click('#ef-stu .ef-step[data-l="medium"]');
+    await levelIs(page, "stu", "medium");
+    const last = (await calls(page, "hold_lease_models")).map((c) => c.args).pop();
+    assertEqual(last, { rich: "opus", stu: "opus", effort: withEffort({ stu: { opus: "medium" } }), chosen: ["rich_model", "stu_effort_opus", "stu_model"] }, "a pressed level is held");
+    // Max behind its warning is not held: a window closed now saves the level that was saved.
+    await page.click('#ef-rich .ef-step[data-l="max"]');
+    await page.waitForFunction(() => { const w = document.querySelector(".efw"); return !!w && !w.hidden; });
+    const warned = (await calls(page, "hold_lease_models")).map((c) => c.args).pop();
+    assertEqual(warned.effort, withEffort({ stu: { opus: "medium" } }), "Max was held before Use Max anyway was pressed");
+    await page.click(".efw-anyway");
+    await page.waitForFunction(() => window.__calls.filter((x) => x.cmd === "hold_lease_models").pop().args.effort.rich.opus === "max");
+    const kept = (await calls(page, "hold_lease_models")).map((c) => c.args).pop();
+    assertEqual(kept.effort, withEffort({ rich: { opus: "max" }, stu: { opus: "medium" } }), "a confirmed Max is held");
+    // Lowered and chosen again, Max waits for its new warning: the earlier "Use Max anyway"
+    // confirmed that Max, not this one (review rv-20261126T112554Z-6b571438-ca3d, finding 3).
+    await page.click('#ef-rich .ef-step[data-l="high"]');
+    await levelIs(page, "rich", "high");
+    await page.click('#ef-rich .ef-step[data-l="max"]');
+    await page.waitForFunction(() => { const w = document.querySelector(".efw"); return !!w && !w.hidden; });
+    const again = (await calls(page, "hold_lease_models")).map((c) => c.args).pop();
+    assertEqual(again.effort, withEffort({ rich: { opus: "high" }, stu: { opus: "medium" } }), "a Max chosen again was held before its new warning was answered");
+    await page.click(".efw-anyway");
+    await page.waitForFunction(() => window.__calls.filter((x) => x.cmd === "hold_lease_models").pop().args.effort.rich.opus === "max");
+    assertEqual(await calls(page, "set_lease_models"), [], "a press saved or applied the choice");
+    // A SAVED Max, lowered and chosen again, waits for its new warning too: what is held is the
+    // level it was chosen from, never the saved Max (review rv-20261126T112554Z-6b571438-ca3d,
+    // finding 3, still open at b201d2803).
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => window.__calls.some((x) => x.cmd === "set_lease_models"));
+    await openPrefs(page);
+    await levelIs(page, "rich", "max");
+    await page.click('#ef-rich .ef-step[data-l="high"]');
+    await levelIs(page, "rich", "high");
+    await page.click('#ef-rich .ef-step[data-l="max"]');
+    await page.waitForFunction(() => { const w = document.querySelector(".efw"); return !!w && !w.hidden; });
+    const fromSaved = (await calls(page, "hold_lease_models")).map((c) => c.args).pop();
+    assertEqual(fromSaved.effort.rich.opus, "high", "a saved Max chosen again was held before its new warning was answered");
+    await page.click(".efw-anyway");
+    await page.waitForFunction(() => window.__calls.filter((x) => x.cmd === "hold_lease_models").pop().args.effort.rich.opus === "max");
+    assertEqual(page.__errors, [], "no page errors");
+    await page.close();
+    return "held after each press, saved by none; Max held only once confirmed, a saved Max too";
+  });
+
   await browser.close();
   const failed = run.report();
   process.exitCode = failed ? 1 : 0;

@@ -407,6 +407,11 @@ def configured_repos(config):
 # what could be reviewed
 # ---------------------------------------------------------------------------
 
+def chat_partition(entity_id, thread_id):
+    """The app's name for one chat's folders (mega-lander app.py folder)."""
+    return hashlib.sha256(json.dumps([entity_id, thread_id], separators=(",", ":")).encode()).hexdigest()
+
+
 class Item(object):
     """One piece of work at one tip."""
 
@@ -775,6 +780,14 @@ class World(object):
         return {"work": work, "repo": repo, "branch": branch, "tip": tip,
                 "words": [wpath], "claims": [cpath], "at": now, "title": header[3:].strip()[:120]}
 
+    def chat_open(self, endpoint):
+        """May this chat's handovers be read now? The terminal's watcher: always."""
+        return True
+
+    def may_start(self, item):
+        """May a review of `item` start now? The terminal's watcher: always."""
+        return True
+
     def channel_items(self, now, codex_state, connections):
         """The shared READY handler, with its own advisory reading position.
 
@@ -804,6 +817,10 @@ class World(object):
                 offset = channels.position(source, saved)
                 if offset == source.stat().st_size:
                     continue
+                # A chat the app's one rule has not let a turn through in is not read yet: no
+                # review and no notice about one from before (AppWorld.chat_open).
+                if not self.chat_open(endpoint):
+                    continue
                 repos = self.channel_repositories(endpoint)
                 # Source evidence is always recoverable from the journals. No
                 # timestamp association and no assumption that replies are tasks.
@@ -825,6 +842,7 @@ class World(object):
                                 channel_reply(path, row["message_id"], "review-held", got)
                             elif got:
                                 got["channel"] = {"locator": locator, "message_id": row["message_id"]}
+                                got["chat"] = chat_partition(endpoint["entity_id"], endpoint["thread_id"])
                                 if not any(p["channel"] == got["channel"] and p["repo"] == got["repo"] and p["tip"] == got["tip"] for p in pending):
                                     pending.append(got)
                     positions[locator] = dict(source_identity=identity, through=end)
@@ -843,6 +861,7 @@ class World(object):
             item = Item(p["work"], "codex", p["repo"], p["tip"], base, "ended", branch=p["branch"], source="codex",
                         words=p["words"], claims=p["claims"], title=p["title"])
             item.channel = p["channel"]
+            item.chat = p.get("chat", "")
             item.claude, item.accounts = getattr(self, "claude", ""), getattr(self, "accounts", "")
             items.append(item)
         return items, []
@@ -959,6 +978,45 @@ class AppWorld(World):
             (path, endpoint) for path, endpoint in channels.registered()
             if endpoint["entity_id"] != channels.TERMINAL
         ))
+
+    def open_chats(self):
+        """THE APP'S ONE RULE FOR A MODEL RUN IT STARTS BY ITSELF (the CEO, 2026-11-26: "there
+        should have been absolutely zero usage after me just opening the app").
+
+        The chats the app has let a turn through in during this run, as richos-core turn_gate.rs
+        writes them to <app state>/turn-gate.json (empty when the app opens): the user acted in
+        the chat, input arrived there while the app is open, or a turn running when the app
+        ended carried on. Named by their registry partition (app.py folder). An unreadable
+        record is no chat: a review that waits can still start later, a model run cannot be
+        taken back."""
+        try:
+            with open(os.path.join(self.app_state, "turn-gate.json"), encoding="utf-8") as f:
+                record = json.load(f)
+            return {chat_partition(c["entity_id"], c["thread_id"]) for c in record["open"]}
+        except (OSError, ValueError, KeyError, TypeError):
+            return set()
+
+    def chat_open(self, endpoint):
+        """A dedicated Codex journal is read only once its chat is open: a READY written while the
+        app was closed gets no review and no notice at launch."""
+        return chat_partition(endpoint["entity_id"], endpoint["thread_id"]) in self.open_chats()
+
+    def may_start(self, item):
+        """Every review the app's watcher starts, whatever found it (a worker workspace that ended
+        or ran long, a lost, held or stopped review from before, a Codex READY): only in an open
+        chat. Watcher.start asks this before anything else."""
+        chat = os.path.basename((item.env or {}).get("RICHOS_WORKSPACES_DIR", "")) or getattr(item, "chat", "")
+        channel = getattr(item, "channel", None)
+        if not chat and channel:
+            # A handover an earlier version queued names no chat; its connection does, read the
+            # way every reader resolves one: an automatic connection's place is
+            # _automatic/codex, and the chat is the one it was bound to (codex_channels.connection).
+            try:
+                endpoint = channels.connection(channel["locator"])[1]
+                chat = chat_partition(endpoint["entity_id"], endpoint["thread_id"])
+            except (OSError, ValueError, KeyError, TypeError):
+                chat = ""
+        return bool(chat) and chat in self.open_chats()
 
     def channel_repositories(self, endpoint):
         app = stall_watch._load("review_watch_app", os.path.join(self.engine_root, "mega-lander", "app.py"))
@@ -1489,6 +1547,12 @@ class Watcher(object):
         return running
 
     def start(self, item, trigger, now, attempt, supersede=None, rows=()):
+        # THE ONE PLACE A REVIEW PROCESS IS STARTED (spawn has no other caller): the app's one
+        # rule first, before a lock or a record is written (AppWorld.may_start). A world with no
+        # such rule (the terminal's, a test's stand-in) starts as before.
+        may_start = getattr(self.world, "may_start", None)
+        if may_start is not None and not may_start(item):
+            return None
         if supersede:
             if self.stop(supersede):
                 return None                         # still running: the next look tries again

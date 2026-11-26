@@ -3852,6 +3852,15 @@
           return null;
         }
 
+        // What Settings shows after a press, held and not saved (main.rs's hold_lease_models).
+        case "hold_lease_models": {
+          const known = (m) => m === "opus" || m === "fable";
+          if (!known(args.rich) || !known(args.stu)) {
+            return Promise.reject(`unknown model: ${known(args.rich) ? args.stu : args.rich}`);
+          }
+          return null;
+        }
+
         // ---- §7.2: the raw-retention window ----------------------------------------
         case "raw_retention":
           return retentionView(0);

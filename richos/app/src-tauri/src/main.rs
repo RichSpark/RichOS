@@ -504,7 +504,13 @@ fn start_app_review_watch(
 static CODEX_SINK: std::sync::OnceLock<richos_core::codex_watch::Sink> = std::sync::OnceLock::new();
 
 /// Dedicated input is resolved against its permanent ledger owner.
-fn codex_sink(app: AppHandle) -> richos_core::codex_watch::Sink {
+///
+/// **Opening the app spends nothing** (CEO 2026-11-26): a report that was written before this
+/// run of the app began, for a conversation with no open job in which the user has asked
+/// nothing since, is not handed to Stu. It waits in its journal
+/// (`codex_bridge::accept_when_asked`).
+fn codex_sink(app: AppHandle, state_root: &Path, gate: Arc<richos_core::turn_gate::TurnGate>) -> richos_core::codex_watch::Sink {
+    let asked = richos_core::codex_bridge::Asked::at_launch(&richos_core::codex_bridge::root(), state_root, gate);
     Arc::new(move |line:&str| {
         let state=app.try_state::<AppState>().ok_or("the app is still starting")?;
         let event:serde_json::Value=serde_json::from_str(line).map_err(|e|e.to_string())?;
@@ -552,7 +558,7 @@ fn codex_sink(app: AppHandle) -> richos_core::codex_watch::Sink {
         }
         let binding=view.ledger().thread_binding(thread).map_err(|e|e.to_string())?;
         if !view.entity_registry().contains(binding.entity_id()) {return Err("channel company is no longer registered".into())}
-        richos_core::codex_bridge::accept(&state_root,&binding,&event,&coordination)
+        richos_core::codex_bridge::accept_when_asked(&state_root,&binding,&event,&coordination,&asked)
     })
 }
 
@@ -1212,6 +1218,13 @@ struct AppState {
     /// thread id rather than a bool because he has more than one conversation and each has its
     /// own desk (`spine.rs`'s residency).
     front_desk_primed_for: Mutex<std::collections::HashSet<String>>,
+    /// What Settings shows for Rich's model and effort while it is open and differs from what
+    /// is saved (`hold_lease_models`): saved when the window closes or the app quits with
+    /// Settings still open, and gone once Settings closes and saves it itself.
+    held_lease_choice: Mutex<Option<HeldLeaseChoice>>,
+    /// The one rule for a model turn the app starts by itself (richos-core `turn_gate`), made
+    /// as the app opens, before anything can start one.
+    turn_gate: Arc<richos_core::turn_gate::TurnGate>,
     spine: Mutex<Spine>,
     reader: SpineReader,
     /// Durable CEO-facing preferences (company name, the assertiveness dial) — stored
@@ -2893,6 +2906,7 @@ fn main() {
             #[cfg(target_os = "macos")]
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.app_handle().config().app.windows.first().is_some_and(|main| main.label == window.label()) {
+                    save_held_lease_choice(window.app_handle(), true);
                     lifecycle::hide_main_window(window, api);
                 }
             }
@@ -3941,6 +3955,12 @@ fn main() {
                     Arc::new(WorkNotice { app: app.clone() }),
                 );
                 work.set_quota(quota.clone());
+                // THE ONE RULE FOR A TURN THE APP STARTS BY ITSELF (CEO 2026-11-26: "there should
+                // have been absolutely zero usage after me just opening the app"): made now, before
+                // the work host runs, the conversation recovers or the watchers start, and given
+                // to every place that sends a model turn (richos-core `turn_gate`).
+                let turn_gate = Arc::new(richos_core::turn_gate::TurnGate::at_launch(&data_dir.join("engine-state")));
+                work.set_turn_gate(Arc::clone(&turn_gate));
                 // "Keep chat alive" reaches Stu's sessions through the same readings, for the chats
                 // whose box is checked (`chat_cache_host.rs`).
                 work.set_keep_alive(Arc::clone(&chat_readings), chat_cache_host::kept(app.clone()));
@@ -3950,7 +3970,7 @@ fn main() {
                 work.start();
                 eprintln!("[richos] compute connection: starts with the first cancellable request over {}", claude_bin.display());
                 // Codex's entries, for Stu, the app's own child from launch to quit (gap X).
-                if CODEX_SINK.set(codex_sink(app.clone())).is_err() {
+                if CODEX_SINK.set(codex_sink(app.clone(), &data_dir.join("engine-state"), Arc::clone(&turn_gate))).is_err() {
                     eprintln!("[richos] Codex watch: its sink was already set");
                 }
                 // **THE APP CLEANS UP ITS OWN GARBAGE, NO MATTER WHAT** (CEO §54 addendum 2): what an
@@ -4094,6 +4114,7 @@ fn main() {
                 // Restore durable Stops before any recovered message is submitted. Reconciliation
                 // queues accepted inputs locally. A provider reply must never hold the window's thread.
                 spine.detach_conversation_io();
+                spine.set_turn_gate(Arc::clone(&turn_gate));
                 if let Err(e) = spine.recover_after_restart_except(pending_codex_thread.as_deref()) {
                     eprintln!("[richos] intake reconciliation at boot: {e}");
                 }
@@ -4264,6 +4285,8 @@ fn main() {
                     provider_auth: Mutex::new(Default::default()),
                     account_auth: Mutex::new(None),
                     front_desk_primed_for: Mutex::new(Default::default()),
+                    held_lease_choice: Mutex::new(None),
+                    turn_gate: Arc::clone(&turn_gate),
                     reader: spine.reader(),
                     spine: Mutex::new(spine),
                     config: Mutex::new(config),
@@ -4573,6 +4596,7 @@ fn main() {
             set_assertiveness,
             get_lease_models,
             set_lease_models,
+            hold_lease_models,
             get_worker_status,
             get_work_status,
             get_assignments,
@@ -4914,7 +4938,7 @@ fn main() {
         // launch is read as a crash-restart — an undercount by one, no splash once — which
         // is not worth refusing to close the app over.
         .run(|handle, event| {
-            if matches!(&event, tauri::RunEvent::Exit) {richpass_host::shutdown(handle);}
+            if matches!(&event, tauri::RunEvent::Exit) {save_held_lease_choice(handle, false);richpass_host::shutdown(handle);}
             // =========================================================================
             // ROW 5 — "You close the window. The work keeps going. Quit ends it."
             // =========================================================================
@@ -5228,26 +5252,65 @@ fn get_lease_models(state: State<AppState>) -> serde_json::Value {
 /// An unknown name refuses every choice before any is written.
 #[richos_command::command]
 fn set_lease_models(state: State<AppState>, rich: String, stu: String, effort: Option<serde_json::Value>, chosen: Option<Vec<String>>) -> Result<(), String> {
+    // Settings closed and is saving what it shows: nothing is held any longer.
+    *state.held_lease_choice.lock().unwrap() = None;
+    let choice = HeldLeaseChoice { rich, stu, effort, chosen: chosen.unwrap_or_default() };
+    let (models, efforts) = write_lease_choice(&state, &choice)?;
+    apply_lease_choice(&state, models, efforts)
+}
+
+/// Rich's model and effort as Settings shows them while it is open.
+#[derive(Clone)]
+struct HeldLeaseChoice {
+    rich: String,
+    stu: String,
+    effort: Option<serde_json::Value>,
+    chosen: Vec<String>,
+}
+
+/// **What Settings shows after a press, held here and neither saved nor applied** (the CEO's
+/// addendum to §119 stands: *"The switch simply shouldn't happen while the user is still on
+/// that preferences screen. Closing the preferences panel IS the confirmation"*).
+///
+/// It is held so that closing the WINDOW, or quitting, with Settings still open is that
+/// confirmation too ([`save_held_lease_choice`]). On 2026-11-26 the CEO switched both rows from
+/// Fable to Opus and closed the window with the red button: Settings never closed, nothing was
+/// saved, and the next launch would have started both sessions on Fable again.
+#[richos_command::command]
+fn hold_lease_models(state: State<AppState>, rich: String, stu: String, effort: Option<serde_json::Value>, chosen: Option<Vec<String>>) -> Result<(), String> {
+    use richos_core::config::ModelChoice;
+    ModelChoice::parse(&rich).ok_or_else(|| format!("unknown model: {rich}"))?;
+    ModelChoice::parse(&stu).ok_or_else(|| format!("unknown model: {stu}"))?;
+    *state.held_lease_choice.lock().unwrap() = Some(HeldLeaseChoice { rich, stu, effort, chosen: chosen.unwrap_or_default() });
+    Ok(())
+}
+
+/// Write a choice to `config.json`. An unknown name refuses every choice before any is written.
+fn write_lease_choice(state: &AppState, choice: &HeldLeaseChoice)
+    -> Result<(richos_core::config::LeaseModels, richos_core::config::EffortChoices), String> {
     use richos_core::config::{EffortLevel, LeaseModels, ModelChoice};
-    let rich = ModelChoice::parse(&rich).ok_or_else(|| format!("unknown model: {rich}"))?;
-    let stu = ModelChoice::parse(&stu).ok_or_else(|| format!("unknown model: {stu}"))?;
+    let (rich, stu) = (&choice.rich, &choice.stu);
+    let rich = ModelChoice::parse(rich).ok_or_else(|| format!("unknown model: {rich}"))?;
+    let stu = ModelChoice::parse(stu).ok_or_else(|| format!("unknown model: {stu}"))?;
     let models = LeaseModels { rich, stu };
-    let efforts = {
-        let mut config = state.config.lock().unwrap();
-        let mut efforts = config.effort_choices();
-        if let Some(sent) = effort.as_ref() {
-            for (who, model, slot) in [
-                ("rich", "opus", &mut efforts.rich_opus), ("rich", "fable", &mut efforts.rich_fable),
-                ("stu", "opus", &mut efforts.stu_opus), ("stu", "fable", &mut efforts.stu_fable),
-            ] {
-                let Some(level) = sent[who][model].as_str() else { continue };
-                *slot = EffortLevel::parse(level).ok_or_else(|| format!("unknown effort level: {level}"))?;
-            }
+    let mut config = state.config.lock().unwrap();
+    let mut efforts = config.effort_choices();
+    if let Some(sent) = choice.effort.as_ref() {
+        for (who, model, slot) in [
+            ("rich", "opus", &mut efforts.rich_opus), ("rich", "fable", &mut efforts.rich_fable),
+            ("stu", "opus", &mut efforts.stu_opus), ("stu", "fable", &mut efforts.stu_fable),
+        ] {
+            let Some(level) = sent[who][model].as_str() else { continue };
+            *slot = EffortLevel::parse(level).ok_or_else(|| format!("unknown effort level: {level}"))?;
         }
-        let pressed: Vec<&str> = chosen.iter().flatten().map(String::as_str).collect();
-        config.set_lease_choices(models, efforts, &pressed).map_err(|e| e.to_string())?;
-        efforts
-    };
+    }
+    let pressed: Vec<&str> = choice.chosen.iter().map(String::as_str).collect();
+    config.set_lease_choices(models, efforts, &pressed).map_err(|e| e.to_string())?;
+    Ok((models, efforts))
+}
+
+/// Apply a saved choice to the existing Rich and Stu sessions.
+fn apply_lease_choice(state: &AppState, models: richos_core::config::LeaseModels, efforts: richos_core::config::EffortChoices) -> Result<(), String> {
     let account = state.quota.lease_account();
     let (effective, efforts) = richos_core::quota::fable::lease_choices(
         state.quota.using_opus_for_fable(&account.id), models, efforts,
@@ -5257,6 +5320,33 @@ fn set_lease_models(state: State<AppState>, rich: String, stu: String, effort: O
         state.work.set_model(effective.stu), state.work.set_effort(efforts.stu),
     ];
     results.into_iter().collect()
+}
+
+/// **The window is closing, or the app is quitting, with Settings still open: save what it
+/// shows.** The file is written before this returns, so the choice is on disk whatever happens
+/// to the process next. With `apply`, the sessions that live on (work keeps going behind a
+/// closed window) are given it on a thread of their own, as when Settings closes; a quit has
+/// no session left to give it to.
+fn save_held_lease_choice(app: &AppHandle, apply: bool) {
+    let Some(state) = app.try_state::<AppState>() else { return };
+    let Some(choice) = state.held_lease_choice.lock().unwrap().take() else { return };
+    match write_lease_choice(&state, &choice) {
+        Ok((models, efforts)) => {
+            eprintln!("[richos] Settings was still open: Rich's model and effort were saved as it showed them");
+            if apply {
+                let app = app.clone();
+                let spawned = std::thread::Builder::new().name("richos-held-lease-choice".into()).spawn(move || {
+                    if let Err(error) = apply_lease_choice(&app.state::<AppState>(), models, efforts) {
+                        eprintln!("[richos] the saved model and effort reach the sessions at their next start: {error}");
+                    }
+                });
+                if let Err(error) = spawned {
+                    eprintln!("[richos] the saved model and effort reach the sessions at their next start: {error}");
+                }
+            }
+        }
+        Err(error) => eprintln!("[richos] Rich's model and effort, as Settings showed them, could not be saved: {error}"),
+    }
 }
 
 /// UX §3.2 / architecture P3.2: the optional AI-worker drill-down.
@@ -5390,6 +5480,11 @@ fn dispatch_incoming_messages(app: &AppHandle, _thread_id: &str) -> Result<(), S
 #[richos_command::command]
 fn stop_assignment(state: State<AppState>, thread_id: String, assignment_id: String) -> Result<(), String> {
     let entity = assignment_scope(&state, &thread_id)?;
+    // His own press: the chat is open to the one rule from now on (richos-core `turn_gate`),
+    // so the Stop reaches Stu at once.
+    if let Ok(binding) = state.reader.snapshot().ledger().thread_binding(&thread_id) {
+        state.turn_gate.user_acted(&binding);
+    }
     let front_desk = state.control.for_thread(&thread_id).front_desk();
     state.work.stop_assignment_and_front_desk(entity.as_str(), &thread_id, &assignment_id, front_desk)
 }
@@ -11545,17 +11640,30 @@ fn questions_pending(state: &AppState) -> bool {
 
 /// What the assignment register says, using the same derivation as the update gate.
 fn registered_work(state: &AppState) -> lifecycle::Registered {
-    registered_from(&state.work, &state.control)
+    let view = state.reader.snapshot();
+    registered_from(&state.work, &state.control, &|record| match record {
+        // A Stop is his control over a turn, never work of its own: the turn it stops, if any
+        // still runs, is counted as that turn.
+        richos_core::steering::IntakeRecord::Stop { .. } | richos_core::steering::IntakeRecord::Drained { .. } => true,
+        _ => view.ledger().turn_for_intake(record.id())
+            .is_some_and(|turn| !matches!(turn.state, richos_core::ledger::TurnState::Received | richos_core::ledger::TurnState::InFlight)),
+    })
 }
 
 /// [`registered_work`] from the two handles it reads, so a test drives the quit question's
 /// own reading over a real work host (`updates.rs`, the end-to-end gate test).
-fn registered_from(work_host: &richos_core::work_host::WorkHost, control: &TurnControl) -> lifecycle::Registered {
+/// `finished`: whether an intake's turn is already filed and over. An intake stays in the log,
+/// not marked drained, while one before it is held by the one rule (`Spine::drain_intake`), and a
+/// finished one is not work that runs.
+fn registered_from(work_host: &richos_core::work_host::WorkHost, control: &TurnControl,
+    finished: &dyn Fn(&richos_core::steering::IntakeRecord) -> bool) -> lifecycle::Registered {
     let work = work_host.background_work();
     lifecycle::Registered {
         running: work.running + usize::from(control.has_active_turns())
             + usize::from(work_host.peer_work_pending())
-            + usize::from(!control.pending_intake().is_empty()),
+            // An agent's message the one rule holds until the user is active in its chat is
+            // not work that runs (`WorkHost::intake_waits`).
+            + usize::from(control.pending_intake().iter().any(|record| !work_host.intake_waits(record) && !finished(record))),
         awaiting_you: work.awaiting_you,
         readable: work.readable,
         // Commands Rich started, on every live lease (reap gap C5): a few small files, no lock.

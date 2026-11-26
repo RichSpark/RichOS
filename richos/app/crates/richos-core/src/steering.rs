@@ -1246,9 +1246,16 @@ impl TurnControl {
     }
 
     pub fn submit_agent_message(&self, thread_id: &str, entity_id: Option<EntityId>, text: &str, sender: &str, message_id: &str) -> Result<IntakeRecord, SteeringError> {
+        self.submit_agent_message_written_at(thread_id, entity_id, text, sender, message_id, now_millis())
+    }
+
+    /// [`Self::submit_agent_message`] for a message written to its inbox at `at`, not now: a
+    /// message saved before the app opened is filed as from before, so the one rule holds its
+    /// turn (`turn_gate`, `Spine::deliver`).
+    pub fn submit_agent_message_written_at(&self, thread_id: &str, entity_id: Option<EntityId>, text: &str, sender: &str, message_id: &str, at: u64) -> Result<IntakeRecord, SteeringError> {
         let mut guard = self.inner.intake.lock().unwrap();
         let log = guard.as_mut().ok_or(SteeringError::NoDurableIntake)?;
-        let rec = IntakeRecord::Channel { id: log.next_id, thread_id: thread_id.into(), entity_id, text: text.into(), at: now_millis(), channel: sender.into(), client_id: Some(message_id.into()), voice_note: false, authored_bytes: Some(0), authored_ranges: None, source: Some(crate::ledger::Source::Agent) };
+        let rec = IntakeRecord::Channel { id: log.next_id, thread_id: thread_id.into(), entity_id, text: text.into(), at, channel: sender.into(), client_id: Some(message_id.into()), voice_note: false, authored_bytes: Some(0), authored_ranges: None, source: Some(crate::ledger::Source::Agent) };
         log.write(&rec)?;
         log.next_id += 1;
         log.pending.push(rec.clone());

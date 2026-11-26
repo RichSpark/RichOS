@@ -170,6 +170,163 @@ pub fn accept(
     Ok(())
 }
 
+/// **Which Codex reports were written before the app opened.** Neither the journals nor the
+/// Markdown channels carry a clock, so how long each file was at launch is what tells a report
+/// from before from one written while the app is open. Whether one from before may start a
+/// turn is the one rule's to say ([`crate::turn_gate`]); this only knows which is which.
+pub struct Asked {
+    gate: std::sync::Arc<crate::turn_gate::TurnGate>,
+    /// How long each connection's journal was when the app opened ([`Self::nobody_wrote_since`]).
+    journals: std::collections::HashMap<PathBuf, u64>,
+    /// The same for each old Markdown channel file the watcher reads, and, once asked for, how
+    /// many lines that length holds.
+    markdown: std::collections::HashMap<PathBuf, u64>,
+    markdown_lines: std::sync::Mutex<std::collections::HashMap<PathBuf, u64>>,
+}
+
+/// Where the app's watcher keeps its place in each old Markdown channel file
+/// (`codex_watch.py` `_legacy_tick`, the app host's session directory).
+const MARKDOWN_PLACES: &str = "codex-watch/watch/app-host/live-offsets.json";
+
+impl Asked {
+    /// **The app is opening now.** Neither the journals nor the Markdown channels carry a
+    /// clock, so how long each file is at this moment is what tells a report from before from
+    /// one written while the app is open: a few dozen `stat` calls, once. `state` is the app's
+    /// engine state folder.
+    pub fn at_launch(coordination: &Path, state: &Path, gate: std::sync::Arc<crate::turn_gate::TurnGate>) -> Self {
+        let mut journals = std::collections::HashMap::new();
+        let mut folders = vec![coordination.join("connections")];
+        // connections/<company>/<conversation>/<connection>/to-rich.jsonl
+        for _ in 0..3 {
+            folders = folders.iter().filter_map(|folder| std::fs::read_dir(folder).ok())
+                .flat_map(|entries| entries.flatten().map(|entry| entry.path())).collect();
+        }
+        for folder in folders {
+            let journal = folder.join(JOURNAL);
+            if let (Ok(length), Ok(journal)) = (std::fs::metadata(&journal).map(|file| file.len()), journal.canonicalize()) {
+                journals.insert(journal, length);
+            }
+        }
+        // The files the watcher already has a place in. One it has never read starts at its
+        // end (`look_one`), so it holds nothing from before.
+        let mut markdown = std::collections::HashMap::new();
+        let places: Value = std::fs::read(state.join(MARKDOWN_PLACES)).ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or(Value::Null);
+        for file in places.as_object().into_iter().flat_map(|places| places.keys()) {
+            if let Ok(length) = std::fs::metadata(file).map(|file| file.len()) {
+                markdown.insert(PathBuf::from(file), length);
+            }
+        }
+        Self { gate, journals,
+            markdown, markdown_lines: Default::default() }
+    }
+
+    /// **Is this a report nobody has followed up since the app opened?**
+    ///
+    /// A report that ends within its journal's length at launch was written while the app was
+    /// closed. So was, in effect, a notice the app's own review watcher writes about one at
+    /// startup (`review_result`): neither starts a turn. Both wait only while Codex has written
+    /// nothing on that connection since launch: the watcher offers a connection's reports one
+    /// at a time, in order, so a report that stayed held would hold back every report Codex
+    /// writes there while the app is open. Once Codex writes one, what was held is handed over
+    /// ahead of it. A journal that did not exist at launch holds nothing from before.
+    ///
+    /// A reply on an old Markdown channel (`legacy_live`) names the lines it came from, and it
+    /// is from before when it starts within the file's length at launch. It waits only while
+    /// none of those files has grown, for the same reason: they share one spool.
+    fn nobody_wrote_since(&self, event: &Value) -> bool {
+        let kind = event["record"]["kind"].as_str();
+        match kind {
+            Some("legacy_live") => return self.markdown_reply_from_before(event["record"]["text"].as_str().unwrap_or_default()),
+            Some(kind) if kind.starts_with("legacy_") => return false,
+            _ => {}
+        }
+        let Some(journal) = event["locator"].as_str().and_then(|locator| Path::new(locator).join(JOURNAL).canonicalize().ok())
+        else { return false };
+        let (Some(length), Some(through)) = (self.journals.get(&journal), event["through"].as_u64()) else { return false };
+        (through <= *length || kind == Some("review_result")) && !codex_wrote_after(&journal, *length)
+    }
+
+    /// The watcher's block for a Markdown entry opens with where it came from:
+    /// `... (lines 12-15 of /path/to-rich.md); every new line follows:` (`codex_watch.py`
+    /// `look_one`). A block that says nothing of the kind is held: it cannot be shown to be new.
+    fn markdown_reply_from_before(&self, text: &str) -> bool {
+        let head = text.lines().next().unwrap_or_default();
+        let Some((first, file)) = head.rsplit_once("(lines ").and_then(|(_, rest)| rest.split_once(" of "))
+            .and_then(|(lines, rest)| Some((lines.split('-').next()?.parse::<u64>().ok()?, rest.rsplit_once(");")?.0)))
+        else { return true };
+        let file = PathBuf::from(file);
+        let Some(length) = self.markdown.get(&file) else { return false };
+        // Every Markdown channel shares one spool, offered one reply at a time: a reply
+        // written on ANY of them while the app is open is behind this one.
+        if self.markdown.iter().any(|(file, length)| std::fs::metadata(file).is_ok_and(|now| now.len() > *length)) {
+            return false;
+        }
+        let mut lines = self.markdown_lines.lock().unwrap();
+        let before = *lines.entry(file.clone()).or_insert_with(|| {
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            match std::fs::File::open(&file).map(|opened| opened.take(*length).read_to_end(&mut bytes)) {
+                // A last line with no newline yet is a line the file already held at launch:
+                // the watcher offers it as one (review rv-20261126T112554Z-6b571438-ca3d, #1).
+                Ok(Ok(_)) => bytes.iter().filter(|byte| **byte == b'\n').count() as u64
+                    + u64::from(bytes.last().is_some_and(|last| *last != b'\n')),
+                _ => u64::MAX,
+            }
+        });
+        first <= before
+    }
+
+}
+
+/// The file in a connection's folder Codex and the review watcher write to Rich's team in.
+const JOURNAL: &str = "to-rich.jsonl";
+
+/// Has Codex written a report in this journal past `length`? A review watcher's notice
+/// (`review_result`) is the app's own writing, not Codex's.
+fn codex_wrote_after(journal: &Path, length: u64) -> bool {
+    use std::io::{BufRead, Seek, SeekFrom};
+    let Ok(mut file) = std::fs::File::open(journal) else { return false };
+    if file.seek(SeekFrom::Start(length)).is_err() {
+        return false;
+    }
+    std::io::BufReader::new(file).lines().map_while(Result::ok).any(|line| {
+        serde_json::from_str::<Value>(&line).is_ok_and(|record| record.is_object() && record["kind"] != "review_result")
+    })
+}
+
+/// What the watcher's log says once for a report that waits ([`accept_when_asked`]).
+pub const WAITS_FOR_THE_USER: &str =
+    "written before RichOS opened, for a conversation the user has not been active in since; the report stays in its journal";
+
+/// **[`accept`], unless the report is from before the app opened and the one rule holds it**
+/// (CEO 2026-11-26: "Everything was either stopped, finished, ended or paused in the RichOS
+/// app. [...] there should have been absolutely zero usage after me just opening the app.").
+///
+/// Every accepted report is a turn of Stu's, on his whole session, and usually one of Rich's
+/// after it. On 2026-11-26 the app opened after two days closed and the watcher handed Stu six
+/// Codex and review reports written meanwhile: 23 requests and 5.19 million tokens on Fable
+/// before the user had typed a word. A report that was already in its journal when the app
+/// opened is saved input from before ([`crate::turn_gate::Origin::FromBefore`]): refused here
+/// until the user is active in that conversation, and it stays in the journal, where it
+/// already waited while the app was closed. The watcher offers it again at every scan, and the
+/// first offer after that accepts it, in order. A job record that still says it is open opens
+/// nothing (a quit never rewrites it). A report written while the app is open reaches Stu by
+/// itself, with the held ones before it ([`Asked::nobody_wrote_since`]). `coordination` is the
+/// folder `asked` was made from.
+pub fn accept_when_asked(
+    state: &Path,
+    binding: &crate::entity::ThreadBinding,
+    event: &Value,
+    coordination: &Path,
+    asked: &Asked,
+) -> Result<(), String> {
+    if asked.nobody_wrote_since(event) && !asked.gate.may_start(binding, crate::turn_gate::Origin::FromBefore) {
+        return Err(WAITS_FOR_THE_USER.into());
+    }
+    accept(state, binding, event, coordination)
+}
+
 // Test-only process-death probes at the real persistence calls. Nothing is
 // compiled into the delivered app, and only the explicitly launched child has
 // the stage variable. No timer simulates a durability boundary.
@@ -304,7 +461,7 @@ mod tests {
                 std::env::temp_dir().join(format!("richos-channel-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&root).unwrap();
             let root = root.canonicalize().unwrap();
-            let mut ledger = crate::ledger::Ledger::open(root.join("ledger.jsonl")).unwrap();
+            let mut ledger = crate::ledger::Ledger::open(root.join("conversation-ledger.jsonl")).unwrap();
             let thread = ledger
                 .create_thread("Same title", &crate::EntityId::parse("company-a").unwrap())
                 .unwrap();
@@ -379,6 +536,295 @@ mod tests {
             .unwrap_err()
             .contains("conflict"));
         assert_eq!(f.rows().len(), 1);
+    }
+
+    /// The app as it opened: the ledger already holds the chat, the connection's journal
+    /// already holds the fixture's report (it ends at byte 100), and nothing since.
+    fn opened(f: &Fixture) -> Asked {
+        std::fs::write(Path::new(f.event["locator"].as_str().unwrap()).join(JOURNAL), [b'\n'; 100]).unwrap();
+        // The ledger's clock is in milliseconds: what was written before is strictly earlier.
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        Asked::at_launch(&f.coord, &f.state, std::sync::Arc::new(crate::turn_gate::TurnGate::at_launch(&f.state)))
+    }
+
+    /// One line of a journal, as the engine writes a record.
+    fn written(f: &Fixture, record: Value) {
+        use std::io::Write;
+        let journal = Path::new(f.event["locator"].as_str().unwrap()).join(JOURNAL);
+        let mut file = std::fs::OpenOptions::new().append(true).open(journal).unwrap();
+        writeln!(file, "{record}").unwrap();
+    }
+
+    fn prompt(f: &Fixture, text: &str, source: crate::ledger::Source) {
+        let mut ledger = crate::ledger::Ledger::open(f.root.join("conversation-ledger.jsonl")).unwrap();
+        ledger.record_prompt_received(&f.binding, text, source).unwrap();
+    }
+
+    /// **Opening the app spends nothing** (CEO 2026-11-26): a Codex report for a conversation
+    /// in which he has asked nothing since the app opened is not handed to
+    /// Stu. It stays in its journal, unaccepted, and is taken at the first offer after his next
+    /// message there. What he typed before the app opened, and an agent's message, open nothing.
+    #[test]
+    fn a_codex_report_nobody_waits_for_stays_in_its_journal_until_the_user_asks_in_that_chat() {
+        let f = Fixture::new();
+        prompt(&f, "Yesterday's request", crate::ledger::Source::Text);
+        let asked = opened(&f);
+        for _ in 0..2 {
+            assert_eq!(
+                accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap_err(),
+                WAITS_FOR_THE_USER
+            );
+        }
+        prompt(&f, "{\"from\":\"stu\",\"text\":\"a report\"}", crate::ledger::Source::Agent);
+        assert_eq!(
+            accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap_err(),
+            WAITS_FOR_THE_USER,
+            "an agent's message is not the user asking"
+        );
+        assert!(!session_tools::inbox(&f.scope(), "stu").unwrap().exists(), "a held report reached Stu's inbox");
+        assert!(!f.state.join("codex-watch/accepted").exists(), "a held report was marked accepted");
+
+        prompt(&f, "What did Codex say?", crate::ledger::Source::Text);
+        accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap();
+        assert_eq!(f.rows().len(), 1, "the report was not handed over after he asked");
+        assert!(f.state.join("codex-watch/accepted/pair.json").exists());
+    }
+
+    /// He asked in one chat: another chat's reports still wait.
+    #[test]
+    fn asking_in_one_chat_releases_no_other_chats_reports() {
+        let f = Fixture::new();
+        let asked = opened(&f);
+        let mut ledger = crate::ledger::Ledger::open(f.root.join("conversation-ledger.jsonl")).unwrap();
+        let other = ledger.create_thread("Another chat", &crate::EntityId::parse("company-a").unwrap()).unwrap();
+        let other = ledger.thread_binding(&other).unwrap();
+        ledger.record_prompt_received(&other, "Hello", crate::ledger::Source::Jam).unwrap();
+        drop(ledger);
+        assert!(asked.gate.may_start(&other, crate::turn_gate::Origin::FromBefore), "his spoken words were not read as his acting");
+        assert_eq!(
+            accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap_err(),
+            WAITS_FOR_THE_USER
+        );
+    }
+
+    /// Codex's entries still reach Stu by themselves while the app is open: a report written
+    /// after it opened is handed over at once, with no job open and no message from him. So is
+    /// one on a connection made after it opened.
+    #[test]
+    fn a_report_written_while_the_app_is_open_reaches_stu_by_itself() {
+        let f = Fixture::new();
+        let asked = opened(&f);
+        assert_eq!(
+            accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap_err(),
+            WAITS_FOR_THE_USER
+        );
+        // Codex writes a second report on the same connection while the app is open. The
+        // watcher offers a connection's reports one at a time, in order: the one from before is
+        // handed over now, and the new one after it.
+        written(&f, json!({"version":1,"message_id":"message-2","text":"A second report"}));
+        accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap();
+        let mut later = f.event.clone();
+        later["record"]["message_id"] = json!("message-2");
+        later["through"] = json!(200);
+        accept_when_asked(&f.state, &f.binding, &later, &f.coord, &asked).unwrap();
+        assert_eq!(f.rows().len(), 2, "a report written after the app opened, or the one before it, was held");
+
+        let new = f.coord.join("connections/company-a").join(f.binding.thread_id()).join("new");
+        std::fs::create_dir_all(&new).unwrap();
+        std::fs::write(new.join(JOURNAL), [b'\n'; 100]).unwrap();
+        let mut fresh = f.event.clone();
+        fresh["locator"] = json!(new);
+        fresh["connection"]["connection_id"] = json!("new");
+        fresh["record"]["message_id"] = json!("message-3");
+        accept_when_asked(&f.state, &f.binding, &fresh, &f.coord, &asked).unwrap();
+        assert_eq!(f.rows().len(), 3, "a report on a connection made after the app opened was held");
+    }
+
+    /// **The app's own review watcher writes a notice at startup** about a report from while
+    /// the app was closed. That notice is not Codex writing: the report stays held, and the
+    /// notice starts no turn either. A report Codex then writes hands all three over, in order.
+    #[test]
+    fn a_review_notice_written_at_startup_releases_nothing_and_starts_no_turn() {
+        let f = Fixture::new();
+        let asked = opened(&f);
+        written(&f, json!({"version":1,"kind":"review_result","message_id":"review-1","reply_to":"message-1","text":"no review started"}));
+        let mut notice = f.event.clone();
+        notice["record"] = json!({"version":1,"kind":"review_result","message_id":"review-1","reply_to":"message-1","text":"no review started"});
+        notice["through"] = json!(250);
+        for event in [&f.event, &notice] {
+            assert_eq!(
+                accept_when_asked(&f.state, &f.binding, event, &f.coord, &asked).unwrap_err(),
+                WAITS_FOR_THE_USER
+            );
+        }
+        assert!(!session_tools::inbox(&f.scope(), "stu").unwrap().exists(), "a startup notice reached Stu's inbox");
+
+        written(&f, json!({"version":1,"message_id":"message-2","text":"A second report"}));
+        accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap();
+        accept_when_asked(&f.state, &f.binding, &notice, &f.coord, &asked).unwrap();
+        assert_eq!(f.rows().len(), 2);
+    }
+
+    /// **The old Markdown channel.** A reply written while the app was closed starts no turn at
+    /// launch; one written while it is open reaches Stu by itself, and the held one goes ahead
+    /// of it. Each block names the lines it came from, as the engine's watcher writes it.
+    #[test]
+    fn a_markdown_reply_from_before_waits_and_one_written_while_open_arrives_by_itself() {
+        let f = Fixture::new();
+        let channel = f.root.join("rich-codex/to-rich.md");
+        std::fs::create_dir_all(channel.parent().unwrap()).unwrap();
+        std::fs::write(&channel, "## read long ago\nold\n## written while closed\nbacklog\n").unwrap();
+        // The watcher had read the first two lines when the app last quit.
+        let places = f.state.join(MARKDOWN_PLACES);
+        std::fs::create_dir_all(places.parent().unwrap()).unwrap();
+        std::fs::write(&places, json!({channel.to_str().unwrap(): {"offset": 21, "inode": 1, "seen": 21}}).to_string()).unwrap();
+        let asked = opened(&f);
+        let block = |lines: &str, body: &str, id: &str, through: u64| {
+            let mut event = f.event.clone();
+            event["record"] = json!({"version":1,"kind":"legacy_live","message_id":id,
+                "text":format!("CODEX-WATCH 10:04Z: Codex wrote a new entry to you in rich-codex/to-rich.md (lines {lines} of {}); every new line follows:\n{body}", channel.display())});
+            event["through"] = json!(through);
+            event
+        };
+        let backlog = block("3-4", "## written while closed\nbacklog", "legacy-live-a", 5000);
+        assert_eq!(
+            accept_when_asked(&f.state, &f.binding, &backlog, &f.coord, &asked).unwrap_err(),
+            WAITS_FOR_THE_USER
+        );
+        assert!(!session_tools::inbox(&f.scope(), "stu").unwrap().exists(), "a held reply reached Stu's inbox");
+
+        use std::io::Write;
+        std::fs::OpenOptions::new().append(true).open(&channel).unwrap().write_all(b"## written while open\nlive\n").unwrap();
+        let live = block("5-6", "## written while open\nlive", "legacy-live-b", 6000);
+        accept_when_asked(&f.state, &f.binding, &backlog, &f.coord, &asked).unwrap();
+        accept_when_asked(&f.state, &f.binding, &live, &f.coord, &asked).unwrap();
+        assert_eq!(f.rows().len(), 2, "a reply written while the app is open, or the one before it, was held");
+    }
+
+    /// The two default Markdown channels share one spool: a reply held on one never holds back
+    /// a reply written on the other while the app is open.
+    #[test]
+    fn a_markdown_reply_held_on_one_channel_never_blocks_a_live_reply_on_the_other() {
+        let f = Fixture::new();
+        let (first, second) = (f.root.join("rich-codex/to-rich.md"), f.root.join("rich-codex-questions/to-rich.md"));
+        for (channel, text) in [(&first, "## written while closed\nbacklog\n"), (&second, "## read long ago\nold\n")] {
+            std::fs::create_dir_all(channel.parent().unwrap()).unwrap();
+            std::fs::write(channel, text).unwrap();
+        }
+        let places = f.state.join(MARKDOWN_PLACES);
+        std::fs::create_dir_all(places.parent().unwrap()).unwrap();
+        std::fs::write(&places, json!({
+            first.to_str().unwrap(): {"offset": 0, "inode": 1, "seen": 0},
+            second.to_str().unwrap(): {"offset": 21, "inode": 2, "seen": 21},
+        }).to_string()).unwrap();
+        let asked = opened(&f);
+        let mut backlog = f.event.clone();
+        backlog["record"] = json!({"version":1,"kind":"legacy_live","message_id":"legacy-live-a",
+            "text":format!("CODEX-WATCH 10:04Z: Codex wrote a new entry to you in rich-codex/to-rich.md (lines 1-2 of {}); every new line follows:\n## written while closed\nbacklog", first.display())});
+        assert_eq!(
+            accept_when_asked(&f.state, &f.binding, &backlog, &f.coord, &asked).unwrap_err(),
+            WAITS_FOR_THE_USER
+        );
+        use std::io::Write;
+        std::fs::OpenOptions::new().append(true).open(&second).unwrap().write_all(b"## a question, written while open\nlive\n").unwrap();
+        accept_when_asked(&f.state, &f.binding, &backlog, &f.coord, &asked).unwrap();
+        assert_eq!(f.rows().len(), 1, "the held reply still blocks the other channel's live reply");
+    }
+
+    /// **A reply written while the app was closed whose last line has no newline is from
+    /// before too** (review rv-20261126T112554Z-6b571438-ca3d, finding 1): the file's length
+    /// at launch decides, not its newlines.
+    #[test]
+    fn a_markdown_reply_from_before_without_a_final_newline_waits() {
+        let f = Fixture::new();
+        let channel = f.root.join("rich-codex/to-rich.md");
+        std::fs::create_dir_all(channel.parent().unwrap()).unwrap();
+        std::fs::write(&channel, "# Existing channel\n## Offline without newline").unwrap();
+        let places = f.state.join(MARKDOWN_PLACES);
+        std::fs::create_dir_all(places.parent().unwrap()).unwrap();
+        std::fs::write(&places, json!({channel.to_str().unwrap(): {"offset": 19, "inode": 1, "seen": 19}}).to_string()).unwrap();
+        let asked = opened(&f);
+        let mut backlog = f.event.clone();
+        backlog["record"] = json!({"version":1,"kind":"legacy_live","message_id":"legacy-live-a",
+            "text":format!("CODEX-WATCH 10:04Z: Codex wrote a new entry to you in rich-codex/to-rich.md (lines 2-2 of {}); every new line follows:\n## Offline without newline", channel.display())});
+        assert_eq!(
+            accept_when_asked(&f.state, &f.binding, &backlog, &f.coord, &asked).unwrap_err(),
+            WAITS_FOR_THE_USER
+        );
+        assert!(!session_tools::inbox(&f.scope(), "stu").unwrap().exists(), "a reply from before reached Stu's inbox");
+    }
+
+    /// With nothing waiting at launch, the first Markdown reply written while the app is open
+    /// arrives by itself, hours later or not.
+    #[test]
+    fn the_first_markdown_reply_written_while_open_is_never_held() {
+        let f = Fixture::new();
+        let channel = f.root.join("rich-codex/to-rich.md");
+        std::fs::create_dir_all(channel.parent().unwrap()).unwrap();
+        std::fs::write(&channel, "## read long ago\nold\n").unwrap();
+        let places = f.state.join(MARKDOWN_PLACES);
+        std::fs::create_dir_all(places.parent().unwrap()).unwrap();
+        std::fs::write(&places, json!({channel.to_str().unwrap(): {"offset": 21, "inode": 1, "seen": 21}}).to_string()).unwrap();
+        let asked = opened(&f);
+        use std::io::Write;
+        std::fs::OpenOptions::new().append(true).open(&channel).unwrap().write_all(b"## written while open\nlive\n").unwrap();
+        let mut live = f.event.clone();
+        live["record"] = json!({"version":1,"kind":"legacy_live","message_id":"legacy-live-b",
+            "text":format!("CODEX-WATCH 13:00Z: Codex wrote a new entry to you in rich-codex/to-rich.md (lines 3-4 of {}); every new line follows:\n## written while open\nlive", channel.display())});
+        accept_when_asked(&f.state, &f.binding, &live, &f.coord, &asked).unwrap();
+        assert_eq!(f.rows().len(), 1);
+    }
+
+    /// A job record that says the job is open (registered, running, paused for quota, waiting
+    /// on him) is what a quit leaves behind: it is never rewritten, so it opens nothing. The
+    /// report waits (review rv-20261126T140329Z-15e71cf5-6caa, finding 1).
+    #[test]
+    fn a_job_record_that_still_says_open_releases_nothing_from_before() {
+        let f = Fixture::new();
+        let asked = opened(&f);
+        let scope = f.scope();
+        crate::assignment::register(&f.state, &crate::assignment::Registration {
+            entity_id: scope.entity_id.clone(),
+            thread_id: scope.thread_id.clone(),
+            obligation_id: "obligation-1".into(),
+            instruction_ledger_ref: format!("ledger:{}:turn-1", scope.thread_id),
+            instruction_sha256: "0".repeat(64),
+            title: "the Desktop fix".into(),
+            repositories: Vec::new(),
+            needs_screen: false,
+        })
+        .unwrap();
+        assert_eq!(
+            accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap_err(),
+            WAITS_FOR_THE_USER
+        );
+        assert!(!session_tools::inbox(&scope, "stu").unwrap().exists(), "an open job record released a report from before");
+    }
+
+    /// The same report, the job ended: it waits.
+    #[test]
+    fn a_chat_whose_job_has_ended_waits_like_one_that_never_had_a_job() {
+        let f = Fixture::new();
+        let asked = opened(&f);
+        let scope = f.scope();
+        let job = crate::assignment::register(&f.state, &crate::assignment::Registration {
+            entity_id: scope.entity_id.clone(),
+            thread_id: scope.thread_id.clone(),
+            obligation_id: "obligation-1".into(),
+            instruction_ledger_ref: format!("ledger:{}:turn-1", scope.thread_id),
+            instruction_sha256: "0".repeat(64),
+            title: "the Desktop fix".into(),
+            repositories: Vec::new(),
+            needs_screen: false,
+        })
+        .unwrap();
+        crate::assignment::advance(&f.state, &scope.entity_id, &scope.thread_id, &job.id,
+            crate::assignment::AssignmentState::Settled, "done").unwrap();
+        assert_eq!(
+            accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap_err(),
+            WAITS_FOR_THE_USER
+        );
+        assert!(!session_tools::inbox(&scope, "stu").unwrap().exists());
     }
 
     #[test]
@@ -533,7 +979,7 @@ mod tests {
         let root = PathBuf::from(root);
         let event: Value =
             serde_json::from_slice(&std::fs::read(root.join("event.json")).unwrap()).unwrap();
-        let ledger = crate::ledger::Ledger::open(root.join("ledger.jsonl")).unwrap();
+        let ledger = crate::ledger::Ledger::open(root.join("conversation-ledger.jsonl")).unwrap();
         let binding = ledger
             .thread_binding(event["connection"]["thread_id"].as_str().unwrap())
             .unwrap();

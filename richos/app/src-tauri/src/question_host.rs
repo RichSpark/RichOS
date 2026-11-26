@@ -76,6 +76,8 @@ pub fn answer(
             return Err(error.to_string());
         }
     };
+    // His own press: the chat is open to the one rule from now on (richos-core `turn_gate`).
+    state.turn_gate.user_acted(&binding);
     // His click takes its place in the conversation's input order now, not when the
     // delivery worker later reaches the spine, so a Stop he presses after it covers it.
     let mut result = store.answer_from(
@@ -126,6 +128,12 @@ pub fn start(app: AppHandle) {
     let (work_ready, work_events) = std::sync::mpsc::sync_channel::<()>(1);
     let (notify_ready, notify_events) = std::sync::mpsc::sync_channel::<()>(1);
     let (witness_ready, witness_events) = std::sync::mpsc::sync_channel::<()>(1);
+    // An answer saved before the app opened waits for the user in its chat (the delivery
+    // worker below); the moment he acts there, the worker looks again.
+    let opened = changed.clone();
+    app.state::<AppState>().turn_gate.when_a_chat_opens(std::sync::Arc::new(move || {
+        opened.try_send(()).unwrap_or(());
+    }));
     let receiver = app.clone();
     std::thread::Builder::new()
         .name("richos-question-witness".into())
@@ -185,6 +193,13 @@ pub fn start(app: AppHandle) {
                 };
                 for (entity, thread, asker) in store.pending_threads().unwrap_or_default() {
                     if asker != "front_desk" {
+                        continue;
+                    }
+                    // THE ONE RULE (richos-core `turn_gate`): an answer saved before the app
+                    // opened waits, saved, until the user is active in this chat; filed now it
+                    // would be a turn of Rich's stamped as his words of this run. An answer he
+                    // gives in this run opens the chat itself (`answer`, `user_acted`).
+                    if state.turn_gate.waits(&thread) {
                         continue;
                     }
                     if let Err(error) = store.deliver(&entity, &thread, &asker, |d| {

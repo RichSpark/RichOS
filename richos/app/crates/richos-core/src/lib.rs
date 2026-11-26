@@ -168,6 +168,7 @@ pub mod steering;
 pub mod stream;
 pub mod thread;
 pub mod timeline;
+pub mod turn_gate;
 pub mod upstream;
 pub mod voice_playback;
 pub mod util;

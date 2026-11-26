@@ -179,6 +179,10 @@ struct Backend {
     lease: Mutex<Option<Box<dyn Cognition>>>,
     inner: Mutex<Inner>,
     wake: Condvar,
+    /// Inbox rows the one rule held ([`WorkHost::may_send`]), by their end: given first, oldest
+    /// first, once their chat opens, even after later input has moved the scan past them. Its own
+    /// lock, never taken while waiting on [`Self::inner`].
+    gate_held: Mutex<std::collections::BTreeSet<u64>>,
 }
 impl Backend {
     fn new() -> Arc<Self> {
@@ -186,6 +190,7 @@ impl Backend {
             live_delivery: Mutex::new(()),
             moving: Mutex::new(()),
             lease: Mutex::new(None),
+            gate_held: Mutex::new(Default::default()),
             inner: Mutex::new(Inner::default()),
             wake: Condvar::new(),
         })
@@ -214,6 +219,9 @@ pub struct WorkHost {
     /// `None` until the shell sets it ([`Self::set_keep_alive`]), and then no session of Stu's
     /// is ever sent a keep-alive.
     keep_alive: Mutex<Option<(Arc<crate::chat_cache::Readings>, crate::chat_cache::Kept)>>,
+    /// The one rule for a turn the app starts by itself ([`crate::turn_gate`]): set by the
+    /// shell at launch, before the run loop can select input ([`Self::set_turn_gate`]).
+    turn_gate: crate::turn_gate::Slot,
 }
 impl WorkHost {
     pub fn new(
@@ -237,7 +245,48 @@ impl WorkHost {
             receipts: Mutex::new(Default::default()),
             handoffs: Mutex::new(Default::default()),
             keep_alive: Mutex::new(None),
+            turn_gate: crate::turn_gate::Slot::new(),
         })
+    }
+    pub fn set_turn_gate(&self, gate: Arc<crate::turn_gate::TurnGate>) {
+        if self.turn_gate.set(gate).is_err() {
+            eprintln!("[richos] the work host's turn gate was already set");
+        }
+    }
+
+    /// **May Stu be sent this saved input now?** ([`crate::turn_gate`]) An input whose
+    /// delivery was still under way when the app last ended carries on; one written to his
+    /// inbox while the app is open is new; anything else in his inbox was saved before and
+    /// waits until the user is active in this chat. `input` is the
+    /// attempt's name (`peer:<offset>`, `answer:<id>`); `through` is the inbox row's end, none
+    /// for an answer, whose own record is not in the inbox.
+    fn may_send(&self, binding: &ThreadBinding, input: &str, through: Option<u64>) -> bool {
+        crate::turn_gate::allows(&self.turn_gate, binding, self.origin_of(binding, input, through))
+    }
+
+    /// What [`Self::may_send`] knows about the input: [`crate::turn_gate::Origin`].
+    fn origin_of(&self, binding: &ThreadBinding, input: &str, through: Option<u64>) -> crate::turn_gate::Origin {
+        use crate::turn_gate::Origin;
+        let scope = self.message_scope(binding);
+        // Carrying on is a delivery begun for a session (`begin_attempt` names it) and never
+        // finished: the turn given it ended (`acknowledge`) marks it delivered, and an entry kept
+        // for a handoff whose job is still open (paused, waiting) then waits like the rest. An
+        // older build's entry that names no session is not one either.
+        let begun = crate::session_tools::previous_attempt(&scope, "stu", input).ok().flatten()
+            .is_some_and(|attempt| attempt["session_id"].is_string() && attempt["delivered"] != true
+                // He chose "Quit and stop the work": what was under way then was stopped.
+                && attempt["stopped"] != true
+                // An older build's delivered handoff carries no mark; the session's own record
+                // holding it (`received_handoffs`) shows it was given.
+                && attempt["received"] != true);
+        if begun {
+            Origin::CarriesOn
+        } else if through.is_some_and(|through| crate::session_tools::inbox(&scope, "stu")
+            .is_ok_and(|inbox| crate::turn_gate::arrived(&self.turn_gate, &inbox, through))) {
+            Origin::Now
+        } else {
+            Origin::FromBefore
+        }
     }
     pub fn set_retry_clock(&self, clock: Arc<dyn crate::upstream::RetryClock>) {
         *self.retry_clock.lock().unwrap() = clock;
@@ -1080,6 +1129,19 @@ impl WorkHost {
     fn next_for_stu(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding, mut after: u64,
         released: &mut Vec<u64>, given: &std::collections::HashSet<u64>) -> Result<Option<(crate::session_tools::Message, u64)>, String> {
         let scope = self.message_scope(binding);
+        // Held by the one rule before: given now, oldest first, if the user has been active in
+        // this chat since.
+        let held: Vec<u64> = backend.gate_held.lock().unwrap().iter().copied().collect();
+        for through in held {
+            if given.contains(&through) || !self.may_send(binding, &format!("peer:{through}"), Some(through)) {
+                continue;
+            }
+            backend.gate_held.lock().unwrap().remove(&through);
+            let message = crate::session_tools::saved_input(&scope, "stu", through)?;
+            if !self.held_for_screen(backend, binding, &message, through) {
+                return Ok(Some((message, through)));
+            }
+        }
         while let Some(through) = released.pop() {
             let message = crate::session_tools::saved_input(&scope, "stu", through)
                 .inspect_err(|_| released.push(through))?;
@@ -1092,6 +1154,13 @@ impl WorkHost {
                 return Ok(None);
             };
             if given.contains(&through) {
+                after = through;
+                continue;
+            }
+            // Saved before the app opened and not running then: it waits, and what was
+            // written after it still goes (`may_send`).
+            if !self.may_send(binding, &format!("peer:{through}"), Some(through)) {
+                backend.gate_held.lock().unwrap().insert(through);
                 after = through;
                 continue;
             }
@@ -1157,7 +1226,8 @@ impl WorkHost {
         let result = (|| {
             if let Some(session)=session.as_deref() {
                 for answer in crate::question_work::pending(&self.state)?.into_iter().filter(|answer|
-                    answer.entity_id==binding.entity_id().as_str() && answer.thread_id==binding.thread_id()) {
+                    answer.entity_id==binding.entity_id().as_str() && answer.thread_id==binding.thread_id()
+                    && self.may_send(binding, &format!("answer:{}", answer.id), None)) {
                     let input_id=format!("answer:{}",answer.id);
                     if crate::session_tools::previous_attempt(&scope,"stu",&input_id)?.as_ref()
                         .and_then(|attempt|attempt["session_id"].as_str())==Some(session) {continue}
@@ -2045,10 +2115,25 @@ impl WorkHost {
             }
             inner.binding.as_ref().is_some_and(|binding| {
                 let scope = self.message_scope(binding);
+                // Input the one rule holds until the user is active in this chat is not work
+                // that runs: a Stop saved at the last quit keeps nothing open.
+                let held = |through: u64| self.origin_of(binding, &format!("peer:{through}"), Some(through))
+                    == crate::turn_gate::Origin::FromBefore && crate::turn_gate::waiting(&self.turn_gate, binding.thread_id());
                 crate::session_tools::pending(&scope, "rich").map(|m| m.is_some()).unwrap_or(true)
-                    || crate::session_tools::undelivered(&scope, "stu").unwrap_or(true)
+                    || crate::session_tools::undelivered_where(&scope, "stu", &|through| !held(through)).unwrap_or(true)
             })
         })
+    }
+
+    /// **Does this saved intake of Rich's wait for the user?** An agent's message filed before
+    /// the app opened, in a chat the user has not been active in since, is held by the one rule
+    /// (`Spine::drain_intake`): it is not work that runs.
+    pub fn intake_waits(&self, record: &crate::steering::IntakeRecord) -> bool {
+        match record {
+            crate::steering::IntakeRecord::Channel { thread_id, source: Some(crate::ledger::Source::Agent), at, .. } =>
+                self.turn_gate.get().is_some_and(|gate| *at < gate.since_ms() && gate.waits(thread_id)),
+            _ => false,
+        }
     }
 
     fn backend(&self, thread: &str) -> Option<Arc<Backend>> {
@@ -2145,6 +2230,7 @@ impl WorkHost {
                             .find(|d| {
                                 d.entity_id == binding.entity_id().as_str()
                                     && d.thread_id == binding.thread_id()
+                                    && self.may_send(&binding, &format!("answer:{}", d.id), None)
                                     && live_session.as_deref().is_none_or(|session| {
                                         match crate::session_tools::previous_attempt(&self.message_scope(&binding), "stu", &format!("answer:{}", d.id)) {
                                             Ok(attempt) => attempt.as_ref().and_then(|a| a["session_id"].as_str()) != Some(session),
@@ -2430,7 +2516,9 @@ impl WorkHost {
                 })
             };
             let own = records.iter().filter(|record| {
-                if record.reported_state().is_some_and(AssignmentState::waits_for_the_world) {
+                // A wait from an earlier run that the one rule holds starts nothing by itself:
+                // its handoff waits for the user, so it is read like any other record.
+                if record.reported_state().is_some_and(AssignmentState::waits_for_the_world) && !self.held_from_before(record) {
                     return true;
                 }
                 let Ok(receipts) = launches.as_ref() else { return true };
@@ -2456,6 +2544,15 @@ impl WorkHost {
             live += own.max(usize::from(self.stu_busy(&scope)));
         }
         live
+    }
+
+    /// **Does the one rule hold this job's wait?** ([`crate::turn_gate`]) A job left waiting
+    /// for the screen or an allowance (paused) by an earlier run, in a chat the user has not
+    /// been active in since the app opened, does not resume by itself: its handoff waits for
+    /// him (review rv-20261126T181936Z-b201d280-33e4, finding 1). A wait recorded in this run
+    /// belongs to a session that is live now, and is still running work.
+    fn held_from_before(&self, record: &Assignment) -> bool {
+        self.turn_gate.get().is_some_and(|gate| record.updated_at_ms < gate.since_ms() && gate.waits(&record.thread_id))
     }
 
     /// **This provider session has demonstrably ended, and no process of it still runs.** A
@@ -2613,6 +2710,15 @@ impl WorkHost {
             match self.record_one_quit_stop(record) {
                 Ok(()) => stopped += 1,
                 Err(error) => errors.push(error),
+            }
+        }
+        // Every delivery to Stu still under way is stopped too, a job's or not (a Codex report,
+        // a notice): the next launch carries none of them on (the one rule, `origin_of`).
+        let backends: Vec<_> = self.backends.lock().unwrap().values().cloned().collect();
+        for backend in backends {
+            let Some(binding) = backend.inner.lock().unwrap().binding.clone() else { continue };
+            if let Err(error) = crate::session_tools::stop_open_attempts(&self.message_scope(&binding), "stu") {
+                errors.push(error);
             }
         }
         (stopped, errors)
@@ -3190,6 +3296,119 @@ mod tests {
 
     fn handed_over(h: &Harness, text: &str) -> usize {
         h.work_prompts.lock().unwrap().iter().filter(|prompt| prompt.contains(text)).count()
+    }
+
+    /// **Opening the app spends nothing** (CEO 2026-11-26: "Everything was either stopped,
+    /// finished, ended or paused in the RichOS app. [...] there should have been absolutely
+    /// zero usage after me just opening the app."). Whatever was in Stu's inbox when the app
+    /// opened (a Stop, an account notice, a report of work that has since stopped) is not sent to
+    /// him; input written while the app is open reaches him by itself, past the saved one; the
+    /// user's own words in the chat give him the saved one too.
+    #[test]
+    fn input_saved_before_the_app_opened_waits_for_the_user_and_new_input_reaches_stu_by_itself() {
+        use std::io::Write;
+        let h = harness(0);
+        let scope = h.host.message_scope(&h.binding);
+        crate::session_tools::observe_stall(&scope, "a notice saved before the quit").unwrap();
+        // The ledger's clock is in milliseconds: what was written before is strictly earlier.
+        // load-bound: this only moves the millisecond clock past what was saved; host load makes the gap larger, never smaller.
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        h.host.set_turn_gate(Arc::new(crate::turn_gate::TurnGate::at_launch(&h.state)));
+        h.host.wake_messages(&h.binding);
+        crate::session_tools::observe_stall(&scope, "a notice written while the app is open").unwrap();
+        h.host.wake_messages(&h.binding);
+        until("input written while the app is open never reached Stu", || handed_over(&h, "written while the app is open") == 1);
+        assert_eq!(handed_over(&h, "saved before the quit"), 0, "opening the app sent Stu what was saved before");
+
+        let line = serde_json::json!({"event":"PromptReceived","entity_id":"depot","thread_id":"thread-one",
+            "turn_id":"turn-8","source":"text","text":"what happened?","at":crate::util::now_millis()}).to_string() + "\n";
+        std::fs::OpenOptions::new().append(true).open(h.root.join("conversation-ledger.jsonl")).unwrap()
+            .write_all(line.as_bytes()).unwrap();
+        h.host.wake_messages(&h.binding);
+        until("after his words the saved input never reached Stu", || handed_over(&h, "saved before the quit") == 1);
+    }
+
+    /// **A paused job's handoff is not replayed at launch** (review
+    /// rv-20261126T151735Z-c45967b1-2484, finding 1). Its turn ended, its job is still open
+    /// (paused, waiting), so its receipt stays; the app opens again with nothing to show the
+    /// session holds it. It waits: a message written while the app is open goes to Stu by
+    /// itself, and the handoff is not given again before it.
+    #[test]
+    fn a_paused_jobs_delivered_handoff_is_not_replayed_when_the_app_opens() {
+        let h = harness(1);
+        let record = assignment::register(&h.state, &registration(&h)).unwrap();
+        assignment::advance(&h.state, "depot", "thread-one", &record.id, AssignmentState::WaitingForQuota, "paused for the usage limit").unwrap();
+        let scope = h.host.message_scope(&h.binding);
+        let path = h.root.join("peer-status.json");
+        crate::session_tools::bind(&path, &scope, "front-session", "rich", Some(crate::ecs::UserInstruction {
+            ledger_ref: registration(&h).instruction_ledger_ref, sha256: registration(&h).instruction_sha256, text: None })).unwrap();
+        crate::session_tools::delegate(&path, &scope, serde_json::json!({"text":"Build nightly 78"})).unwrap();
+        h.host.wake_messages(&h.binding);
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(30)), "the handoff's turn did not end");
+        h.host.shutdown();
+        assert!(crate::session_tools::pending(&scope, "stu").unwrap().is_some(), "the paused job's handoff is still open");
+        // load-bound: this only moves the millisecond clock past what was saved; host load makes the gap larger, never smaller.
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        let factory = Factory { spawns: h.spawns.clone(), prompts: h.work_prompts.clone(), commands: h.commands.clone(),
+            team: h.team.clone(), gate: h.start_gate.clone() };
+        let opened = WorkHost::new(&h.state, Box::new(factory), Arc::new(SilentNotifier));
+        opened.set_turn_gate(Arc::new(crate::turn_gate::TurnGate::at_launch(&h.state)));
+        opened.wake_messages(&h.binding);
+        assert!(!opened.peer_work_pending(), "a held handoff was counted as work still running");
+        // Nor is the paused job itself: the rule holds it, so it does not resume by itself, and
+        // the quit question and a closing window do not count it (review
+        // rv-20261126T181936Z-b201d280-33e4, finding 1).
+        assert_eq!(opened.background_work().running, 0, "a held paused job was counted as running");
+        crate::session_tools::send(&path, &scope, serde_json::json!({"text":"Written while the app is open"})).unwrap();
+        opened.wake_messages(&h.binding);
+        assert!(opened.wait_for_completed(1, std::time::Duration::from_secs(30)), "the new message never reached Stu");
+        let after: Vec<String> = h.work_prompts.lock().unwrap()[1..].to_vec();
+        assert_eq!(after.len(), 1, "turns after opening: {after:?}");
+        assert!(after[0].contains("Written while the app is open") && !after[0].contains("Build nightly 78"), "{after:?}");
+        opened.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **A delivery cut off by "Quit and stop the work" does not carry on at launch** (review
+    /// rv-20261126T171959Z-6553219b-85a5, finding 1); one cut off by a crash or an update restart
+    /// does. A report written while the app is open goes to Stu by itself either way.
+    #[test]
+    fn quit_and_stop_keeps_a_cut_off_delivery_from_carrying_on() {
+        for stopped in [false, true] {
+            let h = harness(0);
+            let scope = h.host.message_scope(&h.binding);
+            crate::session_tools::observe_stall(&scope, "a report cut off by the quit").unwrap();
+            let through = crate::session_tools::pending(&scope, "stu").unwrap().unwrap().1;
+            crate::session_tools::begin_attempt(&scope, "stu", &format!("peer:{through}"), "prior-session").unwrap();
+            if stopped {
+                crate::session_tools::stop_open_attempts(&scope, "stu").unwrap();
+            }
+            // load-bound: this only moves the millisecond clock past what was saved; host load makes the gap larger, never smaller.
+            std::thread::sleep(std::time::Duration::from_millis(3));
+            h.host.set_turn_gate(Arc::new(crate::turn_gate::TurnGate::at_launch(&h.state)));
+            h.host.wake_messages(&h.binding);
+            crate::session_tools::observe_stall(&scope, "a report written while the app is open").unwrap();
+            h.host.wake_messages(&h.binding);
+            until("the report written while open never reached Stu", || handed_over(&h, "written while the app is open") == 1);
+            let turns = if stopped { 1 } else { 2 };
+            assert!(h.host.wait_for_completed(turns, std::time::Duration::from_secs(30)), "stopped={stopped}: turns did not end");
+            assert_eq!(handed_over(&h, "cut off by the quit"), usize::from(!stopped),
+                "stopped={stopped}: {:?}", h.work_prompts.lock().unwrap());
+            std::fs::remove_dir_all(&h.root).unwrap();
+        }
+    }
+
+    /// An agent's message the rule holds in Rich's intake is not work that runs; one filed
+    /// while the app is open is.
+    #[test]
+    fn a_held_agent_intake_is_not_running_work() {
+        let h = harness(0);
+        h.host.set_turn_gate(Arc::new(crate::turn_gate::TurnGate::at_launch(&h.state)));
+        let intake = |at| crate::steering::IntakeRecord::Channel { id: 1, thread_id: "thread-one".into(), entity_id: None,
+            text: "a report".into(), at, channel: "stu".into(), client_id: None, voice_note: false, authored_bytes: None,
+            authored_ranges: None, source: Some(crate::ledger::Source::Agent) };
+        assert!(h.host.intake_waits(&intake(1)), "a report from before the app opened was counted as running");
+        assert!(!h.host.intake_waits(&intake(crate::util::now_millis() + 1)), "a report filed while the app is open was not counted");
     }
 
     /// **THE CEO'S §56, END TO END.** A job marked `needs_screen`, on a locked screen, is not
