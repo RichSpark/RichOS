@@ -267,7 +267,10 @@ impl Asked {
             use std::io::Read;
             let mut bytes = Vec::new();
             match std::fs::File::open(&file).map(|opened| opened.take(*length).read_to_end(&mut bytes)) {
-                Ok(Ok(_)) => bytes.iter().filter(|byte| **byte == b'\n').count() as u64,
+                // A last line with no newline yet is a line the file already held at launch:
+                // the watcher offers it as one (review rv-20261126T112554Z-6b571438-ca3d, #1).
+                Ok(Ok(_)) => bytes.iter().filter(|byte| **byte == b'\n').count() as u64
+                    + u64::from(bytes.last().is_some_and(|last| *last != b'\n')),
                 _ => u64::MAX,
             }
         });
@@ -726,6 +729,29 @@ mod tests {
         std::fs::OpenOptions::new().append(true).open(&second).unwrap().write_all(b"## a question, written while open\nlive\n").unwrap();
         accept_when_asked(&f.state, &f.binding, &backlog, &f.coord, &asked).unwrap();
         assert_eq!(f.rows().len(), 1, "the held reply still blocks the other channel's live reply");
+    }
+
+    /// **A reply written while the app was closed whose last line has no newline is from
+    /// before too** (review rv-20261126T112554Z-6b571438-ca3d, finding 1): the file's length
+    /// at launch decides, not its newlines.
+    #[test]
+    fn a_markdown_reply_from_before_without_a_final_newline_waits() {
+        let f = Fixture::new();
+        let channel = f.root.join("rich-codex/to-rich.md");
+        std::fs::create_dir_all(channel.parent().unwrap()).unwrap();
+        std::fs::write(&channel, "# Existing channel\n## Offline without newline").unwrap();
+        let places = f.state.join(MARKDOWN_PLACES);
+        std::fs::create_dir_all(places.parent().unwrap()).unwrap();
+        std::fs::write(&places, json!({channel.to_str().unwrap(): {"offset": 19, "inode": 1, "seen": 19}}).to_string()).unwrap();
+        let asked = opened(&f);
+        let mut backlog = f.event.clone();
+        backlog["record"] = json!({"version":1,"kind":"legacy_live","message_id":"legacy-live-a",
+            "text":format!("CODEX-WATCH 10:04Z: Codex wrote a new entry to you in rich-codex/to-rich.md (lines 2-2 of {}); every new line follows:\n## Offline without newline", channel.display())});
+        assert_eq!(
+            accept_when_asked(&f.state, &f.binding, &backlog, &f.coord, &asked).unwrap_err(),
+            WAITS_FOR_THE_USER
+        );
+        assert!(!session_tools::inbox(&f.scope(), "stu").unwrap().exists(), "a reply from before reached Stu's inbox");
     }
 
     /// With nothing waiting at launch, the first Markdown reply written while the app is open
