@@ -282,7 +282,7 @@
   // is its own (the Ink/Readout menu), which `resources.js` answers before this sees it.
   nav.addEventListener("keydown", (e) => {
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-    const list = Array.from(nav.querySelectorAll(".nr-item, #res-square")).filter((n) => !n.hidden && n.getClientRects().length);
+    const list = Array.from(nav.querySelectorAll(".nr-item, #res-square, #rom-square")).filter((n) => !n.hidden && n.getClientRects().length);
     const at = list.indexOf(document.activeElement);
     if (at < 0) return;
     e.preventDefault();

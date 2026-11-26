@@ -14,6 +14,10 @@
   ],
   "unwalkedPanels": [
     {
+      "id": "nr-richos",
+      "why": "My RichOS's place under the Mac square (round 109) is empty and hidden until Show My RichOS is switched on (off by default), and only then is the square, its card and its details built. Their text and indicators are measured in both themes by tests/richos-monitor.js, from the rendered colors: the rail's speed and Idle, the card's rows, app names, Not open and foot, the details' lines at 4.5:1, the bars and the idle ring at 3:1."
+    },
+    {
       "id": "video-anywhere-choices",
       "why": "The two choices under Make a video in the heading of Settings (round 79) are measured in both themes by tests/video-anywhere.js: every line of them against the plate it stands on at 4.5:1 and every edge, icon and lit bar at 3:1, from the computed colors, with the microphone on and with the sentence for no microphone shown. They open only from that button, with a made-up microphone, which that suite drives."
     },

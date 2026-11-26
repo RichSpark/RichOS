@@ -1,0 +1,741 @@
+/* =============================================================================================
+   MY RICHOS (round 109), THE ACTIVITY MONITOR UNDER MY MAC (`richos-monitor.js`).
+   The square is the Mac square's own frame (`.res`, `.res-tile`); the card is the Mac card's
+   paint, place and motion (`.res-card`); the details sheet is new. Token use is drawn in the
+   app's gold, memory in the Mac square's RAM ink. Every pair is measured in both themes by
+   round 109's `build/walk.js`; the ratios are in its README.
+   DECLARED in the 14px skippable tier, as the Mac card's are: the graphs' axis captions, the
+   card's foot, the Speed/Used column heads in the card, and the sheet's closing note.
+   ============================================================================================= */
+:root {
+  --rom-flow: var(--gold);
+}
+#nr-richos[hidden] {
+  display: none;
+}
+.rom {
+  gap: 0.1875rem;
+  cursor: pointer;
+}
+.rom-tile {
+  transition: transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1), border-color 300ms;
+}
+.rom[data-state="using"] .rom-tile {
+  border-color: var(--rom-flow);
+}
+/* The light: lit and breathing while tokens are being used, a hollow ring while idle. */
+.rom-light {
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  width: 6px;
+  height: 6px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 1.5px solid var(--nr-ink);
+}
+.rom[data-state="using"] .rom-light {
+  border: 0;
+  background: var(--rom-flow);
+  animation: res-beat 1.2s ease-out infinite;
+}
+/* The speed, read without hovering: 16px, the Mac Readout's own figures. One number, no unit:
+   the card says it is tokens a minute (the CEO, 2026-11-26). */
+.rom-readout {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-size: 1rem;
+  line-height: 1.0625;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.rom-readout b {
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: -0.03em;
+}
+.rom[data-state="idle"] .rom-readout b {
+  font-weight: 500;
+  color: var(--nr-ink);
+}
+
+/* ---- the card ---- */
+/* 21.25rem is round 109's 340px at the default text size. In rem the card grows with the text
+   size as its text does, so at 120% and 150% the readings keep the room they have at 100% (the
+   second review, at c49c010d5: a fixed 340px left the app names and readings 306px where they
+   needed 346px at 120% and 427px at 150%). */
+.rom-card {
+  width: 21.25rem;
+  padding: 14px 8px 10px;
+}
+.rom-card .res-card-head {
+  padding: 0 8px;
+  margin-bottom: 4px;
+}
+.rom-card .res-foot {
+  margin: 6px 8px 0;
+}
+.rom-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.rom-chip::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  box-sizing: border-box;
+  border-radius: 50%;
+}
+.rom-chip[data-tone="using"] {
+  color: var(--gold-text);
+}
+.rom-chip[data-tone="using"]::before {
+  background: currentColor;
+  animation: res-beat 1.2s ease-out infinite;
+}
+.rom-chip[data-tone="idle"] {
+  color: var(--ink-soft);
+}
+.rom-chip[data-tone="idle"]::before {
+  border: 1.5px solid currentColor;
+}
+.rom-sec {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.rom-sec:hover {
+  background: var(--tint-soft);
+}
+.rom-sec:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.rom-sec > span,
+.rom-sec > canvas {
+  display: block;
+}
+.rom-sec > .rom-sec-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.rom-chev {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  margin-left: auto;
+  align-self: center;
+  color: var(--ink-soft);
+  transition: transform 160ms ease;
+}
+.rom-sec:hover .rom-chev {
+  color: var(--gold-text);
+  transform: translateX(2px);
+}
+.rom-hero {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+.rom-hero b {
+  font: 400 2.625rem/1 var(--font-serif);
+  font-variant-numeric: lining-nums tabular-nums;
+  letter-spacing: -0.01em;
+}
+.rom-hero span {
+  color: var(--ink-soft);
+}
+.rom-sec > .rom-graph {
+  width: 100%;
+  height: 56px;
+  margin-top: 8px;
+  border-radius: 7px;
+  box-shadow: 0 0 0 1px var(--res-edge);
+}
+.rom-sec > .res-axis {
+  display: flex;
+  margin-bottom: 6px;
+}
+.rom-sec > .rom-win {
+  display: grid;
+  grid-template-columns: 1fr auto 3.6em;
+  column-gap: 14px;
+  row-gap: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.rom-win i {
+  font-style: normal;
+  font-size: 0.875rem;
+  color: var(--ink-faint);
+  text-align: right;
+}
+.rom-win span {
+  color: var(--ink-soft);
+}
+.rom-win b {
+  font-weight: 600;
+  text-align: right;
+}
+.rom-win b + span {
+  color: var(--ink);
+  text-align: right;
+}
+.rom-mem-title {
+  font-weight: 600;
+}
+.rom-mem-title i {
+  margin-left: 8px;
+  font-style: normal;
+  font-weight: 400;
+  color: var(--ink-soft);
+}
+.rom-mem-now {
+  margin-left: auto;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.rom-mem-now + .rom-chev {
+  margin-left: 0;
+}
+.rom-sec > .rom-mem-avg {
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0 8px;
+  color: var(--ink-soft);
+}
+.rom-spark {
+  width: 84px;
+  height: 24px;
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px var(--res-edge);
+}
+.rom-mem-avg b {
+  margin-left: auto;
+  margin-right: 20px;
+  font-weight: 500;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.rom-sec > .rom-apps {
+  display: grid;
+  grid-template-columns: max-content 1fr max-content;
+  column-gap: 12px;
+  align-items: center;
+  padding-top: 7px;
+  border-top: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+.rom-apps > * {
+  min-height: 1.5rem;
+  line-height: 1.5rem;
+}
+.rom-apps b {
+  font-weight: 500;
+  text-align: right;
+}
+.rom-apps .is-off,
+.rom-app-row.is-off,
+.rom-where-now.is-off {
+  color: var(--ink-soft);
+}
+.rom-apps .is-off + span + .is-off {
+  text-align: right;
+}
+.rom-bar {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--res-track);
+  overflow: hidden;
+}
+.rom-apps > .rom-bar {
+  min-height: 0;
+}
+.rom-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--res-ram);
+  transition: width 500ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.rom-where .rom-bar i,
+.rom-split .rom-bar i {
+  background: var(--rom-flow);
+}
+
+/* ---- the details sheet: right of the rail, which stays in view ---- */
+#rom-scrim {
+  position: fixed;
+  inset: 0 0 0 3.25rem;
+  z-index: 215;
+  background: var(--scrim);
+  animation: rom-fade 160ms ease both;
+}
+#rom-sheet {
+  position: fixed;
+  z-index: 220;
+  left: calc(3.25rem + 14px);
+  top: 16px;
+  bottom: 16px;
+  width: min(940px, calc(100vw - 3.25rem - 28px));
+  box-sizing: border-box;
+  container: rom-sheet / inline-size;
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  border: 1px solid var(--line-control);
+  background: var(--res-card-bg);
+  color: var(--ink);
+  font: 400 1rem/1.4 var(--font);
+  box-shadow: 0 28px 60px -20px var(--shadow-strong), 0 2px 6px -2px var(--shadow-weak);
+  transform-origin: 0 100%;
+  animation: rom-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+#rom-scrim[hidden],
+#rom-sheet[hidden],
+#rom-sheet [hidden] {
+  display: none;
+}
+/* Bust a bug over the details: they leave the report panel its room, as every other overlay
+   does (style.css, `body.bug-dock-open .overlay`: 488px, the panel's 452px and 18px either side),
+   so the readings stay beside it, not under it (the handover review at cbb69f6ab: at a 1400px
+   window the panel, x 930 to 1382, covered Highest readings ending at x 981). */
+body.bug-dock-open #rom-sheet {
+  width: min(940px, calc(100vw - 3.25rem - 14px - 488px));
+}
+@keyframes rom-in {
+  from { opacity: 0; transform: translateX(-10px) scale(0.985); }
+}
+@keyframes rom-fade {
+  from { opacity: 0; }
+}
+body.home-open :is(#rom-card, #rom-sheet, #rom-scrim) {
+  display: none !important;
+}
+.rom-sh-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 16px 16px 14px 24px;
+  border-bottom: 1px solid var(--line);
+}
+.rom-sh-head h2 {
+  margin: 0;
+  font: 400 1.75rem/1.15 var(--font-serif);
+}
+.rom-tabs,
+.rom-seg {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--tint-soft);
+}
+.rom-tabs {
+  margin-left: auto;
+}
+.rom-tabs button,
+.rom-seg button {
+  padding: 6px 18px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  font: 500 1rem/1.3 var(--font);
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+.rom-seg button {
+  padding: 4px 14px;
+}
+.rom-tabs button:hover,
+.rom-seg button:hover {
+  color: var(--ink);
+}
+.rom-tabs button[aria-selected="true"],
+.rom-seg button[aria-checked="true"] {
+  background: var(--gold);
+  color: var(--on-gold);
+}
+.rom-tabs button:focus-visible,
+.rom-seg button:focus-visible,
+.rom-close:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+.rom-close {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+.rom-close:hover {
+  background: var(--tint-soft);
+  color: var(--ink);
+}
+.rom-close svg {
+  width: 14px;
+  height: 14px;
+}
+/* Scrolls down only: nothing in the details may ever need a sideways scroll (the CEO, 2026-11-26:
+   "I'm currently seeing horizontal scrollbars when expanding memory or tokens info"). The top row
+   wraps, and every table column that holds a name can shrink. */
+.rom-sh-body {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 22px 24px 20px;
+}
+.rom-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 14px 24px;
+}
+.rom-big {
+  flex: none;
+  white-space: nowrap;
+}
+.rom-big b {
+  font: 400 4.25rem/0.9 var(--font-serif);
+  font-variant-numeric: lining-nums tabular-nums;
+  letter-spacing: -0.015em;
+}
+.rom-big > span {
+  margin-left: 12px;
+  font-size: 1.125rem;
+  color: var(--ink-soft);
+}
+.rom-big p {
+  margin: 10px 0 0;
+  color: var(--ink-soft);
+}
+.rom-ledger {
+  display: flex;
+  min-width: 0;
+  margin: 0 0 2px auto;
+}
+.rom-ledger div {
+  padding: 2px 0 2px 18px;
+  margin-left: 18px;
+  border-left: 1px solid var(--line);
+}
+.rom-ledger dt {
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+.rom-ledger dd {
+  margin: 0;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.rom-ledger dd b {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.rom-block {
+  margin-top: 20px;
+}
+.rom-block h3 {
+  margin: 0 0 6px;
+  font: 600 1rem/1.4 var(--font);
+}
+.rom-block .rom-h3-gap {
+  margin-top: 18px;
+}
+.rom-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.rom-block-head h3 {
+  margin: 0;
+}
+.rom-read {
+  margin: 4px 0 10px;
+  min-height: 1.4em;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+.rom-read b {
+  font-weight: 600;
+  color: var(--ink);
+}
+.rom-plot canvas {
+  display: block;
+  width: 100%;
+  height: 128px;
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px var(--res-edge);
+  cursor: crosshair;
+}
+.rom-plot canvas[data-s="m-graph"] {
+  height: 128px;
+}
+.rom-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1.85fr) minmax(0, 1fr);
+  column-gap: 32px;
+}
+.rom-where-head,
+.rom-where-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 3.75rem 5.5rem 4rem;
+  column-gap: 12px;
+  align-items: center;
+  font-variant-numeric: tabular-nums;
+}
+.rom-where-head {
+  color: var(--ink-soft);
+  padding-bottom: 4px;
+}
+.rom-where-head span + span + span,
+.rom-where-now,
+.rom-where-used {
+  text-align: right;
+}
+.rom-where-row {
+  padding: 6px 0 8px;
+  border-top: 1px solid var(--line);
+}
+.rom-where-chat b,
+.rom-where-chat i {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rom-where-chat b {
+  font-weight: 600;
+}
+.rom-where-chat i {
+  font-style: normal;
+  color: var(--ink-soft);
+}
+.rom-where-used {
+  font-weight: 600;
+}
+.rom-where-row .rom-bar {
+  grid-column: 1 / -1;
+  margin-top: 6px;
+}
+.rom-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 3.5rem max-content 2.75rem;
+  column-gap: 10px;
+  row-gap: 6px;
+  align-items: center;
+  font-variant-numeric: tabular-nums;
+}
+.rom-split b {
+  font-weight: 600;
+  text-align: right;
+}
+.rom-split > i {
+  font-style: normal;
+  color: var(--ink-soft);
+  text-align: right;
+}
+.rom-none {
+  margin: 0;
+  grid-column: 1 / -1;
+  color: var(--ink-soft);
+}
+.rom-app-head,
+.rom-app-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 150px 6rem 6rem 6rem;
+  column-gap: 14px;
+  align-items: center;
+  font-variant-numeric: tabular-nums;
+}
+.rom-app-head {
+  color: var(--ink-soft);
+  padding-bottom: 4px;
+}
+.rom-app-head span:first-child {
+  grid-column: 1 / 3;
+}
+.rom-app-head span:nth-child(n + 3),
+.rom-app-row > b,
+.rom-app-row > [data-c] {
+  text-align: right;
+}
+.rom-app-row {
+  min-height: 2.125rem;
+  border-top: 1px solid var(--line);
+}
+.rom-app-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rom-app-row > b {
+  font-weight: 600;
+}
+.rom-app-row.is-off > b {
+  font-weight: 400;
+}
+.rom-app-all {
+  border-top: 1px solid var(--line-control);
+  font-weight: 600;
+}
+.rom-app-row canvas {
+  width: 100%;
+  max-width: 150px;
+  height: 26px;
+  border-radius: 4px;
+}
+.rom-ico {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+}
+.rom-ico-r {
+  --mark-signal: var(--gold);
+  color: var(--ink);
+  background: var(--tint-soft);
+}
+.rom-app-row.is-off .rom-ico {
+  opacity: 0.55;
+}
+.rom-fine {
+  margin: 18px 0 0;
+  font-size: 0.875rem;
+  color: var(--ink-faint);
+}
+/* Narrow details (beside Bust a bug's panel in a smaller window, or at a larger text size): the
+   same readings, folded so none is cut off at the edge and no app or chat loses its name. The
+   wide app table needs 28px + a 9.5rem name + 150px + 3 x 6rem + 5 x 14px gaps, inside the body's
+   48px of padding and the sheet's 2px of border: 298px + 27.5rem, 738px at the default text size
+   and 958px at 150%, so the fold follows the text size. Folded, the tabs go under the title with
+   the close button kept at the top right; the figures above the graph wrap; the two token lists
+   stack; each chat's name has its own line over its model and figures; and each app's row is two
+   lines in three equal columns: its name over two of them and its two-minute line in the third,
+   then Now, Average and Highest under them, as the head says. */
+@container rom-sheet (width < calc(298px + 27.5rem)) {
+  .rom-sh-head {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: "title chip close" "tabs tabs tabs";
+    row-gap: 10px;
+  }
+  .rom-sh-head h2 {
+    grid-area: title;
+  }
+  .rom-sh-head .rom-chip {
+    grid-area: chip;
+    min-width: 0;
+    white-space: normal;
+  }
+  .rom-tabs {
+    grid-area: tabs;
+    justify-self: start;
+    margin-left: 0;
+  }
+  .rom-close {
+    grid-area: close;
+  }
+  .rom-big {
+    flex: 1 1 100%;
+    min-width: 0;
+    white-space: normal;
+  }
+  /* the figure and its unit touch in the markup: as its own box the unit may go under the
+     figure when both do not fit on one line */
+  .rom-big > span {
+    display: inline-block;
+  }
+  .rom-ledger {
+    flex-wrap: wrap;
+    row-gap: 8px;
+    margin-left: 0;
+  }
+  .rom-ledger div {
+    margin: 0 18px 0 0;
+  }
+  .rom-ledger div:first-child {
+    padding-left: 0;
+    border-left: 0;
+  }
+  .rom-block-head {
+    flex-wrap: wrap;
+    gap: 8px 14px;
+  }
+  .rom-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .rom-where-head span:first-child,
+  .rom-where-chat {
+    grid-column: 1 / -1;
+  }
+  .rom-where-head span:nth-child(2),
+  .rom-where-row > :nth-child(2) { grid-column: 2; }
+  .rom-where-head span:nth-child(3),
+  .rom-where-now { grid-column: 3; }
+  .rom-where-head span:nth-child(4),
+  .rom-where-used { grid-column: 4; }
+  .rom-app-head,
+  .rom-app-row {
+    grid-template-columns: 28px repeat(3, minmax(0, 1fr));
+    column-gap: 10px;
+    row-gap: 2px;
+  }
+  .rom-app-head span:nth-child(1) { grid-area: 1 / 1 / 2 / 4; }
+  .rom-app-head span:nth-child(2) { grid-area: 1 / 4; }
+  .rom-app-head span:nth-child(3) { grid-area: 2 / 2; }
+  .rom-app-head span:nth-child(4) { grid-area: 2 / 3; }
+  .rom-app-head span:nth-child(5) { grid-area: 2 / 4; }
+  .rom-app-row {
+    padding: 6px 0;
+  }
+  .rom-app-row > .rom-ico {
+    grid-area: 1 / 1 / 3 / 2;
+    align-self: start;
+  }
+  .rom-app-name {
+    grid-area: 1 / 2 / 2 / 4;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .rom-app-row canvas {
+    grid-area: 1 / 4;
+  }
+  .rom-app-row > [data-c="now"] { grid-area: 2 / 2; }
+  .rom-app-row > [data-c="avg"] { grid-area: 2 / 3; }
+  .rom-app-row > [data-c="peak"] { grid-area: 2 / 4; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rom-light,
+  .rom-chip::before,
+  #rom-sheet,
+  #rom-scrim {
+    animation: none !important;
+  }
+  .rom-bar i,
+  .rom-chev {
+    transition: none;
+  }
+}

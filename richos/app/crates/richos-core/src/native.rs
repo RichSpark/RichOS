@@ -1528,6 +1528,8 @@ struct ReaderState {
     chat_meter: Option<crate::chat_cache::LeaseMeter>,
     /// This lease's running token count, so each `result` adds what the frames never showed.
     token_tally: crate::quota::tokens::Tally,
+    /// The chat and seat My RichOS counts this lease's tokens under (round 109).
+    monitor_source: crate::my_richos::Source,
     /// The host context blocks this session's model still holds a full copy of
     /// ([`crate::given_context`]). Forgotten at the provider's `compact_boundary`, and when
     /// context rendered for an input was then not delivered (a refused preparation).
@@ -1810,6 +1812,7 @@ impl Default for ReaderState {
             token_sink: None,
             chat_meter: None,
             token_tally: Default::default(),
+            monitor_source: Default::default(),
             given_context: Default::default(),
         }
     }
@@ -2489,7 +2492,12 @@ impl NativeClient {
             let seat = match role { LeaseRole::Conversation => crate::chat_cache::Seat::Rich, LeaseRole::Work => crate::chat_cache::Seat::Team };
             Some(p.chat_readings.as_ref()?.lease(thread, seat))
         });
-        state.lock().unwrap().hold_records = profile.map(|p| (p.state.join("agent-hold").join("held"), session_id.clone()));
+        state.lock().unwrap().monitor_source = crate::my_richos::Source {
+            entity: profile.and_then(|p| p.work_scope.as_ref()).map(|(entity, _)| entity.clone()),
+            thread: profile.and_then(|p| p.work_scope.as_ref()).map(|(_, thread)| thread.clone()),
+            team: matches!(role, LeaseRole::Work),
+        };
+        state.lock().unwrap().hold_records =profile.map(|p| (p.state.join("agent-hold").join("held"), session_id.clone()));
         // **The reader is told which lease it is on, from the same pure function that set the
         // environment** — not from a second opinion about the role. See
         // `ReaderState::tool_residency`: without this the work lease raised the front desk's
@@ -2833,10 +2841,20 @@ impl NativeClient {
         // `result` the tokens no frame showed (`quota::tokens::Tally`): they are all spent on
         // this lease's account. The streamed `message_start`/`message_delta` events tell the
         // tally each message's final output, so the spend prices it on its own request (§118).
+        // While My RichOS is on (round 109) the same tally's answer is also counted there, for
+        // the chat and seat this lease works for; while it is off this is one atomic load.
         if ty == "assistant" || ty == "result" || ty == "stream_event" {
             let mut st = state.lock().unwrap();
-            if let Some((account, sink)) = st.token_sink.clone() {
-                for found in st.token_tally.frame(&msg, crate::util::now_millis()) { sink.push(&account, found); }
+            let sink = st.token_sink.clone();
+            let monitor = crate::my_richos::on();
+            if sink.is_some() || monitor {
+                let found = st.token_tally.frame(&msg, crate::util::now_millis());
+                if monitor {
+                    crate::my_richos::record(&st.monitor_source, msg.get("parent_tool_use_id").and_then(Value::as_str), ty == "result", &found);
+                }
+                if let Some((account, sink)) = sink {
+                    for found in found { sink.push(&account, found); }
+                }
             }
         }
 

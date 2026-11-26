@@ -54,6 +54,8 @@
     <link rel="stylesheet" href="context-meter.css" />
     <!-- Keep chat alive (rounds 81 to 83): the checkbox in each chat's header, beside the meter. -->
     <link rel="stylesheet" href="keep-alive.css" />
+    <!-- My RichOS (round 109): the square under My Mac, its card and its details. -->
+    <link rel="stylesheet" href="richos-monitor.css" />
     <!-- THE MARK'S GOLD, PER THEME.
 
          The wordmark below is two-tone by the approved treatment (round-8.1/v0 for dark,
@@ -220,6 +222,9 @@
           </button>
           <!-- The live Mac resources square (`resources.js` mounts it here). -->
           <div class="nr-res" id="nr-res"></div>
+          <!-- My RichOS (round 109): the activity monitor under My Mac and above the name circle,
+               only while "Show My RichOS" is on in Settings (`richos-monitor.js` mounts it here). -->
+          <div class="nr-res" id="nr-richos" hidden></div>
           <!-- His initials in a filled circle; with no name, a plain person outline (main.js
                `renderUserIdentity`). Always a button: it opens Settings, on the name field when
                there is no name. -->
@@ -1935,6 +1940,8 @@
     <!-- The live Mac resources square (round 47), on the navigation rail since round 58. After
          main.js, which starts its reads once the app is ready. -->
     <script src="resources.js"></script>
+    <!-- My RichOS (round 109), under the Mac square, only while "Show My RichOS" is on. -->
+    <script src="richos-monitor.js"></script>
     <script src="qr.js"></script>
     <script src="phone.js"></script>
     <script src="repositories.js"></script>

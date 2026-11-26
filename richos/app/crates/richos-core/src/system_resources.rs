@@ -226,6 +226,9 @@ mod platform {
         }
         Ok(value)
     }
+    pub(super) fn memory_total_bytes() -> Option<u64> {
+        sysctl(b"hw.memsize\0", 0u64).ok()
+    }
     pub(super) fn counters() -> Result<Counters, String> {
         unsafe {
             #[allow(deprecated)]
@@ -311,6 +314,14 @@ mod platform {
     pub(super) fn counters() -> Result<Counters, String> {
         Err("Live host resources are supported on macOS.".into())
     }
+    pub(super) fn memory_total_bytes() -> Option<u64> {
+        None
+    }
+}
+
+/// This Mac's installed memory (`hw.memsize`), the same counter the sampler's total is.
+pub fn memory_total_bytes() -> Option<u64> {
+    platform::memory_total_bytes()
 }
 
 pub fn endpoint(state: &Path) -> PathBuf {

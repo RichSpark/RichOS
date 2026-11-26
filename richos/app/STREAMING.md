@@ -903,6 +903,17 @@ no message text. `chat_context` returns the same shape for one chat as last read
 across relaunches. The figures are published whether or not the meter is shown;
 `get_context_meter` and `set_context_meter` read and save only the display preference.
 
+### My RichOS
+
+My RichOS (round 109) is read, never pushed: `richos_monitor` (`card`, `detail`) answers what the
+rail square and the card and the details when open, show now (`richos_core::my_richos::View`):
+the tokens the app's own leases used in the last minute, 5 and 15 minutes with their graphs, the
+chats, models and kinds over the stretch the details ask for and each suite app's memory with its
+2-minute figures. The window asks once a second while the switch is on and the window is visible.
+`get_richos_monitor` and `set_richos_monitor` read and save the switch and start or stop the
+counting and the memory reader with it: while it is off `richos_monitor` answers `on: false` and
+nothing is counted or read.
+
 
 ## RichPass file protection
 

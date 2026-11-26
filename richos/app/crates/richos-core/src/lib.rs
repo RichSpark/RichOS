@@ -339,6 +339,9 @@ pub mod writing;
 /// Shared live host resource observations for the desktop and its agents.
 pub mod suite_memory;
 pub mod system_resources;
+/// My RichOS (round 109): token speed from the app's own turns and each suite app's memory, live,
+/// only while its setting is on.
+pub mod my_richos;
 
 /// Host-scoped acceptance of dedicated engine channels.
 pub mod codex_bridge;

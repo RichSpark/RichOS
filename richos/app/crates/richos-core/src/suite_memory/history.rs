@@ -91,15 +91,7 @@ impl Recorder {
     pub fn tick(&mut self) -> Result<(), String> {
         let at_ms = crate::util::now_millis() as i64;
         let start = Instant::now();
-        let scribe = self
-            .0
-            .query_row(
-                "SELECT snapshot FROM richscribe_webkit WHERE id = 1 AND length(snapshot) <= 2048",
-                [],
-                |row| row.get::<_, Vec<u8>>(0),
-            )
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        let scribe = scribe_webkit_from(&self.0);
         let capture = mac::capture(scribe.as_ref());
         let capture_us = start.elapsed().as_micros() as i64;
         self.record(at_ms, capture.as_ref().ok(), capture_us)
@@ -265,6 +257,22 @@ fn latest(db: &Connection) -> rusqlite::Result<Option<Latest>> {
         },
     )
     .optional()
+}
+
+fn scribe_webkit_from(db: &Connection) -> Option<mac::ScribeWebKit> {
+    db.query_row(
+        "SELECT snapshot FROM richscribe_webkit WHERE id = 1 AND length(snapshot) <= 2048",
+        [],
+        |row| row.get::<_, Vec<u8>>(0),
+    )
+    .ok()
+    .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+}
+
+/// The WebKit services RichScribe last published, read without creating or writing anything:
+/// what a live reading needs to put RichScribe's webviews on RichScribe, not on RichOS.
+pub(super) fn richscribe_webkit(state_root: &Path) -> Option<mac::ScribeWebKit> {
+    scribe_webkit_from(&reader(state_root).ok()?)
 }
 
 fn reader(state_root: &Path) -> rusqlite::Result<Connection> {

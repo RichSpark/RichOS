@@ -11,6 +11,8 @@ mod question_host;
 mod swearmeter_host;
 /// The context meter and "Keep chat alive" (CEO, 2026-11-16, round 83), for the window.
 mod chat_cache_host;
+/// My RichOS, the activity monitor under My Mac (CEO, 2026-11-26, round 109), for the window.
+mod my_richos_host;
 mod peer_messages;
 mod activation;
 mod lifecycle;
@@ -4342,6 +4344,7 @@ fn main() {
                 question_host::start(app.clone());
                 swearmeter_host::start(app.clone());
                 rich_files_host::start(app.clone());
+                my_richos_host::start(app.clone());
                 #[cfg(target_os = "macos")]
                 {
                     app.manage(Arc::new(writing_host::Host::default()));
@@ -4860,6 +4863,10 @@ fn main() {
             chat_cache_host::set_keep_chat_alive,
             get_resources_view,
             set_resources_view,
+            // --- My RichOS, under My Mac (CEO 2026-11-26, round 109) — appended ---
+            my_richos_host::get_richos_monitor,
+            my_richos_host::set_richos_monitor,
+            my_richos_host::richos_monitor,
             // --- improved Rich and Stu instructions reach every user (CEO 2026-10-22) — appended ---
             instructions_update_question,
             decline_instructions_update,

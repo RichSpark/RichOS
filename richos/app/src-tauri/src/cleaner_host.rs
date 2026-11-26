@@ -18,7 +18,7 @@ use tauri::{AppHandle, Emitter, Manager};
 mod batch;
 mod folders;
 const EVENT: &str = "rich://cleaner";
-const PANEL: &str = "cleaner-panel";
+pub(crate) const PANEL: &str = "cleaner-panel";
 struct Active {
     id: String,
     target: Option<Value>,

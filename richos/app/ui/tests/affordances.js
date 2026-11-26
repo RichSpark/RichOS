@@ -690,6 +690,16 @@ const FIXTURES = {
     await page.waitForFunction(() => !document.getElementById("set-ctxmeter").checked);
     return page;
   },
+  async "richos-monitor-refused"(browser) {
+    const page = await openApp(browser);
+    await page.click("#set-btn");
+    await page.waitForSelector("#set-richosmon");
+    await page.evaluate(() => { window.__overrides.set_richos_monitor = {reject:true,value:"Fixture disk refused the preference"}; });
+    await page.click("#set-richosmon");
+    await page.waitForFunction(() => document.getElementById("bug-toast").textContent.includes("The My RichOS setting could not be saved."));
+    await page.waitForFunction(() => !document.getElementById("set-richosmon").checked);
+    return page;
+  },
   async "keep-alive-refused"(browser) {
     const page = await openApp(browser);
     await page.evaluate(() => openThread("general"));
@@ -1627,7 +1637,7 @@ const TEXT_RENDERING_FIXTURES = new Set([
   "richglance-rail-page", "richglance-rail-delete", "richbrief-rail-notes",
   "richglance-shortcut-collision",
   "swearmeter-preference-refused", "swearmeter-retry-refused", "swearmeter-card-unavailable",
-  "context-meter-refused", "keep-alive-refused",
+  "context-meter-refused", "richos-monitor-refused", "keep-alive-refused",
   "resources-keyboard",
   "question-edit", "question-saved", "question-retry", "question-deleted", "question-storage",
   "connect-setup", "connect-setup-unreadable", "connect-helper-missing", "connect-history-full",
