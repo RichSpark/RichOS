@@ -558,3 +558,51 @@ struct NoFocusRing: ViewModifier {
         }
     }
 }
+
+/// Whether the file pane holds keyboard focus on macOS 13, where SwiftUI's focusable pane would
+/// draw a ring around itself.
+@MainActor
+final class PaneKeyFocus: ObservableObject {
+    @Published fileprivate(set) var focused = false
+    fileprivate weak var view: NSView?
+
+    func take() {
+        guard let view, let window = view.window, window.firstResponder !== view else { return }
+        window.makeFirstResponder(view)
+    }
+}
+
+/// An AppKit view behind the file pane that takes keyboard focus and draws no focus ring.
+struct PaneKeyFocusSink: NSViewRepresentable {
+    let focus: PaneKeyFocus
+
+    func makeNSView(context: Context) -> Sink {
+        let sink = Sink()
+        sink.focus = focus
+        focus.view = sink
+        return sink
+    }
+
+    func updateNSView(_ sink: Sink, context: Context) {
+        sink.focus = focus
+        focus.view = sink
+    }
+
+    final class Sink: NSView {
+        weak var focus: PaneKeyFocus?
+
+        override var acceptsFirstResponder: Bool { true }
+        override var focusRingType: NSFocusRingType { get { .none } set {} }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func becomeFirstResponder() -> Bool {
+            MainActor.assumeIsolated { focus?.focused = true }
+            return true
+        }
+
+        override func resignFirstResponder() -> Bool {
+            MainActor.assumeIsolated { focus?.focused = false }
+            return true
+        }
+    }
+}

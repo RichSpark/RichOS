@@ -60,6 +60,7 @@ struct BrowserView: View {
     @State private var renaming = InlineRename()
     @State private var quickInfo = ItemQuickInfo()
     @StateObject private var folderTree = FolderTreeState()
+    @StateObject private var paneKeyFocus = PaneKeyFocus()
     /// Changes on every file change made here, on Refresh and when RichFiles comes back to the
     /// front, so the sidebar asks each folder again whether it holds folders (one made in
     /// Finder gets its arrow) and reloads the open ones.
@@ -189,7 +190,7 @@ struct BrowserView: View {
                 model.selection.moveCursor(to: last.url, scrolling: true)
                 model.selection.flash(duplicates.items.map(\.url))
             }
-            focus = .items
+            focusItems()
         }
         .background {
             observeSelection { selection in
@@ -677,7 +678,7 @@ struct BrowserView: View {
         }
     }
 
-    private var itemPane: some View {
+    private var itemPaneContent: some View {
         ZStack(alignment: .top) {
             Group {
                 if model.isDisconnected {
@@ -730,7 +731,7 @@ struct BrowserView: View {
             // existing group. A normal click can narrow it on release.
             guard !modifiers.isEmpty || !model.selected.contains(url) else { return false }
             workspace.select(side)
-            if focus != .items { focus = .items }
+            focusItems()
             select(entry, modifiers: modifiers)
             return true
         }, click: { start, end, event, wasKey in
@@ -740,7 +741,7 @@ struct BrowserView: View {
                   let url = rowAt(start), rowAt(end) == url,
                   let entry = model.entries.first(where: { $0.url == url }) else { return false }
             workspace.select(side)
-            if focus != .items { focus = .items }
+            focusItems()
             if event.clickCount == 2 {
                 renaming.cancelArm()
                 select(entry, modifiers: [])
@@ -764,14 +765,14 @@ struct BrowserView: View {
             workspace.select(side)
             select(entry, modifiers: .control)
             if model.viewMode == .details { detailsViewport.focusTable() }
-            else { focus = .items }
+            else { focusItems() }
             return true
         }, blankClick: { point in
             // Catalog entry 6: a click on empty space deselects; the last item keeps only its
             // thin keyboard-focus outline.
             guard model.viewMode != .details, canSelectFromBlankSpace(at: point) else { return }
             workspace.select(side)
-            if focus != .items { focus = .items }
+            focusItems()
             if !model.selected.isEmpty { model.selected = [] }
         }, secondaryPress: { point in
             // Catalog entry 8: a right-click selects the item before its menu opens, so the menu
@@ -783,12 +784,12 @@ struct BrowserView: View {
                 workspace.select(side)
                 if !model.selected.contains(url) { select(entry, modifiers: []) }
                 else { model.selection.moveCursor(to: url) }
-                if focus != .items { focus = .items }
+                focusItems()
                 return rowFrames[url]
             } else if canSelectFromBlankSpace(at: point) {
                 workspace.select(side)
                 if !model.selected.isEmpty { model.selected = [] }
-                if focus != .items { focus = .items }
+                focusItems()
             }
             return nil
         }, anyPress: { inText in
@@ -815,16 +816,39 @@ struct BrowserView: View {
                 })
             }
             .onEnded { _ in
-                if selectionRectangle != nil && model.viewMode != .details { focus = .items }
+                if selectionRectangle != nil && model.viewMode != .details { focusItems() }
                 selectionRectangle = nil
             })
         .onDrop(of: [UTType.fileURL.identifier, BrowserDragSelection.type], delegate: BrowserDropTarget(
             proposal: proposeDrop, exited: { dropOperation = nil }, receive: receiveDrop
         ))
         .contextMenu { folderMenu }
-        .focusable(model.viewMode != .details)
-        .modifier(NoFocusRing())
-        .focused($focus, equals: .items)
+    }
+
+    /// The file pane takes keyboard focus but draws no ring or border around itself (catalog
+    /// entry 5). macOS 14 and later turn SwiftUI's ring off; macOS 13 has no such switch, so
+    /// there the pane's focus is an AppKit view that draws no ring.
+    @ViewBuilder
+    private var itemPane: some View {
+        if #available(macOS 14.0, *) {
+            itemPaneContent
+                .focusable(model.viewMode != .details)
+                .focusEffectDisabled()
+                .focused($focus, equals: .items)
+        } else {
+            itemPaneContent.background(PaneKeyFocusSink(focus: paneKeyFocus))
+        }
+    }
+
+    private var itemsHaveFocus: Bool { focus == .items || paneKeyFocus.focused }
+
+    private func focusItems() {
+        if #available(macOS 14.0, *) {
+            if focus != .items { focus = .items }
+        } else {
+            if focus != nil { focus = nil }
+            paneKeyFocus.take()
+        }
     }
 
     /// The views whose items show their name with `nameLabel`, which can turn into the inline box.
@@ -1195,7 +1219,7 @@ struct BrowserView: View {
 
     private func selectable<Content: View>(_ entry: FileEntry, @ViewBuilder content: () -> Content) -> some View {
         let cut = actions.cutURLs.contains { $0.path == entry.url.path }
-        let itemsFocused = focus == .items
+        let itemsFocused = itemsHaveFocus
         let location = model.searchActive ? entry.url.deletingLastPathComponent().path : ""
         let outline = RoundedRectangle(cornerRadius: 5)
         // Catalog entries 4, 6 and 7: one light fill and one thin line for a selected item, the
@@ -1733,7 +1757,7 @@ struct BrowserView: View {
             if quiet { cancelInlineRename() } else { renaming.problem = message }
         case .rename(let name):
             renaming.end()
-            focus = .items
+            focusItems()
             let folder = model.folder
             actions.rename(source, to: name) { moved in
                 folderTree.move(from: item, to: moved.url)
@@ -1747,7 +1771,7 @@ struct BrowserView: View {
 
     private func cancelInlineRename() {
         renaming.end()
-        focus = .items
+        focusItems()
     }
 
     private func checksum(_ entry: FileEntry) {
