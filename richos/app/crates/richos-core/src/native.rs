@@ -2849,7 +2849,7 @@ impl NativeClient {
             if sink.is_some() || monitor {
                 let found = st.token_tally.frame(&msg, crate::util::now_millis());
                 if monitor {
-                    crate::my_richos::record(&st.monitor_source, msg.get("parent_tool_use_id").and_then(Value::as_str), &found);
+                    crate::my_richos::record(&st.monitor_source, msg.get("parent_tool_use_id").and_then(Value::as_str), ty == "result", &found);
                 }
                 if let Some((account, sink)) = sink {
                     for found in found { sink.push(&account, found); }

@@ -357,6 +357,13 @@ fn footprint(identity: Identity, uid: libc::uid_t) -> Option<i64> {
     i64::try_from(unsafe { usage.assume_init() }.ri_phys_footprint).ok()
 }
 
+/// One process's physical footprint by pid, this user's only, read the way a capture reads it.
+pub(super) fn footprint_of(pid: i32) -> Option<i64> {
+    let uid = unsafe { libc::geteuid() };
+    let (identity, _) = process_info(pid, uid)?;
+    footprint(identity, uid).filter(|bytes| *bytes > 0)
+}
+
 fn aggregate(
     inventory: &BTreeMap<i32, Process>,
     mut footprint: impl FnMut(Identity) -> Option<i64>,

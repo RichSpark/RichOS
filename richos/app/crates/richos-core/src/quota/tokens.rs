@@ -312,8 +312,11 @@ impl Track {
 /// the two cache writes apart, the effort, fast mode and US-only inference. `late`: how many of
 /// `tokens` only a lease's `result` frame showed ([`Tally`]; 0 for anything a frame or a
 /// transcript row showed), which the live speed counts at most [`LATE_POINTS_MAX`] of.
+/// `grew`: what this copy added to the message, bucket by bucket (a first copy is all of it), so a
+/// reader that starts counting mid-message (My RichOS, turned on during a turn) counts only what
+/// arrived since.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Use { pub id: String, pub at: u64, pub model: String, pub tokens: u64, pub output: u64, pub request: crate::spend::Request, pub late: u64 }
+pub struct Use { pub id: String, pub at: u64, pub model: String, pub tokens: u64, pub output: u64, pub request: crate::spend::Request, pub late: u64, pub grew: crate::spend::Buckets }
 
 /// The usage of one assistant `message` (a transcript row's or a stream frame's), stamped
 /// `at`; `row` is the frame or transcript row around it (its `effort`). `None` without usage,
@@ -327,7 +330,8 @@ pub fn message_use(message: &Value, row: &Value, at: u64) -> Option<Use> {
     let id = message["id"].as_str().or(row["uuid"].as_str())?.to_string();
     let model = message["model"].as_str().unwrap_or("unknown").to_string();
     let request = crate::spend::Request::of_message(message, row, at)?;
-    Some(Use { id, at, model, tokens, output, request, late: 0 })
+    let grew = request.buckets;
+    Some(Use { id, at, model, tokens, output, request, late: 0, grew })
 }
 
 /// The most messages a sink holds before the quota service takes them (it takes them every
@@ -447,7 +451,7 @@ impl Tally {
             if !open.contains(&kept.id) { open.push(kept.id.clone()); }
         }
         Some(Use { id: kept.id.clone(), at: kept.at, model: kept.model.clone(), tokens: kept.buckets.total(),
-            output: kept.buckets.output, request: kept, late: 0 })
+            output: kept.buckets.output, request: kept, late: 0, grew })
     }
 
     fn finalize(&mut self, base: &str, id: &str) {
@@ -552,7 +556,7 @@ impl Tally {
             correction: true,
             unmatched: cards.len() > 1,
         };
-        Use { id, at: request.at, model: model.to_string(), tokens: rest.total(), output: 0, request, late: rest.total() }
+        Use { id, at: request.at, model: model.to_string(), tokens: rest.total(), output: 0, request, late: rest.total(), grew: *rest }
     }
 }
 
@@ -1219,7 +1223,7 @@ mod tests {
         let mut t = Track::with_episodes(vec![episode(1., &[("claude-opus-5-5", 30_000_000)]), episode(1., &[("claude-opus-5-5", 30_000_000)])]);
         let now = 1_000_000;
         let use_of = |id: &str, tokens: u64, late: u64| Use { id: id.into(), at: now - 10_000, model: "claude-opus-5-5".into(),
-            tokens, output: 0, request: crate::spend::Request::default(), late };
+            tokens, output: 0, request: crate::spend::Request::default(), late, grew: Default::default() };
         t.add_use(&use_of("streamed", 30_000_000, 0));
         t.add_use(&use_of("lease:result-1:claude-opus-5-5", 90_000_000, 90_000_000));
         let per_minute = t.speed(now) * LIVE_MS as f64;

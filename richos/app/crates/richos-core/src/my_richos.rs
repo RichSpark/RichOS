@@ -66,14 +66,26 @@ pub struct Source {
     pub team: bool,
 }
 
-/// Count what one frame's tally found (`quota::tokens::Tally::frame`), for `source`. `worker` is
-/// the frame's `parent_tool_use_id`: a helper's frames carry their own, the lead's none.
-pub fn record(source: &Source, worker: Option<&str>, uses: &[Use]) {
+/// Count what one frame's tally found (`quota::tokens::Tally::frame`), for `source`: each use's
+/// `grew`, what that copy added (so turning this on mid-message counts only what arrives after).
+/// `worker` is the frame's `parent_tool_use_id`: a helper's frames carry their own, the lead's
+/// none. A `result` frame (`from_result`) names no worker: what it adds to a message stays with the
+/// worker that message came from, and a remainder no message owns is nobody's (it counts as
+/// tokens, never as one more worker).
+pub fn record(source: &Source, worker: Option<&str>, from_result: bool, uses: &[Use]) {
     if uses.is_empty() || !on() {
         return;
     }
     let now = crate::util::now_millis();
-    lock(&shared().tokens).record(source, worker, uses, now);
+    lock(&shared().tokens).record(source, worker, from_result, uses, now);
+}
+
+/// The suite apps that run inside RichOS's own processes, by pid, as the host last found them
+/// (`suite_memory::Hosted`): read with the rest every two seconds while this is on.
+pub fn set_hosted(hosted: Vec<crate::suite_memory::Hosted>) {
+    if on() {
+        *lock(&shared().hosted) = hosted;
+    }
 }
 
 // ---- turning it on and off -------------------------------------------------------------------
@@ -81,6 +93,7 @@ pub fn record(source: &Source, worker: Option<&str>, uses: &[Use]) {
 struct Shared {
     tokens: Mutex<Tokens>,
     memory: Mutex<Memory>,
+    hosted: Mutex<Vec<crate::suite_memory::Hosted>>,
     /// The sampler's generation: a thread whose generation is no longer this one ends.
     sampler: Mutex<u64>,
     wake: Condvar,
@@ -91,6 +104,7 @@ fn shared() -> &'static Shared {
     SHARED.get_or_init(|| Shared {
         tokens: Mutex::new(Tokens::default()),
         memory: Mutex::new(Memory::default()),
+        hosted: Mutex::new(Vec::new()),
         sampler: Mutex::new(0),
         wake: Condvar::new(),
     })
@@ -114,6 +128,7 @@ pub fn set_on(next: bool, state_root: &Path) {
     let now = crate::util::now_millis();
     *lock(&s.tokens) = Tokens { since: now, ..Tokens::default() };
     *lock(&s.memory) = Memory::default();
+    lock(&s.hosted).clear();
     s.wake.notify_all();
     if next {
         start_sampler(*generation, state_root.to_path_buf());
@@ -139,7 +154,8 @@ fn start_sampler(generation: u64, state_root: PathBuf) {
         let total = crate::system_resources::memory_total_bytes();
         loop {
             let now = crate::util::now_millis();
-            let reading = live.sample(now as i64);
+            let hosted = lock(&s.hosted).clone();
+            let reading = live.sample(now as i64, &hosted);
             {
                 // Published only by the generation that took it: a reading taken just before the
                 // switch went off must not reappear in a fresh history.
@@ -232,11 +248,14 @@ struct Tokens {
     index: HashMap<Key, u32>,
     recent: VecDeque<Event>,
     minutes: VecDeque<MinuteRow>,
-    /// Each message counted so far, by id: when it was last seen and what it has added.
-    seen: HashMap<String, (u64, Buckets)>,
-    seen_pruned: u64,
+    /// Each message counted so far, by id: when it was last seen and the worker it came from.
+    workers: HashMap<String, (u64, u64)>,
+    workers_pruned: u64,
     last: Option<u64>,
 }
+
+/// Tokens a `result` frame added that no message owns: counted, never one more worker.
+const NOBODY: u64 = u64::MAX;
 
 /// The model's family as the screen says it.
 fn family_word(model: &str) -> &'static str {
@@ -250,21 +269,12 @@ fn family_word(model: &str) -> &'static str {
 }
 const FAMILIES: [&str; 5] = ["Fable", "Opus", "Sonnet", "Haiku", "Other"];
 
-fn max_each(a: &Buckets, b: &Buckets) -> Buckets {
-    Buckets {
-        input: a.input.max(b.input),
-        output: a.output.max(b.output),
-        cache_read: a.cache_read.max(b.cache_read),
-        write_5m: a.write_5m.max(b.write_5m),
-        write_1h: a.write_1h.max(b.write_1h),
-    }
-}
-
+/// The lead is 0; a helper is a hash of its `parent_tool_use_id` (never 0, never [`NOBODY`]).
 fn worker_id(worker: Option<&str>) -> u64 {
     worker.map_or(0, |w| {
         let mut h = DefaultHasher::new();
         w.hash(&mut h);
-        h.finish() | 1
+        (h.finish() >> 1) | 1
     })
 }
 
@@ -280,17 +290,21 @@ impl Tokens {
         at
     }
 
-    fn record(&mut self, source: &Source, worker: Option<&str>, uses: &[Use], now: u64) {
-        let worker = worker_id(worker);
+    fn record(&mut self, source: &Source, frame_worker: Option<&str>, from_result: bool, uses: &[Use], now: u64) {
         for found in uses {
-            let request = &found.request;
-            let had = self.seen.get(&request.id).map(|(_, b)| *b).unwrap_or_default();
-            let grew = had.beyond(&request.buckets);
+            // What this copy added, as the tally measured it against everything it had counted,
+            // also before this was turned on.
+            let grew = found.grew;
             if grew.total() == 0 {
                 continue;
             }
-            self.seen.insert(request.id.clone(), (now, max_each(&had, &request.buckets)));
-            let key = self.key(source, &request.model);
+            let worker = if from_result {
+                self.workers.get(&found.id).map_or(NOBODY, |(_, w)| *w)
+            } else {
+                worker_id(frame_worker)
+            };
+            self.workers.insert(found.id.clone(), (now, worker));
+            let key = self.key(source, &found.request.model);
             self.recent.push_back(Event { at: now, key, worker, buckets: grew });
             let minute = now / MINUTE_MS;
             match self.minutes.iter_mut().rev().take_while(|row| row.minute == minute).find(|row| row.key == key) {
@@ -309,9 +323,9 @@ impl Tokens {
         while self.minutes.front().is_some_and(|r| (r.minute + 1) * MINUTE_MS + DAY_MS <= now) {
             self.minutes.pop_front();
         }
-        if now.saturating_sub(self.seen_pruned) >= MINUTE_MS {
-            self.seen_pruned = now;
-            self.seen.retain(|_, (at, _)| now.saturating_sub(*at) < SEEN_MS);
+        if now.saturating_sub(self.workers_pruned) >= MINUTE_MS {
+            self.workers_pruned = now;
+            self.workers.retain(|_, (at, _)| now.saturating_sub(*at) < SEEN_MS);
         }
     }
 
@@ -320,28 +334,32 @@ impl Tokens {
         self.recent.iter().rev().take_while(|e| now.saturating_sub(e.at) < span_ms).map(|e| e.buckets.total()).sum()
     }
 
-    /// `n` bars covering the last `span_s` seconds, oldest first, each the tokens in its slice.
-    /// The slices are aligned to the clock, so a bar never changes once its slice is over, and
-    /// the last one holds the current second. Up to 15 minutes from each request as it landed;
-    /// longer from the per-minute rows (every longer view's slice is whole minutes).
+    /// Bars covering the last `span_s` seconds, oldest first, each the tokens in its slice of
+    /// `span_s / n` seconds. The slices are aligned to the clock, so a bar never changes once its
+    /// slice is over and the last one holds the current second; so the stretch is `n` bars, or
+    /// `n + 1` when it starts inside a slice: the oldest, partial one is kept, and the bars add up
+    /// to exactly what [`Tokens::sources`] counts over the same stretch. Up to 15 minutes from
+    /// each request as it landed; longer from the per-minute rows (every longer view's slice is
+    /// whole minutes).
     fn series(&self, now: u64, span_s: u64, n: u64) -> Series {
         let n = n.clamp(1, 400);
         let w = (span_s / n).max(1);
-        let now_s = now / 1000;
-        let edge = (now_s / w + 1) * w;
-        let first = edge.saturating_sub(n * w);
-        let mut bars = vec![0u64; n as usize];
+        let span_ms = span_s * 1000;
+        let edge = (now / 1000 / w + 1) * w;
+        let first = (now.saturating_sub(span_ms) / 1000 / w) * w;
+        let mut bars = vec![0u64; ((edge - first) / w) as usize];
         let mut put = |sec: u64, tokens: u64| {
             if sec >= first && sec < edge {
                 bars[((sec - first) / w) as usize] += tokens;
             }
         };
-        if span_s * 1000 <= RECENT_MS {
-            for e in &self.recent {
+        if span_ms <= RECENT_MS {
+            for e in self.recent.iter().filter(|e| now.saturating_sub(e.at) < span_ms) {
                 put(e.at / 1000, e.buckets.total());
             }
         } else {
-            for r in &self.minutes {
+            let from = now.saturating_sub(span_ms) / MINUTE_MS;
+            for r in self.minutes.iter().filter(|r| r.minute >= from) {
                 put(r.minute * 60, r.buckets.total());
             }
         }
@@ -385,7 +403,9 @@ impl Tokens {
             let k = &self.keys[e.key as usize];
             let acc = chats.entry(&k.source).or_default();
             acc.per_min += e.buckets.total();
-            acc.workers.insert(e.worker);
+            if e.worker != NOBODY {
+                acc.workers.insert(e.worker);
+            }
             *acc.minute_by_model.entry(k.model).or_default() += e.buckets.total();
         }
         let top = |m: &HashMap<&'static str, u64>| m.iter().max_by_key(|(name, n)| (**n, std::cmp::Reverse(**name))).map(|(name, _)| *name);
@@ -434,7 +454,7 @@ impl Tokens {
             m1: self.used(now, 60_000),
             m5: self.used(now, 300_000),
             m15: self.used(now, 900_000),
-            tile: self.series(now, 60, 10).bars,
+            tile: { let bars = self.series(now, 60, 10).bars; bars[bars.len().saturating_sub(10)..].to_vec() },
             scale: self.series(now, 900, 150).bars.into_iter().max().unwrap_or(0),
             card: if card { self.series(now, 900, 60).bars } else { Vec::new() },
             detail,
@@ -497,7 +517,7 @@ pub struct TokensView {
 
 // ---- memory ------------------------------------------------------------------------------------
 
-const APPS: usize = 9;
+const APPS: usize = crate::suite_memory::LIVE_APPS;
 
 #[derive(Clone, Copy)]
 struct Reading {
@@ -589,7 +609,7 @@ impl Memory {
             .enumerate()
             .map(|(i, (id, name))| {
                 let line = self.line(now, |r| (r.bytes[i] >= 0).then_some(r.bytes[i]));
-                AppView { id, name, processes: latest.map_or(0, |r| r.processes[i] as i64), line }
+                AppView { id, name, processes: latest.map_or(0, |r| r.processes[i] as i64), within: crate::suite_memory::within(id), line }
             })
             .collect();
         MemoryView {
@@ -623,6 +643,8 @@ pub struct AppView {
     pub name: &'static str,
     /// Its processes now: 0 is not open.
     pub processes: i64,
+    /// The app whose figure holds this one's memory (a page in RichOS's window): `richos`.
+    pub within: Option<&'static str>,
     #[serde(flatten)]
     pub line: AppLine,
 }
@@ -660,6 +682,7 @@ mod tests {
             output,
             request: Request { id: id.into(), model: model.into(), buckets, ..Request::default() },
             late: 0,
+            grew: buckets,
         }
     }
 
@@ -669,18 +692,35 @@ mod tests {
 
     const T0: u64 = 1_794_996_000_000; // a whole quarter hour
 
+    // ---- frames as a lease streams them, through the lease's own tally ----------------------
+    fn assistant(id: &str, model: &str, input: u64, output: u64, cache_read: u64, helper: Option<&str>) -> serde_json::Value {
+        serde_json::json!({"type": "assistant", "parent_tool_use_id": helper,
+            "message": {"id": id, "model": model, "usage": {"input_tokens": input, "output_tokens": output, "cache_read_input_tokens": cache_read}}})
+    }
+    fn result(model: &str, input: u64, output: u64, cache_read: u64) -> serde_json::Value {
+        serde_json::json!({"type": "result", "session_id": "lease", "modelUsage": {model: {
+            "inputTokens": input, "outputTokens": output, "cacheReadInputTokens": cache_read, "cacheCreationInputTokens": 0}}})
+    }
+    /// What native.rs does with one frame while the monitor is on.
+    fn feed(t: &mut Tokens, tally: &mut crate::quota::tokens::Tally, source: &Source, frame: serde_json::Value, now: u64) {
+        let found = tally.frame(&frame, now);
+        t.record(source, frame["parent_tool_use_id"].as_str(), frame["type"] == "result", &found, now);
+    }
+
     #[test]
     fn counting_from_turns_adds_what_each_copy_of_a_message_adds() {
         let mut t = Tokens::default();
+        let mut lead = crate::quota::tokens::Tally::default();
         let rich = chat("general", false);
-        // a message streamed at its start, then finished larger, then its `result` remainder
-        t.record(&rich, None, &[use_of("msg_1", "claude-fable-5-1", 10, 4, 20_000)], T0);
-        t.record(&rich, None, &[use_of("msg_1", "claude-fable-5-1", 10, 152, 20_000)], T0 + 2_000);
-        t.record(&rich, None, &[use_of("msg_1", "claude-fable-5-1", 10, 152, 20_000)], T0 + 2_500);
+        // a message streamed at its start, then again larger, then once more unchanged
+        feed(&mut t, &mut lead, &rich, assistant("msg_1", "claude-fable-5-1", 10, 4, 20_000, None), T0);
+        feed(&mut t, &mut lead, &rich, assistant("msg_1", "claude-fable-5-1", 10, 152, 20_000, None), T0 + 2_000);
+        feed(&mut t, &mut lead, &rich, assistant("msg_1", "claude-fable-5-1", 10, 152, 20_000, None), T0 + 2_500);
         let now = T0 + 3_000;
         assert_eq!(t.used(now, 60_000), 20_162, "the message counts once, at its final size");
         // a second message on another chat's team, by a helper
-        t.record(&chat("acme-deal", true), Some("toolu_a"), &[use_of("msg_2", "claude-opus-5-5", 100, 50, 0)], now);
+        let mut team = crate::quota::tokens::Tally::default();
+        feed(&mut t, &mut team, &chat("acme-deal", true), assistant("msg_2", "claude-opus-5-5", 100, 50, 0, Some("toolu_a")), now);
         assert_eq!(t.used(now, 60_000), 20_312);
         let (rows, models, kinds) = t.sources(now, 900);
         assert_eq!(rows.len(), 2);
@@ -690,20 +730,81 @@ mod tests {
         assert_eq!(kinds.iter().map(|k| k.tokens).collect::<Vec<_>>(), vec![20_000, 0, 110, 202]);
     }
 
+    /// The review of 1f3073bad, finding 1: turned on during a turn, the next copy of a message the
+    /// lease was already streaming adds only what that copy added, not the whole message again.
+    #[test]
+    fn turned_on_mid_turn_counts_only_what_arrives_after() {
+        let mut lead = crate::quota::tokens::Tally::default();
+        let rich = chat("general", false);
+        // streamed while the monitor was off: the tally counted it, the monitor did not exist
+        let off = lead.frame(&assistant("msg_1", "claude-fable-5-1", 50, 10, 200_000, None), T0);
+        assert_eq!(off.len(), 1);
+        // turned on 70 s later; the same message grows by 40 output tokens
+        let mut t = Tokens { since: T0 + 70_000, ..Tokens::default() };
+        feed(&mut t, &mut lead, &rich, assistant("msg_1", "claude-fable-5-1", 50, 50, 200_000, None), T0 + 71_000);
+        assert_eq!(t.used(T0 + 71_000, 60_000), 40, "the tokens from before the switch were counted");
+    }
+
+    /// The review of 1f3073bad, finding 3: what a `result` adds to a helper's message stays that
+    /// helper's, and a remainder no message owns adds tokens but no worker.
+    #[test]
+    fn a_result_keeps_the_worker_a_message_came_from() {
+        let mut team = crate::quota::tokens::Tally::default();
+        let mut t = Tokens::default();
+        let s = chat("acme-deal", true);
+        feed(&mut t, &mut team, &s, assistant("msg_h", "claude-opus-5-5", 100, 4, 0, Some("toolu_a")), T0);
+        // the lease's running total shows 5 more output tokens than the frames did
+        feed(&mut t, &mut team, &s, result("claude-opus-5-5", 100, 9, 0), T0 + 1_000);
+        let (rows, ..) = t.sources(T0 + 2_000, 900);
+        assert_eq!((rows[0].tokens, rows[0].per_min, rows[0].working), (109, 109, 1), "the result made a second worker");
+        // two open messages: the next remainder belongs to neither
+        feed(&mut t, &mut team, &s, assistant("msg_x", "claude-opus-5-5", 10, 1, 0, Some("toolu_b")), T0 + 3_000);
+        feed(&mut t, &mut team, &s, assistant("msg_y", "claude-opus-5-5", 10, 1, 0, Some("toolu_b")), T0 + 3_100);
+        feed(&mut t, &mut team, &s, result("claude-opus-5-5", 120, 20, 0), T0 + 4_000);
+        let (rows, ..) = t.sources(T0 + 5_000, 900);
+        assert_eq!((rows[0].tokens, rows[0].working), (140, 2), "an unowned remainder counted as a worker");
+    }
+
+    /// The review of 1f3073bad, finding 4: the graph covers the whole stretch picked, so its bars
+    /// add up to what the details say was used over it.
+    #[test]
+    fn the_graph_plots_the_whole_stretch_picked() {
+        let mut t = Tokens::default();
+        let s = chat("general", true);
+        let now = T0 + 7_200_000 + 29_000; // mid-minute
+        let burst = now - (59 * 60 + 31) * 1000;
+        t.record(&s, None, false, &[use_of("burst", "claude-opus-5-5", 300_000, 0, 0)], burst);
+        t.record(&s, None, false, &[use_of("late", "claude-opus-5-5", 2_000, 0, 0)], now - 5_000);
+        for (span, n) in [(900, 60), (3_600, 60), (86_400, 96)] {
+            let series = t.series(now, span, n);
+            let (rows, ..) = t.sources(now, span);
+            let used: u64 = rows.iter().map(|r| r.tokens).sum();
+            assert_eq!(series.bars.iter().sum::<u64>(), used, "{span} s: the bars and Used disagree");
+            assert!(series.bars.len() as u64 == n || series.bars.len() as u64 == n + 1, "{span} s: {} bars", series.bars.len());
+        }
+        assert_eq!(t.series(now, 3_600, 60).bars.iter().sum::<u64>(), 302_000, "the hour's oldest burst is plotted");
+        // fifteen minutes from the same moment, a stretch that starts inside a 15-second slice
+        let recent = now - 899_500;
+        let mut t = Tokens::default();
+        t.record(&s, None, false, &[use_of("edge", "claude-opus-5-5", 500, 0, 0)], recent);
+        assert_eq!(t.series(now, 900, 60).bars.iter().sum::<u64>(), 500);
+        assert_eq!(t.view(now, true, None).m15, 500);
+    }
+
     #[test]
     fn the_speeds_over_one_five_and_fifteen_minutes_are_their_own_windows() {
         let mut t = Tokens::default();
         let s = chat("general", true);
         // 1,000 tokens 14 minutes ago, 2,000 four minutes ago, 3,000 thirty seconds ago
-        t.record(&s, None, &[use_of("a", "claude-opus-5-5", 1_000, 0, 0)], T0);
-        t.record(&s, None, &[use_of("b", "claude-opus-5-5", 2_000, 0, 0)], T0 + 600_000);
-        t.record(&s, None, &[use_of("c", "claude-opus-5-5", 3_000, 0, 0)], T0 + 810_000);
+        t.record(&s, None, false, &[use_of("a", "claude-opus-5-5", 1_000, 0, 0)], T0);
+        t.record(&s, None, false, &[use_of("b", "claude-opus-5-5", 2_000, 0, 0)], T0 + 600_000);
+        t.record(&s, None, false, &[use_of("c", "claude-opus-5-5", 3_000, 0, 0)], T0 + 810_000);
         let now = T0 + 840_000;
         let v = t.view(now, true, None);
         assert_eq!((v.m1, v.m5, v.m15), (3_000, 5_000, 6_000));
         // the card's graph is the same 15 minutes in sixty bars, the rail's the last minute in ten
         assert_eq!(v.card.iter().sum::<u64>(), 6_000);
-        assert_eq!(v.card.len(), 60);
+        assert!(v.card.len() == 60 || v.card.len() == 61, "{}", v.card.len());
         assert_eq!(v.tile.iter().sum::<u64>(), 3_000);
         assert_eq!(v.tile.len(), 10);
         assert_eq!(v.scale, 3_000);
@@ -726,7 +827,7 @@ mod tests {
         let mut t = Tokens::default();
         assert!(!t.view(T0, true, None).active, "nothing used yet is idle");
         assert_eq!(t.view(T0, true, None).last_ms, None);
-        t.record(&chat("general", false), None, &[use_of("a", "claude-fable-5-1", 500, 20, 0)], T0);
+        t.record(&chat("general", false), None, false, &[use_of("a", "claude-fable-5-1", 500, 20, 0)], T0);
         assert!(t.view(T0 + 9_999, true, None).active, "a request 9.999 s ago is being used now");
         let v = t.view(T0 + 10_000, true, None);
         assert!(!v.active, "ten seconds after the last request the rail says Idle");
@@ -737,10 +838,10 @@ mod tests {
     #[test]
     fn a_bar_is_aligned_to_the_clock_and_holds_the_current_second() {
         let mut t = Tokens::default();
-        t.record(&chat("general", false), None, &[use_of("a", "claude-fable-5-1", 7, 0, 0)], T0 + 59_400);
+        t.record(&chat("general", false), None, false, &[use_of("a", "claude-fable-5-1", 7, 0, 0)], T0 + 59_400);
         let s = t.series(T0 + 59_900, 60, 10);
         assert_eq!(s.ends_at_ms, T0 + 60_000);
-        assert_eq!(s.bars[9], 7);
+        assert_eq!(s.bars.last(), Some(&7));
         assert_eq!(s.bar_ms, 6_000);
     }
 
@@ -751,9 +852,9 @@ mod tests {
             crate::suite_memory::apps()
                 .iter()
                 .map(|(id, app)| match *id {
-                    "richos" => crate::suite_memory::LiveApp { id, app, bytes: richos, processes: 3 },
-                    "richfiles" => crate::suite_memory::LiveApp { id, app, bytes: Some(files), processes: 1 },
-                    _ => crate::suite_memory::LiveApp { id, app, bytes: Some(0), processes: 0 },
+                    "richos" => crate::suite_memory::LiveApp { id, app, bytes: richos, processes: 3, within: None },
+                    "richfiles" => crate::suite_memory::LiveApp { id, app, bytes: Some(files), processes: 1, within: None },
+                    _ => crate::suite_memory::LiveApp { id, app, bytes: Some(0), processes: 0, within: None },
                 })
                 .collect()
         };
@@ -767,7 +868,8 @@ mod tests {
         assert_eq!((v.all.avg, v.all.peak), (Some(1_600), Some(2_100)));
         let richos = &v.apps[0];
         assert_eq!((richos.id, richos.processes, richos.line.now, richos.line.avg), ("richos", 3, None, Some(1_500)));
-        assert_eq!(v.apps[2].processes, 0, "RichGlance is not open");
+        assert_eq!(v.apps.iter().find(|a| a.id == "richglance").unwrap().processes, 0, "RichGlance is not open");
+        assert_eq!(v.apps.iter().find(|a| a.id == "richfinder").unwrap().within, Some("richos"));
         assert_eq!(v.series.as_ref().unwrap().list.iter().flatten().count(), 2);
         // three minutes on, the 2-minute figures hold only the last two minutes
         m.push(T0 + 184_000, Ok(apps(Some(4_000), 200)), None);
@@ -783,14 +885,14 @@ mod tests {
         let root = std::env::temp_dir().join(format!("my-richos-{}", uuid::Uuid::new_v4()));
         let source = chat("general", false);
         assert!(!on(), "the monitor is off by default");
-        record(&source, None, &[use_of("off_1", "claude-fable-5-1", 100, 0, 0)]);
+        record(&source, None, false, &[use_of("off_1", "claude-fable-5-1", 100, 0, 0)]);
         let off = view(true, Some(Detail { token_span_s: Some(900), token_bars: Some(60), memory_span_s: Some(120), memory_points: Some(60) }));
         assert!(!off.on && off.tokens.is_none() && off.memory.is_none());
         assert_eq!(*lock(&shared().sampler), 0, "no sampler was ever started while off");
         assert!(lock(&shared().tokens).recent.is_empty(), "a frame was counted while off");
 
         set_on(true, &root);
-        record(&source, None, &[use_of("on_1", "claude-fable-5-1", 100, 0, 0)]);
+        record(&source, None, false, &[use_of("on_1", "claude-fable-5-1", 100, 0, 0)]);
         let v = view(true, None);
         assert!(v.on);
         // At least this test's own request: a lease test running alongside may add its own.
@@ -803,7 +905,7 @@ mod tests {
         assert!(!view(true, None).on);
         assert!(lock(&shared().tokens).recent.is_empty(), "turning off kept the tokens");
         assert!(lock(&shared().memory).readings.is_empty(), "turning off kept the memory readings");
-        record(&source, None, &[use_of("off_2", "claude-fable-5-1", 100, 0, 0)]);
+        record(&source, None, false, &[use_of("off_2", "claude-fable-5-1", 100, 0, 0)]);
         assert!(lock(&shared().tokens).recent.is_empty());
         // the sampler thread ends, and nothing it read after off was kept
         wait_until(|| SAMPLERS.load(Ordering::SeqCst) == 0);
