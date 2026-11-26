@@ -329,6 +329,18 @@ impl Tokens {
         }
     }
 
+    /// The rail's ten bars: the last minute exactly, in six-second slices counted back from now,
+    /// oldest first, so they always add up to the speed under them (the second review, at
+    /// b7f443a6c: clock-aligned slices left part of the minute out of the bars).
+    fn last_minute(&self, now: u64) -> Vec<u64> {
+        let mut bars = vec![0u64; 10];
+        for e in self.recent.iter().rev().take_while(|e| now.saturating_sub(e.at) < 60_000) {
+            let back = now.saturating_sub(e.at) / 6_000;
+            bars[9 - back.min(9) as usize] += e.buckets.total();
+        }
+        bars
+    }
+
     /// Tokens that landed in the last `span_ms` (at most 15 minutes).
     fn used(&self, now: u64, span_ms: u64) -> u64 {
         self.recent.iter().rev().take_while(|e| now.saturating_sub(e.at) < span_ms).map(|e| e.buckets.total()).sum()
@@ -447,6 +459,7 @@ impl Tokens {
             let (sources, models, kinds) = self.sources(now, span);
             TokensDetail { span_s: span, series, sources, models, kinds }
         });
+        let tile = self.last_minute(now);
         TokensView {
             since_ms: self.since,
             last_ms: last,
@@ -454,8 +467,8 @@ impl Tokens {
             m1: self.used(now, 60_000),
             m5: self.used(now, 300_000),
             m15: self.used(now, 900_000),
-            tile: { let bars = self.series(now, 60, 10).bars; bars[bars.len().saturating_sub(10)..].to_vec() },
-            scale: self.series(now, 900, 150).bars.into_iter().max().unwrap_or(0),
+            scale: self.series(now, 900, 150).bars.into_iter().chain(tile.iter().copied()).max().unwrap_or(0),
+            tile,
             card: if card { self.series(now, 900, 60).bars } else { Vec::new() },
             detail,
         }
@@ -506,7 +519,7 @@ pub struct TokensView {
     pub m1: u64,
     pub m5: u64,
     pub m15: u64,
-    /// The rail: the last minute in ten six-second bars.
+    /// The rail: the last minute in ten six-second bars counted back from now.
     pub tile: Vec<u64>,
     /// The rail's scale: the tallest six-second bar of the last 15 minutes.
     pub scale: u64,
@@ -820,6 +833,20 @@ mod tests {
         assert_eq!((day.bars.iter().sum::<u64>(), day.bar_ms), (6_000, 900_000));
         let (rows, ..) = t.sources(later, 3600);
         assert_eq!(rows[0].tokens, 6_000);
+    }
+
+    /// The second review, at b7f443a6c: the rail's ten bars add up to the speed under them.
+    #[test]
+    fn the_rails_bars_add_up_to_the_last_minute() {
+        let mut t = Tokens::default();
+        let s = chat("general", false);
+        let now = T0 + 120_000 + 3_000;
+        t.record(&s, None, false, &[use_of("burst", "claude-fable-5-1", 300_000, 0, 0)], now - 59_500);
+        t.record(&s, None, false, &[use_of("now", "claude-fable-5-1", 20, 0, 0)], now);
+        let v = t.view(now, false, None);
+        assert_eq!(v.m1, 300_020);
+        assert_eq!((v.tile.len(), v.tile.iter().sum::<u64>(), v.tile[0], v.tile[9]), (10, 300_020, 300_000, 20));
+        assert!(v.scale >= 300_000, "a bar taller than the scale");
     }
 
     #[test]
