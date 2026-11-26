@@ -484,7 +484,7 @@ impl Tokens {
             m15: self.used(now, 900_000),
             scale: self.series(now, 900, 150).bars.into_iter().chain(tile.iter().copied()).max().unwrap_or(0),
             tile,
-            card: if card { self.series(now, 900, 60).bars } else { Vec::new() },
+            card: card.then(|| self.series(now, 900, 60)),
             detail,
         }
     }
@@ -538,8 +538,8 @@ pub struct TokensView {
     pub tile: Vec<u64>,
     /// The rail's scale: the tallest six-second bar of the last 15 minutes.
     pub scale: u64,
-    /// The card: the last 15 minutes in sixty 15-second bars (empty while the card is closed).
-    pub card: Vec<u64>,
+    /// The card: the last 15 minutes in sixty 15-second bars, on the clock edges the details use (none while the card is closed).
+    pub card: Option<Series>,
     pub detail: Option<TokensDetail>,
 }
 
@@ -841,8 +841,11 @@ mod tests {
         let v = t.view(now, true, None);
         assert_eq!((v.m1, v.m5, v.m15), (3_000, 5_000, 6_000));
         // the card's graph is the same 15 minutes in sixty bars, the rail's the last minute in ten
-        assert_eq!(v.card.iter().sum::<u64>(), 6_000);
-        assert!(v.card.len() == 60 || v.card.len() == 61, "{}", v.card.len());
+        let card = v.card.as_ref().unwrap();
+        assert_eq!(card.bars.iter().sum::<u64>(), 6_000);
+        assert!(card.bars.len() == 60 || card.bars.len() == 61, "{}", card.bars.len());
+        // its clock edges, so the window can tell which bars ended before the switch went on
+        assert_eq!((card.bar_ms, card.ends_at_ms % 15_000, card.ends_at_ms > now), (15_000, 0, true));
         assert_eq!(v.tile.iter().sum::<u64>(), 3_000);
         assert_eq!(v.tile.len(), 10);
         assert_eq!(v.scale, 3_000);

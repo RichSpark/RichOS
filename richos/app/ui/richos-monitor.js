@@ -96,6 +96,21 @@
     if (!V || !T || !T.since_ms || T.since_ms <= V.now_ms - spanSec * 1000) return "";
     return " Counted since " + clock(T.since_ms) + ", when My RichOS was turned on.";
   }
+  /// How many of a graph's first bars ended before then (`series`: its bars, each `bar_ms` long,
+  /// the last ending at `ends_at_ms`). They were never counted, so they are drawn as nothing,
+  /// never as the floor mark of a measured zero, and pointing at one says so. A bar the switch
+  /// was turned on inside is counted from then.
+  function unrecorded(series) {
+    if (!T || !T.since_ms || !series || !series.bars.length) return 0;
+    const n = series.bars.length;
+    let k = 0;
+    while (k < n && series.ends_at_ms - (n - 1 - k) * series.bar_ms <= T.since_ms) k++;
+    return k;
+  }
+  /// What pointing at such a stretch says, in the token and the memory graph alike.
+  const NOT_RECORDED = "Not recorded: My RichOS was off then.";
+  /// The rail's ten six-second slices, counted back from now, as a graph's bars.
+  const tileSeries = () => ({ bars: (T && T.tile) || [], bar_ms: 6000, ends_at_ms: V ? V.now_ms : 0 });
 
   let on = false, built = false;
   let btn, tileCanvas, speedEl, card, scrim, sheet, $, $s;
@@ -137,6 +152,8 @@
     ctx.fillRect(0, 0, 34, 34);
     const s = (T && T.tile) || [];
     const top = Math.max(1, (T && T.scale) || 0);
+    // before the switch went on nothing is drawn, not even the floor dot of an idle slice
+    const skip = unrecorded(tileSeries());
     // whole pixels, so the bars stay crisp wherever the square is drawn at another scale (a
     // Make a video recording draws the window at 1x)
     const x0 = 2, floor = 31, room = 19;
@@ -144,6 +161,7 @@
       const x = x0 + i * 3;
       const v = s[i] || 0;
       const hgt = v > 0 ? Math.max(2, Math.round((v / top) * room)) : 0;
+      if (i < skip) continue;
       if (hgt) {
         ctx.fillStyle = P.flow;
         ctx.fillRect(x, floor - hgt, 2, hgt);
@@ -157,7 +175,7 @@
   /// the same ten dots second after second).
   let railShown = "";
   function paintRail() {
-    const shown = [R.active, R.m1, T ? T.scale : 0, T ? T.tile.join() : ""].join("|");
+    const shown = [R.active, R.m1, T ? T.scale : 0, T ? T.tile.join() : "", unrecorded(tileSeries())].join("|");
     if (shown === railShown) return;
     railShown = shown;
     btn.dataset.state = R.active ? "using" : "idle";
@@ -170,8 +188,9 @@
   }
 
   // ---- graphs ---------------------------------------------------------------------------------
-  /// Bars on a floor line: the shape of every token graph here.
-  function paintBars(c, w, h, bars, P, lit) {
+  /// Bars on a floor line: the shape of every token graph here. The first `skip` bars are from
+  /// before My RichOS was on (`unrecorded`): nothing is drawn for them, not even the floor.
+  function paintBars(c, w, h, bars, P, lit, skip) {
     const ctx = sizeCanvas(c, w, h);
     ctx.fillStyle = P.ground;
     ctx.fillRect(0, 0, w, h);
@@ -185,6 +204,10 @@
     for (let i = 0; i < n; i++) {
       const x = Math.round(4 + i * step);
       const hgt = bars[i] > 0 ? Math.max(2, Math.round((bars[i] / top) * (h - 12))) : 0;
+      if (i < (skip || 0)) {
+        if (i === lit) { ctx.fillStyle = P.ink; ctx.fillRect(x, h - 5, bw, 1); }
+        continue;
+      }
       ctx.fillStyle = i === lit ? P.ink : hgt ? P.flow : P.rest;
       if (hgt) ctx.fillRect(x, h - 4 - hgt, bw, hgt);
       else ctx.fillRect(x, h - 5, bw, 1);
@@ -262,7 +285,8 @@
     chip($("chip"));
     $("hero").textContent = tokens(R.m1);
     $("hero-unit").textContent = R.active ? "tokens a minute" : R.m1 > 0 ? "in the last minute, stopped now" : "tokens a minute";
-    paintBars($("tok-graph"), 306, 56, (T && T.card) || [], P);
+    const cardSeries = (T && T.card) || null;
+    paintBars($("tok-graph"), 306, 56, cardSeries ? cardSeries.bars : [], P, -1, unrecorded(cardSeries));
     const row = (name, total, mins) =>
       "<span>" + name + "</span><b>" + tokens(total / mins) + "/min</b><span>" + tokens(total) + "</span>";
     const wins =
@@ -403,7 +427,8 @@
     const s = d ? d.series : { bars: [], bar_ms: (range.span * 1000) / range.n, ends_at_ms: Date.now() };
     const c = $s("t-graph");
     const w = c.parentElement.clientWidth;
-    paintBars(c, w, 128, s.bars, P, view.tokLit);
+    const skip = d ? unrecorded(s) : 0;
+    paintBars(c, w, 128, s.bars, P, view.tokLit, skip);
     const barSec = s.bar_ms / 1000;
     const perMin = (v) => (v * 60) / barSec;
     const total = s.bars.reduce((a, b) => a + b, 0);
@@ -411,7 +436,11 @@
       const end = s.ends_at_ms - (s.bars.length - 1 - view.tokLit) * s.bar_ms;
       const start = end - s.bar_ms;
       const secs = barSec < 60;
-      $s("t-read").innerHTML = "<b>" + clock(start, secs) + " to " + clock(Math.min(end, Date.now()), secs) + "</b> " + tokens(s.bars[view.tokLit]) + " used, " + tokens(perMin(s.bars[view.tokLit])) + " a minute";
+      const when = "<b>" + clock(start, secs) + " to " + clock(Math.min(end, Date.now()), secs) + "</b> ";
+      $s("t-read").innerHTML = view.tokLit < skip
+        ? when + NOT_RECORDED
+        : when + tokens(s.bars[view.tokLit]) + " used, " + tokens(perMin(s.bars[view.tokLit])) + " a minute" +
+          (T.since_ms && start < T.since_ms ? ". Counted from " + clock(T.since_ms, secs) + ", when My RichOS was turned on." : "");
     } else {
       $s("t-read").innerHTML = "<b>" + tokens(total) + "</b> used in " + range.words + ". Fastest: " + tokens(perMin(s.bars.length ? Math.max.apply(null, s.bars) : 0)) + " a minute." + esc(sinceNote(range.span)) + " Point at the graph for any moment.";
     }
@@ -465,9 +494,13 @@
     const w = c.parentElement.clientWidth;
     paintLine(c, w, 128, series, P, true, view.memLit);
     const known = series.filter((v) => v != null);
-    if (view.memLit >= 0 && view.memLit < series.length && series[view.memLit] != null) {
-      const at = V.now_ms - ((series.length - 1 - view.memLit) * range.span * 1000) / series.length;
-      $s("m-read").innerHTML = "<b>" + clock(at, range.span <= 900) + "</b> " + ram(series[view.memLit]) + " in use";
+    const lit = view.memLit >= 0 && view.memLit < series.length ? view.memLit : -1;
+    const litAt = lit >= 0 ? V.now_ms - ((series.length - 1 - lit) * range.span * 1000) / series.length : 0;
+    if (lit >= 0 && series[lit] != null) {
+      $s("m-read").innerHTML = "<b>" + clock(litAt, range.span <= 900) + "</b> " + ram(series[lit]) + " in use";
+    } else if (lit >= 0 && T && T.since_ms && litAt < T.since_ms) {
+      // a point from before the switch went on: never read, which is not the same as nothing
+      $s("m-read").innerHTML = "<b>" + clock(litAt, range.span <= 900) + "</b> " + NOT_RECORDED;
     } else if (known.length) {
       const lo = Math.min.apply(null, known), hi = Math.max.apply(null, known);
       $s("m-read").innerHTML = "Between <b>" + ram(lo) + "</b> and <b>" + ram(hi) + "</b> over this stretch." + esc(sinceNote(range.span)) + " Point at the graph for any moment.";

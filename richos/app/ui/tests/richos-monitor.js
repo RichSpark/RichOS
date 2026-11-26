@@ -16,8 +16,10 @@ const { loadPlaywright, createRun, assert, assertEqual, UI_DIR, leaveHome, bootS
 const contrast = require("./lib/contrast");
 const APP = "file://" + path.join(UI_DIR, "index.html");
 
-/// The fixture: a burst (tokens being used now, about 1.26 million in the last minute) or idle
-/// (nothing for 22 minutes), and memory for every app `suite_memory` measures, in its order.
+/// The fixture: a burst (tokens being used now, about 1.26 million in the last minute), idle
+/// (nothing for 22 minutes) or fresh (idle, My RichOS turned on 30 seconds ago, every graph's
+/// bars on the clock edges `my_richos.rs` gives them), and memory for every app `suite_memory`
+/// measures, in its order.
 function installFixture({ scene, failSave }) {
   window.calls = [];
   window.fixture = { scene, failSave };
@@ -40,10 +42,12 @@ function installFixture({ scene, failSave }) {
     const now = Date.now();
     const burst = window.fixture.scene === "burst";
     const bars = (n, v) => Array.from({ length: n }, (_, i) => (burst ? Math.round(v * (0.6 + 0.4 * Math.abs(Math.sin(i)))) : 0));
+    const fresh = window.fixture.scene === "fresh";
+    const edge = (ms) => (Math.floor(now / ms) + 1) * ms;
     const detail = args.detail
       ? {
           span_s: args.detail.token_span_s,
-          series: { bars: bars(args.detail.token_bars, 300000), bar_ms: (args.detail.token_span_s * 1000) / args.detail.token_bars, ends_at_ms: now + 1000 },
+          series: { bars: bars(args.detail.token_bars, 300000), bar_ms: (args.detail.token_span_s * 1000) / args.detail.token_bars, ends_at_ms: fresh ? edge((args.detail.token_span_s * 1000) / args.detail.token_bars) : now + 1000 },
           sources: burst
             ? [
                 { entity: "harbor", thread: "ecs", team: true, working: 6, model: "Fable", tokens: 2144000, per_min: 517000 },
@@ -68,17 +72,17 @@ function installFixture({ scene, failSave }) {
       on: true,
       now_ms: now,
       tokens: {
-        since_ms: now - 2 * 3600 * 1000,
+        since_ms: fresh ? now - 30000 : now - 2 * 3600 * 1000,
         last_ms: burst ? now - 2000 : now - 22 * 60 * 1000,
         active: burst,
         m1: burst ? 1262000 : 0, m5: burst ? 4131000 : 0, m15: burst ? 5230000 : 0,
         tile: bars(10, 140000), scale: burst ? 150000 : 0,
-        card: args.card ? bars(60, 320000) : [],
+        card: args.card ? { bars: bars(60, 320000), bar_ms: 15000, ends_at_ms: fresh ? edge(15000) : now + 1000 } : null,
         detail,
       },
       memory: args.card || args.detail
         ? { status: "available", detail: "", at_ms: now, mac_total_bytes: 36 * 1024 * MB, apps, all,
-            series: args.detail ? { span_s: args.detail.memory_span_s, list: Array.from({ length: args.detail.memory_points }, (_, i) => all.hist[i % 60]) } : null }
+            series: args.detail ? { span_s: args.detail.memory_span_s, list: Array.from({ length: args.detail.memory_points }, (_, i) => (fresh && i < args.detail.memory_points - 1 ? null : all.hist[i % 60])) } : null }
         : null,
     };
   };
@@ -337,6 +341,73 @@ async function main() {
     assertEqual(seen, "tokens", "Bust a bug started after the details were closed, so its picture loses them");
     await page.keyboard.press("Escape");
     await page.waitForFunction(() => window.RichosMonitor.state().sheet === null);
+  });
+
+  // The handover review at cbb69f6ab: with My RichOS on for 30 seconds and 24 hours picked,
+  // pointing 12 hours back read "12:00 AM to 12:15 AM 0 used, 0 a minute". Time before it was
+  // turned on (also after a relaunch) was never counted: it is drawn as nothing, not as the floor
+  // mark of a measured zero, and pointing at it says it was not recorded.
+  await run.check("time before My RichOS was turned on is drawn and named as not recorded, never as zero use", async () => {
+    const fresh = await openApp(context, { scene: "fresh" });
+    try {
+      await switchTo(fresh, true);
+      await fresh.waitForFunction(() => window.RichosMonitor.state().rail);
+      // a canvas's floor row at bar `i`: the floor mark of a measured zero, or nothing
+      const floorAt = (sel, h, n, i) => fresh.evaluate(({ sel, h, n, i }) => {
+        const c = document.querySelector(sel);
+        const dpr = c.width / c.clientWidth;
+        const step = (c.clientWidth - 8) / n;
+        const x = Math.round(4 + i * step) + 1;
+        const px = c.getContext("2d").getImageData(Math.round(x * dpr), Math.round((h - 5) * dpr), 1, 1).data;
+        const g = c.getContext("2d").getImageData(Math.round(x * dpr), Math.round((h - 8) * dpr), 1, 1).data;
+        return { floor: Array.from(px.slice(0, 3)).join(), ground: Array.from(g.slice(0, 3)).join() };
+      }, { sel, h, n, i });
+      // the details over 24 hours
+      await fresh.evaluate(() => window.RichosMonitor.openSheet("tokens"));
+      await fresh.waitForSelector("#rom-sheet:not([hidden])");
+      await fresh.click('#rom-sheet [data-seg="tok"] [data-v="d1"]');
+      await fresh.waitForFunction(() => /Counted since/.test(document.querySelector('#rom-sheet [data-s="t-read"]').textContent));
+      const n = 96; // TOK_RANGES' 24 hours
+      const summary = await fresh.textContent('#rom-sheet [data-s="t-read"]');
+      const old = await floorAt('#rom-sheet [data-s="t-graph"]', 128, n, 48);
+      const recent = await floorAt('#rom-sheet [data-s="t-graph"]', 128, n, n - 1);
+      assertEqual(old.floor, old.ground, "12 hours back, before the switch, is drawn as a measured zero");
+      assert(recent.floor !== recent.ground, "the counted, idle last stretch lost its floor mark: " + JSON.stringify(recent));
+      // pointing 12 hours back
+      const box = await fresh.locator('#rom-sheet [data-s="t-graph"]').boundingBox();
+      await fresh.mouse.move(box.x + 4 + ((48.5 / n) * (box.width - 8)), box.y + box.height / 2);
+      await fresh.waitForFunction(() => !/Counted since/.test(document.querySelector('#rom-sheet [data-s="t-read"]').textContent));
+      const pointed = await fresh.textContent('#rom-sheet [data-s="t-read"]');
+      assert(/Not recorded: My RichOS was off then\.$/.test(pointed), "pointing 12 hours back: " + pointed);
+      assert(!/0 used/.test(pointed), "pointing 12 hours back reads as zero use: " + pointed);
+      // and the newest stretch, which the switch went on inside or before, reads as counted
+      await fresh.mouse.move(box.x + box.width - 5, box.y + box.height / 2);
+      await fresh.waitForFunction(() => / used, /.test(document.querySelector('#rom-sheet [data-s="t-read"]').textContent));
+      const newest = await fresh.textContent('#rom-sheet [data-s="t-read"]');
+      assert(!/Not recorded/.test(newest), "the counted stretch says not recorded: " + newest);
+      // the memory graph over an hour: a point from before the switch says so too
+      await fresh.click('#rom-sheet [data-tab="memory"]');
+      await fresh.click('#rom-sheet [data-seg="mem"] [data-v="h1"]');
+      await fresh.waitForFunction(() => /Counted since/.test(document.querySelector('#rom-sheet [data-s="m-read"]').textContent));
+      const mbox = await fresh.locator('#rom-sheet [data-s="m-graph"]').boundingBox();
+      await fresh.mouse.move(mbox.x + mbox.width / 2, mbox.y + mbox.height / 2);
+      await fresh.waitForFunction(() => !/Counted since/.test(document.querySelector('#rom-sheet [data-s="m-read"]').textContent));
+      const memPointed = await fresh.textContent('#rom-sheet [data-s="m-read"]');
+      assert(/Not recorded: My RichOS was off then\.$/.test(memPointed), "pointing half an hour back in memory: " + memPointed);
+      await fresh.mouse.move(mbox.x + mbox.width / 2, mbox.y - 80);
+      await fresh.keyboard.press("Escape");
+      await fresh.waitForFunction(() => window.RichosMonitor.state().sheet === null);
+      // the card's 15 minutes: the bars from before the switch carry no floor mark, the newest does
+      await fresh.hover("#rom-square");
+      await fresh.waitForSelector("#rom-card.is-open");
+      await fresh.waitForFunction(() => document.querySelector('#rom-card [data-k="mem-now"]').textContent !== "");
+      const cardOld = await floorAt('#rom-card [data-k="tok-graph"]', 56, 60, 10);
+      const cardNew = await floorAt('#rom-card [data-k="tok-graph"]', 56, 60, 59);
+      assertEqual(cardOld.floor, cardOld.ground, "the card draws 12 minutes before the switch as a measured zero");
+      assert(cardNew.floor !== cardNew.ground, "the card's newest stretch, counted and idle, lost its floor mark: " + JSON.stringify(cardNew));
+      assertEqual(fresh.errors, [], "page errors");
+      return "summary: " + summary.trim() + " / pointed: " + pointed.trim() + " / newest: " + newest.trim() + " / memory: " + memPointed.trim();
+    } finally { await fresh.close(); }
   });
 
   await run.check("contrast, dark: the rail's figure, the card and the details clear WCAG AA", async () => {

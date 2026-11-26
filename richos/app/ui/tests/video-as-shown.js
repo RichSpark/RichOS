@@ -434,7 +434,7 @@ function myRichosRecording(theme) {
         on: true, now_ms: now,
         tokens: {
           since_ms: now - 7200000, last_ms: now - 2000, active: true, m1: 1262000, m5: 4131000, m15: 5230000,
-          tile: bars(10, 140000), scale: 150000, card: args.card ? bars(60, 320000) : [],
+          tile: bars(10, 140000), scale: 150000, card: args.card ? { bars: bars(60, 320000), bar_ms: 15000, ends_at_ms: now + 1000 } : null,
           detail: args.detail ? {
             span_s: args.detail.token_span_s,
             series: { bars: bars(args.detail.token_bars, 300000), bar_ms: (args.detail.token_span_s * 1000) / args.detail.token_bars, ends_at_ms: now + 1000 },

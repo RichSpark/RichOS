@@ -3790,7 +3790,7 @@
           if (view) return JSON.parse(JSON.stringify(view));
           return {
             on: true, now_ms: now,
-            tokens: { since_ms: now, last_ms: null, active: false, m1: 0, m5: 0, m15: 0, tile: new Array(10).fill(0), scale: 0, card: args.card ? new Array(60).fill(0) : [], detail: null },
+            tokens: { since_ms: now, last_ms: null, active: false, m1: 0, m5: 0, m15: 0, tile: new Array(10).fill(0), scale: 0, card: args.card ? { bars: new Array(60).fill(0), bar_ms: 15000, ends_at_ms: (Math.floor(now / 15000) + 1) * 15000 } : null, detail: null },
             memory: args.card || args.detail ? { status: "measuring", detail: "", at_ms: null, mac_total_bytes: null, apps: [], all: { now: null, avg: null, peak: null, hist: [] }, series: null } : null,
           };
         }
