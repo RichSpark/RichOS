@@ -172,6 +172,37 @@ async function tokenContrast(page, fg, bg) {
   }, { fg, bg });
 }
 
+/// What of `scope`'s text and drawings reaches past the left or right edge of the box it is
+/// meant to stay inside (`edge`: its content box, inside the padding). A name an ancestor
+/// shortens with an ellipsis is held to that ancestor's box, not to its full text.
+async function cutOff(page, scope, edge) {
+  return page.evaluate(({ scope, edge }) => {
+    const box = document.querySelector(edge);
+    const b = box.getBoundingClientRect();
+    const cs = getComputedStyle(box);
+    const left = b.left + box.clientLeft + parseFloat(cs.paddingLeft) - 1;
+    const right = b.left + box.clientLeft + box.clientWidth - parseFloat(cs.paddingRight) + 1;
+    const root = document.querySelector(scope);
+    const cut = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let t; (t = walker.nextNode()); ) {
+      if (!t.textContent.trim()) continue;
+      let r = null;
+      for (let e = t.parentElement; e && e !== root; e = e.parentElement) {
+        if (getComputedStyle(e).textOverflow === "ellipsis") { r = e.getBoundingClientRect(); break; }
+      }
+      if (!r) { const range = document.createRange(); range.selectNodeContents(t); r = range.getBoundingClientRect(); }
+      if (!r.width) continue;
+      if (r.left < left || r.right > right) cut.push(t.textContent.trim() + " (" + Math.round(r.left) + ".." + Math.round(r.right) + ")");
+    }
+    for (const c of root.querySelectorAll("canvas, .rom-bar")) {
+      const r = c.getBoundingClientRect();
+      if (r.width && (r.left < left || r.right > right)) cut.push(c.tagName.toLowerCase() + " (" + Math.round(r.left) + ".." + Math.round(r.right) + ")");
+    }
+    return { left: Math.round(left + 1), right: Math.round(right - 1), cut, sideways: box.scrollWidth - box.clientWidth };
+  }, { scope, edge });
+}
+
 async function main() {
   const run = createRun("My RichOS");
   const { webkit } = loadPlaywright();
@@ -408,6 +439,52 @@ async function main() {
       assertEqual(fresh.errors, [], "page errors");
       return "summary: " + summary.trim() + " / pointed: " + pointed.trim() + " / newest: " + newest.trim() + " / memory: " + memPointed.trim();
     } finally { await fresh.close(); }
+  });
+
+  // The handover review at cbb69f6ab: Bust a bug started over Memory details opened its panel
+  // over the readings ("1400px window: bug dock x=930..1382, right-aligned Highest readings end
+  // at x=981"). The details leave the panel its room, as every other overlay does, and at the
+  // smallest window (1024px) every reading still fits beside it, in both tabs.
+  await run.check("Bust a bug over the details: its panel has its room and every reading stays in view beside it", async () => {
+    const out = [];
+    for (const [width, height] of [[1400, 900], [1024, 700]]) {
+      const p = await openApp(context);
+      try {
+        await p.setViewportSize({ width, height });
+        await switchTo(p, true);
+        await p.waitForFunction(() => window.RichosMonitor.state().rail);
+        await p.evaluate(() => window.RichosMonitor.openSheet("memory"));
+        await p.waitForFunction(() => document.querySelector('#rom-sheet [data-app="richos"] [data-c="now"]') && document.querySelector('#rom-sheet [data-app="richos"] [data-c="now"]').textContent);
+        await p.click("#nr-bug");
+        await p.waitForSelector("#bugdock");
+        await p.waitForFunction(() => document.body.classList.contains("bug-dock-open"));
+        assertEqual(await p.evaluate(() => window.RichosMonitor.state().sheet), "memory", "Bust a bug closed the details it reports");
+        await p.evaluate(() => Promise.all(document.getAnimations().filter((a) => a.effect && a.effect.getTiming().iterations !== Infinity).map((a) => a.finished.catch(() => null))));
+        // one more reading, so every graph is drawn at the width the details have now
+        await p.evaluate(() => window.RichosMonitor.repaint());
+        for (const tab of ["memory", "tokens"]) {
+          if (tab === "tokens") {
+            await p.click('#rom-sheet [data-tab="tokens"]');
+            await p.waitForFunction(() => document.querySelector('#rom-sheet [data-s="t-where"] .rom-where-row'));
+          }
+          const place = await p.evaluate(() => ({ dock: document.getElementById("bugdock").getBoundingClientRect().left, sheet: document.getElementById("rom-sheet").getBoundingClientRect().right }));
+          assert(place.sheet <= place.dock, width + "px, " + tab + ": the details reach under Bust a bug's panel: details end at x=" + place.sheet + ", the panel starts at x=" + place.dock);
+          // the header: its title and chip, its tabs and its close button stay on the details
+          const head = await p.evaluate(() => {
+            const r = (sel) => { const b = document.querySelector(sel).getBoundingClientRect(); return [Math.round(b.left), Math.round(b.right)]; };
+            return { sheet: r("#rom-sheet"), tabs: r("#rom-sheet .rom-tabs"), close: r("#rom-close") };
+          });
+          assert(head.tabs[1] <= head.sheet[1] && head.close[0] >= head.sheet[0] && head.close[1] <= head.sheet[1], width + "px, " + tab + ": the tabs or the close button leave the details: " + JSON.stringify(head));
+          assertEqual((await cutOff(p, "#rom-sheet .rom-sh-head", "#rom-sheet")).cut, [], width + "px, " + tab + ": the details' title or chip cut off");
+          const fit = await cutOff(p, '#rom-sheet [data-pane="' + tab + '"]', "#rom-sheet .rom-sh-body");
+          assertEqual(fit.cut, [], width + "px, " + tab + ": readings cut off at the details' edge (" + fit.left + ".." + fit.right + ")");
+          assert(fit.sideways <= 1, width + "px, " + tab + ": the details need a sideways scroll of " + fit.sideways + "px");
+          out.push(width + "px " + tab + ": details end x=" + Math.round(place.sheet) + ", panel starts x=" + Math.round(place.dock));
+        }
+        assertEqual(p.errors, [], "page errors");
+      } finally { await p.close(); }
+    }
+    return out.join("; ");
   });
 
   await run.check("contrast, dark: the rail's figure, the card and the details clear WCAG AA", async () => {

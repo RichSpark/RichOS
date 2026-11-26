@@ -523,8 +523,9 @@
       // An app closed in the last two minutes keeps its line, average and highest of them: a
       // spike just before it closed is still there to read.
       const recent = (a.hist || []).some((v) => v != null && v > 0);
+      const cw = cv.clientWidth || 150;
       if (a.within || (a.open === false && !recent)) {
-        sizeCanvas(cv, 150, 26);
+        sizeCanvas(cv, cw, 26);
         rowEl.classList.toggle("is-off", true);
         rowEl.querySelector('[data-c="now"]').textContent = a.within ? within(a) : "Not open";
         rowEl.querySelector('[data-c="avg"]').textContent = "";
@@ -532,13 +533,13 @@
         return;
       }
       if (a.open === false) {
-        paintLine(cv, 150, 26, a.hist, P, false);
+        paintLine(cv, cw, 26, a.hist, P, false);
         rowEl.querySelector('[data-c="now"]').textContent = "Not open";
         rowEl.querySelector('[data-c="avg"]').textContent = ram(a.avg);
         rowEl.querySelector('[data-c="peak"]').textContent = ram(a.peak);
         return;
       }
-      paintLine(cv, 150, 26, a.hist || [], P, false);
+      paintLine(cv, cw, 26, a.hist || [], P, false);
       rowEl.querySelector('[data-c="now"]').textContent = ram(a.now);
       rowEl.querySelector('[data-c="avg"]').textContent = ram(a.avg);
       rowEl.querySelector('[data-c="peak"]').textContent = ram(a.peak);

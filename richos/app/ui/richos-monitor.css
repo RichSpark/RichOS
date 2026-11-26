@@ -290,6 +290,7 @@
   bottom: 16px;
   width: min(940px, calc(100vw - 3.25rem - 28px));
   box-sizing: border-box;
+  container: rom-sheet / inline-size;
   display: flex;
   flex-direction: column;
   border-radius: 14px;
@@ -305,6 +306,13 @@
 #rom-sheet[hidden],
 #rom-sheet [hidden] {
   display: none;
+}
+/* Bust a bug over the details: they leave the report panel its room, as every other overlay
+   does (style.css, `body.bug-dock-open .overlay`: 488px, the panel's 452px and 18px either side),
+   so the readings stay beside it, not under it (the handover review at cbb69f6ab: at a 1400px
+   window the panel, x 930 to 1382, covered Highest readings ending at x 981). */
+body.bug-dock-open #rom-sheet {
+  width: min(940px, calc(100vw - 3.25rem - 14px - 488px));
 }
 @keyframes rom-in {
   from { opacity: 0; transform: translateX(-10px) scale(0.985); }
@@ -591,7 +599,8 @@ body.home-open :is(#rom-card, #rom-sheet, #rom-scrim) {
   font-weight: 600;
 }
 .rom-app-row canvas {
-  width: 150px;
+  width: 100%;
+  max-width: 150px;
   height: 26px;
   border-radius: 4px;
 }
@@ -612,6 +621,75 @@ body.home-open :is(#rom-card, #rom-sheet, #rom-scrim) {
   margin: 18px 0 0;
   font-size: 0.875rem;
   color: var(--ink-faint);
+}
+/* Narrow details (beside Bust a bug's panel in a smaller window): the same readings, folded so
+   none is cut off at the edge. 688px of sheet is 640px inside the body's padding, where the app
+   table's own columns stop fitting. The tabs go under the title, with the close button kept at
+   the top right; the figures above the graph wrap; the two token lists stack; each app's name
+   wraps instead of being cut short, its two-minute line sits under it, and Now, Average and
+   Highest keep their room. */
+@container rom-sheet (width < 688px) {
+  .rom-sh-head {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: "title chip close" "tabs tabs tabs";
+    row-gap: 10px;
+  }
+  .rom-sh-head h2 {
+    grid-area: title;
+  }
+  .rom-sh-head .rom-chip {
+    grid-area: chip;
+  }
+  .rom-tabs {
+    grid-area: tabs;
+    justify-self: start;
+    margin-left: 0;
+  }
+  .rom-close {
+    grid-area: close;
+  }
+  .rom-big p {
+    white-space: normal;
+  }
+  .rom-ledger {
+    flex-wrap: wrap;
+    row-gap: 8px;
+    margin-left: 0;
+  }
+  .rom-ledger div {
+    margin: 0 18px 0 0;
+  }
+  .rom-ledger div:first-child {
+    padding-left: 0;
+    border-left: 0;
+  }
+  .rom-block-head {
+    flex-wrap: wrap;
+    gap: 8px 14px;
+  }
+  .rom-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .rom-app-head,
+  .rom-app-row {
+    grid-template-columns: 28px minmax(0, 1fr) repeat(3, 4.75rem);
+    column-gap: 10px;
+  }
+  .rom-app-name {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .rom-app-head span:nth-child(2) {
+    display: none;
+  }
+  .rom-app-row {
+    padding: 4px 0;
+  }
+  .rom-app-row canvas {
+    grid-row: 2;
+    grid-column: 2;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   .rom-light,
