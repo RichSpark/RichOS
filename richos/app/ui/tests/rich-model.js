@@ -801,6 +801,16 @@ async function main() {
     await page.waitForFunction(() => window.__calls.filter((x) => x.cmd === "hold_lease_models").pop().args.effort.rich.opus === "max");
     const kept = (await calls(page, "hold_lease_models")).map((c) => c.args).pop();
     assertEqual(kept.effort, withEffort({ rich: { opus: "max" }, stu: { opus: "medium" } }), "a confirmed Max is held");
+    // Lowered and chosen again, Max waits for its new warning: the earlier "Use Max anyway"
+    // confirmed that Max, not this one (review rv-20261126T112554Z-6b571438-ca3d, finding 3).
+    await page.click('#ef-rich .ef-step[data-l="high"]');
+    await levelIs(page, "rich", "high");
+    await page.click('#ef-rich .ef-step[data-l="max"]');
+    await page.waitForFunction(() => { const w = document.querySelector(".efw"); return !!w && !w.hidden; });
+    const again = (await calls(page, "hold_lease_models")).map((c) => c.args).pop();
+    assertEqual(again.effort, withEffort({ rich: { opus: "high" }, stu: { opus: "medium" } }), "a Max chosen again was held before its new warning was answered");
+    await page.click(".efw-anyway");
+    await page.waitForFunction(() => window.__calls.filter((x) => x.cmd === "hold_lease_models").pop().args.effort.rich.opus === "max");
     assertEqual(await calls(page, "set_lease_models"), [], "a press saved or applied the choice");
     assertEqual(page.__errors, [], "no page errors");
     await page.close();

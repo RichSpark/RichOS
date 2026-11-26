@@ -6150,7 +6150,8 @@ function paintModelRows(lit, rising) {
 ///
 /// A MAX NOBODY CONFIRMED IS NEVER HELD. Max shows in the row the moment it is pressed, with its
 /// warning over it; until "Use Max anyway" is pressed, what is held for that row is the level
-/// that is saved, so a window closed on the open warning cannot save Max.
+/// that is saved, so a window closed on the open warning cannot save Max. A confirmation lasts
+/// only while the row stays on Max: lowered and chosen again, Max waits for its new warning.
 const maxKept = new Set();
 function holdModelDraft() {
   const held = choiceCopy(modelDraft);
@@ -6187,6 +6188,9 @@ function pickEffort(who, level, focus) {
     return;
   }
   modelDraft.effort[who][model] = level;
+  // A confirmation covers the Max it was given for: once the row leaves Max, a Max chosen again
+  // has its own warning to answer before it is held.
+  maxKept.delete(`${who}_${model}`);
   holdModelDraft();
   const rising = EFFORT_LEVELS.indexOf(level) > EFFORT_LEVELS.indexOf(before);
   paintModelRows(null, rising ? who : null);
