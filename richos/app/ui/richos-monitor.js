@@ -107,6 +107,16 @@
     while (k < n && series.ends_at_ms - (n - 1 - k) * series.bar_ms <= T.since_ms) k++;
     return k;
   }
+  /// The bar the switch was turned on inside: `{ i, cut }`, `cut` the share of it from before
+  /// then, which is drawn as nothing and named as not recorded like the bars before it (the
+  /// second review at e285e8258: a 15-minute bar with 14 minutes from before the switch carried
+  /// a zero mark across all of it and read "0 used, 0 a minute" where it was never counted).
+  function startup(series) {
+    const k = unrecorded(series);
+    if (!T || !T.since_ms || !series || k >= series.bars.length) return null;
+    const start = series.ends_at_ms - (series.bars.length - k) * series.bar_ms;
+    return start < T.since_ms ? { i: k, cut: (T.since_ms - start) / series.bar_ms } : null;
+  }
   /// What pointing at such a stretch says, in the token and the memory graph alike.
   const NOT_RECORDED = "Not recorded: My RichOS was off then.";
   /// The rail's ten six-second slices, counted back from now, as a graph's bars.
@@ -189,8 +199,9 @@
 
   // ---- graphs ---------------------------------------------------------------------------------
   /// Bars on a floor line: the shape of every token graph here. The first `skip` bars are from
-  /// before My RichOS was on (`unrecorded`): nothing is drawn for them, not even the floor.
-  function paintBars(c, w, h, bars, P, lit, skip) {
+  /// before My RichOS was on (`unrecorded`): nothing is drawn for them, not even the floor; of
+  /// the next one, the share `cut` from before it is left out the same way (`startup`).
+  function paintBars(c, w, h, bars, P, lit, skip, cut) {
     const ctx = sizeCanvas(c, w, h);
     ctx.fillStyle = P.ground;
     ctx.fillRect(0, 0, w, h);
@@ -208,9 +219,10 @@
         if (i === lit) { ctx.fillStyle = P.ink; ctx.fillRect(x, h - 5, bw, 1); }
         continue;
       }
+      const off = i === (skip || 0) && cut > 0 ? Math.min(bw - 1, Math.round(cut * bw)) : 0;
       ctx.fillStyle = i === lit ? P.ink : hgt ? P.flow : P.rest;
-      if (hgt) ctx.fillRect(x, h - 4 - hgt, bw, hgt);
-      else ctx.fillRect(x, h - 5, bw, 1);
+      if (hgt) ctx.fillRect(x + off, h - 4 - hgt, bw - off, hgt);
+      else ctx.fillRect(x + off, h - 5, bw - off, 1);
     }
   }
   /// A filled line for memory, in bytes. `fromZero` is the honest scale of the sheet's large
@@ -287,7 +299,8 @@
     $("hero-unit").textContent = R.active ? "tokens a minute" : R.m1 > 0 ? "in the last minute, stopped now" : "tokens a minute";
     const cardSeries = (T && T.card) || null;
     // as wide as the card makes it: 306px at the default text size, wider at a larger one
-    paintBars($("tok-graph"), $("tok-graph").clientWidth || 306, 56, cardSeries ? cardSeries.bars : [], P, -1, unrecorded(cardSeries));
+    const cardStart = startup(cardSeries);
+    paintBars($("tok-graph"), $("tok-graph").clientWidth || 306, 56, cardSeries ? cardSeries.bars : [], P, -1, unrecorded(cardSeries), cardStart ? cardStart.cut : 0);
     const row = (name, total, mins) =>
       "<span>" + name + "</span><b>" + tokens(total / mins) + "/min</b><span>" + tokens(total) + "</span>";
     const wins =
@@ -362,7 +375,8 @@
     '<span class="rom-seg" role="radiogroup" aria-label="' + label + '" data-seg="' + name + '">' +
     list.map((r) => '<button type="button" role="radio" data-v="' + r.id + '">' + r.name + "</button>").join("") + "</span>";
 
-  const view = { tab: "tokens", tok: "m15", mem: "m2", tokLit: -1, memLit: -1 };
+  // `tokLitBefore`: the pointer is on the part of the switch-on bar from before the switch.
+  const view = { tab: "tokens", tok: "m15", mem: "m2", tokLit: -1, tokLitBefore: false, memLit: -1 };
   /// What the open details ask the app for: the chosen stretches of each graph.
   function detailRequest() {
     if (!sheetOpen()) return null;
@@ -429,7 +443,8 @@
     const c = $s("t-graph");
     const w = c.parentElement.clientWidth;
     const skip = d ? unrecorded(s) : 0;
-    paintBars(c, w, 128, s.bars, P, view.tokLit, skip);
+    const first = d ? startup(s) : null;
+    paintBars(c, w, 128, s.bars, P, view.tokLit, skip, first ? first.cut : 0);
     const barSec = s.bar_ms / 1000;
     const perMin = (v) => (v * 60) / barSec;
     const total = s.bars.reduce((a, b) => a + b, 0);
@@ -437,11 +452,19 @@
       const end = s.ends_at_ms - (s.bars.length - 1 - view.tokLit) * s.bar_ms;
       const start = end - s.bar_ms;
       const secs = barSec < 60;
-      const when = "<b>" + clock(start, secs) + " to " + clock(Math.min(end, Date.now()), secs) + "</b> ";
+      const upto = Math.min(end, Date.now());
+      const when = (a, b) => "<b>" + clock(a, secs) + " to " + clock(b, secs) + "</b> ";
+      const v = s.bars[view.tokLit];
+      // the switch-on bar is two stretches: before the switch, never counted, and after it,
+      // whose figures are its own (its speed over the time counted, not the whole bar)
+      const onBar = first && view.tokLit === first.i;
       $s("t-read").innerHTML = view.tokLit < skip
-        ? when + NOT_RECORDED
-        : when + tokens(s.bars[view.tokLit]) + " used, " + tokens(perMin(s.bars[view.tokLit])) + " a minute" +
-          (T.since_ms && start < T.since_ms ? ". Counted from " + clock(T.since_ms, secs) + ", when My RichOS was turned on." : "");
+        ? when(start, upto) + NOT_RECORDED
+        : onBar && view.tokLitBefore
+          ? when(start, T.since_ms) + NOT_RECORDED
+          : onBar
+            ? when(T.since_ms, upto) + tokens(v) + " used, " + tokens((v * 60000) / Math.max(1000, upto - T.since_ms)) + " a minute"
+            : when(start, upto) + tokens(v) + " used, " + tokens(perMin(v)) + " a minute";
     } else {
       $s("t-read").innerHTML = "<b>" + tokens(total) + "</b> used in " + range.words + ". Fastest: " + tokens(perMin(s.bars.length ? Math.max.apply(null, s.bars) : 0)) + " a minute." + esc(sinceNote(range.span)) + " Point at the graph for any moment.";
     }
@@ -708,17 +731,24 @@
       next.focus();
       next.click();
     });
-    const point = (canvasKey, litKey, count) => {
+    // `before(i, into)`: whether the pointer, `into` of the way across bar `i`, is on a part of
+    // it from before the switch; the reading is redrawn when the bar or that changes, no oftener.
+    const point = (canvasKey, litKey, count, before) => {
       const c = $s(canvasKey);
       c.addEventListener("pointermove", (e) => {
         const r = c.getBoundingClientRect();
         const n = count();
-        const i = Math.max(0, Math.min(n - 1, Math.floor(((e.clientX - r.left - 4) / (r.width - 8)) * n)));
-        if (i !== view[litKey]) { view[litKey] = i; paintSheet(); }
+        const at = ((e.clientX - r.left - 4) / (r.width - 8)) * n;
+        const i = Math.max(0, Math.min(n - 1, Math.floor(at)));
+        const b = before ? before(i, at - i) : false;
+        if (i !== view[litKey] || b !== view[litKey + "Before"]) { view[litKey] = i; view[litKey + "Before"] = b; paintSheet(); }
       });
       c.addEventListener("pointerleave", () => { view[litKey] = -1; paintSheet(); });
     };
-    point("t-graph", "tokLit", () => (T && T.detail ? T.detail.series.bars.length : TOK_RANGES.find((r) => r.id === view.tok).n));
+    point("t-graph", "tokLit", () => (T && T.detail ? T.detail.series.bars.length : TOK_RANGES.find((r) => r.id === view.tok).n), (i, into) => {
+      const first = T && T.detail ? startup(T.detail.series) : null;
+      return !!first && i === first.i && into < first.cut;
+    });
     point("m-graph", "memLit", () => MEM_RANGES.find((r) => r.id === view.mem).n);
 
     // Escape: the details first, then the card, before the window's own Escape sees it.
