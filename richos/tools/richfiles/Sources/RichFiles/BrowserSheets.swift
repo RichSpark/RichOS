@@ -884,7 +884,8 @@ enum OpenWithApps {
 }
 
 /// Catalog entry 3: Open With lists the apps for this file type at once, the default first and
-/// marked Default, then Choose Another App…
+/// marked Default, then Choose Another App… Each app's icon sits beside its name: SwiftUI drops a
+/// menu label's icon on macOS unless the label asks for title and icon.
 struct OpenWithMenuItems: View {
     let file: URL
     let open: (WorkspaceApplication) -> Void
@@ -895,11 +896,13 @@ struct OpenWithMenuItems: View {
         if let preferred = apps?.defaultApplication {
             Button { open(preferred) } label: {
                 Label { Text("\(preferred.name) (Default)") } icon: { Image(nsImage: OpenWithApps.icon(preferred, side: 16)) }
+                    .labelStyle(.titleAndIcon)
             }
         }
         ForEach(apps?.alternatives ?? []) { app in
             Button { open(app) } label: {
                 Label { Text(app.name) } icon: { Image(nsImage: OpenWithApps.icon(app, side: 16)) }
+                    .labelStyle(.titleAndIcon)
             }
         }
         Divider()
