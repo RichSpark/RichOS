@@ -2516,7 +2516,9 @@ impl WorkHost {
                 })
             };
             let own = records.iter().filter(|record| {
-                if record.reported_state().is_some_and(AssignmentState::waits_for_the_world) {
+                // A wait from an earlier run that the one rule holds starts nothing by itself:
+                // its handoff waits for the user, so it is read like any other record.
+                if record.reported_state().is_some_and(AssignmentState::waits_for_the_world) && !self.held_from_before(record) {
                     return true;
                 }
                 let Ok(receipts) = launches.as_ref() else { return true };
@@ -2542,6 +2544,15 @@ impl WorkHost {
             live += own.max(usize::from(self.stu_busy(&scope)));
         }
         live
+    }
+
+    /// **Does the one rule hold this job's wait?** ([`crate::turn_gate`]) A job left waiting
+    /// for the screen or an allowance (paused) by an earlier run, in a chat the user has not
+    /// been active in since the app opened, does not resume by itself: its handoff waits for
+    /// him (review rv-20261126T181936Z-b201d280-33e4, finding 1). A wait recorded in this run
+    /// belongs to a session that is live now, and is still running work.
+    fn held_from_before(&self, record: &Assignment) -> bool {
+        self.turn_gate.get().is_some_and(|gate| record.updated_at_ms < gate.since_ms() && gate.waits(&record.thread_id))
     }
 
     /// **This provider session has demonstrably ended, and no process of it still runs.** A
@@ -3344,6 +3355,10 @@ mod tests {
         opened.set_turn_gate(Arc::new(crate::turn_gate::TurnGate::at_launch(&h.state)));
         opened.wake_messages(&h.binding);
         assert!(!opened.peer_work_pending(), "a held handoff was counted as work still running");
+        // Nor is the paused job itself: the rule holds it, so it does not resume by itself, and
+        // the quit question and a closing window do not count it (review
+        // rv-20261126T181936Z-b201d280-33e4, finding 1).
+        assert_eq!(opened.background_work().running, 0, "a held paused job was counted as running");
         crate::session_tools::send(&path, &scope, serde_json::json!({"text":"Written while the app is open"})).unwrap();
         opened.wake_messages(&h.binding);
         assert!(opened.wait_for_completed(1, std::time::Duration::from_secs(30)), "the new message never reached Stu");
