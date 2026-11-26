@@ -1900,7 +1900,7 @@ mod tests {
             "binding":{"entity_id":"depot","thread_id":"thread-one","session_id":"work-session-one"},
             "request":{"obligation_id":"obligation-7","role":"worker","title":"Fictional","repo":"/fictional/project"},
             "status":status,"agent_id":"agent-one","tool_use_id":"call-one"}).to_string()).unwrap();
-        let read = || (verdict_from(&control, Liveness::Clear, &engine_state, &work), crate::registered_from(&work, &control));
+        let read = || (verdict_from(&control, Liveness::Clear, &engine_state, &work), crate::registered_from(&work, &control, &|_| false));
 
         // The idle open record: its helper's run ended, and nothing else of it is live.
         helper("run-ended");

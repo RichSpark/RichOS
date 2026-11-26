@@ -11640,19 +11640,25 @@ fn questions_pending(state: &AppState) -> bool {
 
 /// What the assignment register says, using the same derivation as the update gate.
 fn registered_work(state: &AppState) -> lifecycle::Registered {
-    registered_from(&state.work, &state.control)
+    let view = state.reader.snapshot();
+    registered_from(&state.work, &state.control, &|record| view.ledger().turn_for_intake(record.id())
+        .is_some_and(|turn| !matches!(turn.state, richos_core::ledger::TurnState::Received | richos_core::ledger::TurnState::InFlight)))
 }
 
 /// [`registered_work`] from the two handles it reads, so a test drives the quit question's
 /// own reading over a real work host (`updates.rs`, the end-to-end gate test).
-fn registered_from(work_host: &richos_core::work_host::WorkHost, control: &TurnControl) -> lifecycle::Registered {
+/// `finished`: whether an intake's turn is already filed and over. An intake stays in the log,
+/// not marked drained, while one before it is held by the one rule (`Spine::drain_intake`), and a
+/// finished one is not work that runs.
+fn registered_from(work_host: &richos_core::work_host::WorkHost, control: &TurnControl,
+    finished: &dyn Fn(&richos_core::steering::IntakeRecord) -> bool) -> lifecycle::Registered {
     let work = work_host.background_work();
     lifecycle::Registered {
         running: work.running + usize::from(control.has_active_turns())
             + usize::from(work_host.peer_work_pending())
             // An agent's message the one rule holds until the user is active in its chat is
             // not work that runs (`WorkHost::intake_waits`).
-            + usize::from(control.pending_intake().iter().any(|record| !work_host.intake_waits(record))),
+            + usize::from(control.pending_intake().iter().any(|record| !work_host.intake_waits(record) && !finished(record))),
         awaiting_you: work.awaiting_you,
         readable: work.readable,
         // Commands Rich started, on every live lease (reap gap C5): a few small files, no lock.
