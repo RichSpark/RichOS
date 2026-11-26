@@ -21,25 +21,24 @@ by each app of the RichOS suite individuall and all combined", "off by default",
 THE STEPS, in one guest:
   identity   the boot log's "this app: built from" is --expect-sha
   setup      conversation-walk.py's first run: the company and its first conversation
-  off-idle   the switch is off (as it ships): no My RichOS square in the window; the app's CPU and
-             memory over --idle seconds with nothing happening
-  off-turn   one real turn (--prompt) with the switch off, measured from the send to the reply
-  on         Settings > Show My RichOS switched on: the square is in the rail, under My Mac
-  on-idle    the same idle measurement with the switch on (the 1-second timer and the 2-second
-             memory reader running, the card closed)
+  off-turn   the switch off (as it ships): no My RichOS square in the window; one real turn
+             (--prompt), the app's CPU and memory measured from the send to the reply
+  on         Settings > Dark theme and Show My RichOS switched on: the square is in the rail,
+             under My Mac
   on-turn    the same turn with the switch on, measured the same way; then, while the rail still
              says tokens are being used: rail-dark.png, the square's own words, and the card
-             opened by the pointer (card-dark.png) with its figures read from the window
+             opened by the pointer (card-dark.png) with its figures read by OCR
   details    the token half of the card: details-tokens-dark.png; Memory: details-memory-dark.png
   idle       the rail says Idle within 25 s of the reply (ACTIVE_MS is 10 s after the last request)
   light      Settings > Light theme, then the rail, the card and both details again (*-light.png)
-  off        the switch off again: the square leaves the rail
+  measure    no turn open, the switch on, off, on, off, --idle seconds each (the card closed)
+  off        the switch off: the square leaves the rail
   quit       the app is quit by its recorded pid and no richos-tauri process is left in the guest
 
-THE MEASUREMENT is the guest's own `ps`: the CPU time and resident memory of the app's process
-(richos-tauri) and of every WebKit process (the web view runs the page's timer and paints the
-canvases, so it is counted; the guest runs no other WebKit app). CPU is the CPU time used over the
-wall time, in percent of one core.
+THE MEASUREMENT is the guest's own `ps`: CPU time and resident memory of the app's own process
+(the recorded pid), of every WebKit process (the web view runs the page's timer and paints the
+canvases; the guest runs no other WebKit app) and, apart, of the other richos-tauri processes
+(the agents' tool helpers). CPU is the CPU time used over the wall time, in percent of one core.
 
 Evidence in --out: report.json, the pictures, and what the turns left (ledger.jsonl, app.log,
 native-projects/). Exit 0 when every step passes.
@@ -47,16 +46,18 @@ native-projects/). Exit 0 when every step passes.
 import argparse
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import time
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-STEPS = ['identity', 'setup', 'off-idle', 'off-turn', 'on', 'on-idle', 'on-turn', 'details', 'idle', 'light', 'off', 'quit']
+STEPS = ['identity', 'setup', 'off-turn', 'on', 'on-turn', 'details', 'idle', 'light', 'measure', 'off', 'quit']
 PROMPT = 'Write a plain paragraph of about 250 words on the history of tea. No tools, no headings.'
 
 # The guest's `ps`, once: every richos-tauri and WebKit process with its CPU time (seconds) and
@@ -92,13 +93,15 @@ def load(name, path):
     return module
 
 
-def usage(before, after):
-    """CPU (percent of one core) and resident memory (MB) between two snapshots."""
+def usage(before, after, app_pid):
+    """CPU (percent of one core) and resident memory (MB) between two snapshots: the app's own
+    process (the recorded pid: the bridge, the counting and the memory reader run there), its
+    WebKit processes (the page's timer and painting), and the other richos-tauri processes (the
+    agents' tool helpers, which this feature does not touch)."""
     wall = after['at'] - before['at']
-    cpu = sum(t - before['rows'][p][0] for p, (t, _, _) in after['rows'].items() if p in before['rows'])
     by = {}
     for p, (t, rss, name) in after['rows'].items():
-        key = 'richos-tauri' if name == 'richos-tauri' else 'webkit'
+        key = 'app' if p == app_pid else 'webkit' if name.startswith('com.apple.WebKit.') else 'helpers'
         slot = by.setdefault(key, {'cpu_s': 0.0, 'rss_mb': 0.0})
         slot['rss_mb'] += rss / 1024
         if p in before['rows']:
@@ -106,8 +109,9 @@ def usage(before, after):
     for slot in by.values():
         slot['cpu_percent'] = round(100 * slot.pop('cpu_s') / wall, 2)
         slot['rss_mb'] = round(slot['rss_mb'], 1)
-    return {'seconds': round(wall, 1), 'cpu_percent_of_one_core': round(100 * cpu / wall, 2),
-            'rss_mb': round(sum(r[1] for r in after['rows'].values()) / 1024, 1), 'by_process': by}
+    seen = [by.get(k, {'cpu_percent': 0, 'rss_mb': 0}) for k in ('app', 'webkit')]
+    return {'seconds': round(wall, 1), 'app_and_webkit_cpu_percent': round(sum(x['cpu_percent'] for x in seen), 2),
+            'app_and_webkit_rss_mb': round(sum(x['rss_mb'] for x in seen), 1), 'by_process': by}
 
 
 def main():
@@ -143,10 +147,16 @@ def main():
         def snap(self):
             return json.loads(guest(self.vm, 'python3 -c ' + repr_sh(SNAP), 60))
 
+        def app_pid(self):
+            state = Path(os.environ.get('TESTVM_ROOT', str(Path.home() / '.richos-testvm'))) / 'run' / self.vm
+            return (state / 'app.pid').read_text().strip()
+
         def measure_idle(self):
+            """Over --idle seconds once no turn is open on the ledger."""
+            self.wait_idle(self.a.within)
             before = self.snap()
             time.sleep(self.a.idle)
-            return usage(before, self.snap())
+            return usage(before, self.snap(), self.app_pid())
 
         def node(self, dom_id):
             found = [n for n in self.ax('find', '--id', dom_id, '--first') if n.get('role')]
@@ -195,7 +205,8 @@ def main():
             if r.returncode:
                 raise StepFailed('OCR could not read %s: %s' % (name, (r.stderr or r.stdout).strip()[-200:]))
             text = ' '.join(r.stdout.split())
-            return text if all(p in text for p in phrases) else None
+            # OCR reads "RichOS" as "Richos" at this size: compared without case.
+            return text if all(p.lower() in text.lower() for p in phrases) else None
 
         def say(self, text):
             self.turns += 1
@@ -227,19 +238,26 @@ def main():
             self.thread = made['thread']
             return made
 
-        def step_off_idle(self):
-            if self.present_id('rom-square'):
-                raise StepFailed('the My RichOS square is in the window before the switch was turned on')
-            return {'square_in_window': False, **self.measure_idle()}
-
         def turn(self):
             before = self.snap()
             record = self.say(self.a.prompt)
             after = self.snap()
-            return {'reply_chars': len(record.get('reply', '')), 'turn_seconds': record.get('seconds'), **usage(before, after)}
+            return {'reply_chars': len(record.get('reply', '')), 'turn_seconds': record.get('seconds'), **usage(before, after, self.app_pid())}
 
         def step_off_turn(self):
-            return self.turn()
+            if self.present_id('rom-square'):
+                raise StepFailed('the My RichOS square is in the window before the switch was turned on')
+            return {'square_in_window': False, **self.turn()}
+
+        def step_measure(self):
+            """The app quiet (no turn open), the switch on, off, on, off: --idle seconds each, so a
+            stretch of the app's own background work shows as such and not as the feature's."""
+            out = {}
+            for n, on in enumerate((True, False, True, False)):
+                self.settings_switch(on)
+                self.hover(5, 5)
+                out['%d-%s' % (n + 1, 'on' if on else 'off')] = self.measure_idle()
+            return out
 
         def set_theme(self, theme):
             """Settings > Dark theme or Light theme (effort-hover-walk.py's way), then Settings closed."""
@@ -259,15 +277,25 @@ def main():
                 raise StepFailed('the square is not between My Mac and the name circle: %s' % json.dumps([mac, rom, me]))
             return {'square': self.square()}
 
-        def step_on_idle(self):
-            return self.measure_idle()
-
         def step_on_turn(self):
+            # While Rich is still answering: the square saying tokens are being used, and its picture.
+            during = {}
+
+            def rail_while_streaming():
+                time.sleep(8)  # the message is typed and sent first: one hand on the guest at a time
+                try:
+                    during['square_said'] = self.until('the rail saying tokens are being used',
+                                                       lambda: 'using tokens' in self.square() and self.square(), 60, every=2)
+                    during['rail_dark'] = self.shot_name('rail-dark.png')
+                except (StepFailed, subprocess.TimeoutExpired) as exc:
+                    during['error'] = str(exc)[:300]
+            watcher = threading.Thread(target=rail_while_streaming)
+            watcher.start()
             fact = self.turn()
-            said = self.until('the rail saying tokens are being used', lambda: 'using tokens' in self.square() and self.square(), 8)
-            self.hover(5, 5)
-            fact['rail_dark'] = self.shot_name('rail-dark.png')
-            fact['square_said'] = said
+            watcher.join(90)
+            if 'rail_dark' not in during:
+                raise StepFailed('the rail never said tokens were being used during the turn: %s' % during.get('error'))
+            fact.update(during)
             fact.update(self.card('dark'))
             return fact
 

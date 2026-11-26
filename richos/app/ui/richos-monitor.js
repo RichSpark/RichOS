@@ -114,11 +114,14 @@
     ctx.clearRect(0, 0, w, h);
     return ctx;
   }
+  /// The theme's paints, read once per theme (the theme watcher forgets them), never every tick.
+  let paints = null;
   function palette() {
-    return {
+    paints = paints || {
       ground: css("--res-ground"), flow: css("--rom-flow"), track: css("--res-track"), ram: css("--res-ram"),
       ink: css("--res-glyph"), hatch: css("--res-hatch"), rest: css("--nr-ink"),
     };
+    return paints;
   }
 
   // ---- the rail square ------------------------------------------------------------------------
@@ -145,7 +148,13 @@
       }
     }
   }
+  /// What the square last showed: a tick that changes nothing touches nothing (an idle rail is
+  /// the same ten dots second after second).
+  let railShown = "";
   function paintRail() {
+    const shown = [R.active, R.m1, T ? T.scale : 0, T ? T.tile.join() : ""].join("|");
+    if (shown === railShown) return;
+    railShown = shown;
     btn.dataset.state = R.active ? "using" : "idle";
     speedEl.textContent = R.active ? tokens(R.m1, true) : "Idle";
     btn.setAttribute(
@@ -329,7 +338,7 @@
     const row = r.thread && typeof threadRow === "function" ? threadRow(r.thread) : null;
     const company = r.entity && typeof entityLabel === "function" ? entityLabel(r.entity) : "";
     return {
-      chat: row && row.title ? row.title : r.thread ? "A chat" : "Outside a chat",
+      chat: row && (row.display_title || row.title) ? row.display_title || row.title : r.thread ? "A chat" : "Outside a chat",
       company: company && company !== "No entity" ? company : "",
     };
   }
@@ -641,7 +650,8 @@
     }).observe(document.body, { attributes: true, attributeFilter: ["class"] });
     new MutationObserver(() => {
       if (!on) return;
-      lastWins = lastApps = lastWhere = "";
+      lastWins = lastApps = lastWhere = railShown = "";
+      paints = null;
       paintRail();
       if (cardOpen()) paintCard();
       paintSheet();
@@ -724,7 +734,7 @@
       card: cardOpen(),
       sheet: sheetOpen() ? view.tab : null,
     }),
-    repaint() { lastWins = lastApps = lastWhere = ""; return tick(); },
+    repaint() { lastWins = lastApps = lastWhere = railShown = ""; return tick(); },
     openSheet: (tab) => { if (built && on) openSheet(tab); },
     closeSheet: () => { if (built) closeSheet(); },
   };
