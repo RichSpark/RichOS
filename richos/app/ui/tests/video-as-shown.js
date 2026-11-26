@@ -316,6 +316,182 @@ async function asShown(theme, mic) {
   }
 }
 
+/// MY RICHOS IN THE VIDEO (CEO, 2026-11-26: "I hope the new My RichOS button on the nav rail gets
+/// recorded with the "make a video" feature when the user clicks or hovers etc."). A recording in
+/// which the square shows a burst, the pointer rests on it (its card), its token half is pressed
+/// (the Tokens details) and then Memory: what the recorder drew at each, read off its own canvas,
+/// with the figures a fixture's in `my_richos.rs`'s shape.
+function myRichosRecording(theme) {
+  const drive = async (T) => {
+    const errors = [];
+    window.addEventListener("error", (e) => errors.push(String(e.message)));
+    let drawn = null;
+    const fillText = CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fillText = function (text, x, y) {
+      if (drawn && this.canvas.classList.contains("rv-canvas")) drawn.push({ text: String(text), alpha: this.globalAlpha });
+      return fillText.apply(this, arguments);
+    };
+    const R = window.RichVideoAnywhere;
+    const canvas = () => document.querySelector(".rv-canvas");
+    /// The words of three whole frames from now, how far into the recording, and whether the
+    /// square's own bars (its canvas) are in the frame: the recorder's pixels there against the
+    /// square's own, gold where the square is gold.
+    const look = async (from) => {
+      await T.sleep(400);
+      const first = R.state().frames;
+      await T.until("the next frame", () => R.state().frames > first);
+      drawn = [];
+      const mark = R.state().frames;
+      await T.until("three more frames", () => R.state().frames >= mark + 3);
+      const words = drawn;
+      drawn = null;
+      const tile = document.querySelector("#rom-square canvas").getBoundingClientRect();
+      const c = canvas();
+      const k = c.width / innerWidth;
+      const px = c.getContext("2d").getImageData(Math.floor(tile.left * k), Math.floor(tile.top * k), Math.floor(tile.width * k), Math.floor(tile.height * k)).data;
+      // how much of the square's bar color there is, as an amount of ink: each pixel counts by how
+      // far it is from the square's ground towards the bar color (0 to 1), so a bar the recorder
+      // draws at a half-pixel place, blended over two pixels, counts the same as a crisp one
+      const paint = (v) => {
+        const probe = document.createElement("i");
+        probe.style.color = v;
+        document.body.appendChild(probe);
+        const c = getComputedStyle(probe).color.match(/[\d.]+/g).map(Number);
+        probe.remove();
+        return c;
+      };
+      const flow = paint("var(--rom-flow)");
+      const ground = paint("var(--res-ground)");
+      const span = [0, 1, 2].map((i) => flow[i] - ground[i]);
+      const span2 = span.reduce((a, v) => a + v * v, 0);
+      const golden = (data) => {
+        let n = 0;
+        for (let i = 0; i < data.length; i += 4) {
+          const t = [0, 1, 2].reduce((a, j) => a + (data[i + j] - ground[j]) * span[j], 0) / span2;
+          n += Math.max(0, Math.min(1, t));
+        }
+        return n;
+      };
+      const gold = golden(px) / (k * k);
+      // the same count on the square's own canvas, per CSS pixel, as the window shows it
+      const own = document.querySelector("#rom-square canvas");
+      const ownK = own.width / tile.width;
+      const ownGold = golden(own.getContext("2d").getImageData(0, 0, own.width, own.height).data) / (ownK * ownK);
+      const at = (performance.now() - from) / 1000;
+      await T.sleep(600);
+      return { at, words, goldPixels: Math.round(gold), ownGoldPixels: Math.round(ownGold) };
+    };
+    try {
+      await T.app();
+      await T.chat();
+      await T.until("the My RichOS square", () => T.seen("#rom-square") && window.RichosMonitor.state().rail && window.RichosMonitor.state().rail.state === "using");
+      const out = { errors };
+      await T.press("#set-btn");
+      await T.until("Settings", () => T.seen("#set-menu"));
+      await T.press("#video-anywhere");
+      await T.until("the choices", () => T.seen("#video-anywhere-choices"));
+      await T.press("#video-anywhere-choices .rv-go");
+      await T.until("the recording to start", () => R.state().state === "rec");
+      await T.until("the first frames", () => R.state().frames >= 2);
+      const from = performance.now();
+      out.rail = await look(from);
+      // the pointer on the square (the offscreen window takes no real pointer: the square's own event)
+      document.querySelector("#rom-square").dispatchEvent(new PointerEvent("pointerenter"));
+      await T.until("the card", () => window.RichosMonitor.state().card && document.querySelector('#rom-card [data-k="mem-now"]').textContent);
+      out.card = await look(from);
+      document.querySelector('#rom-card [data-go="tokens"]').click();
+      await T.until("the Tokens details", () => document.querySelector("#rom-sheet .rom-where-row"));
+      out.tokens = await look(from);
+      document.querySelector('#rom-sheet [data-tab="memory"]').click();
+      await T.until("the Memory details", () => document.querySelectorAll("#rom-sheet .rom-app-row").length > 0);
+      out.memory = await look(from);
+      // the rest of the list, scrolled to as he would: its foot row is in the file once it shows
+      const body = document.querySelector("#rom-sheet .rom-sh-body");
+      body.scrollTop = body.scrollHeight;
+      out.memoryFoot = await look(from);
+      window.RichosMonitor.closeSheet();
+      await T.press("#video-anywhere-stop");
+      await T.until("the sheet", () => R.state().state === "sheet");
+      await T.press(".rv-sheet .rv-main");
+      await T.until("the saved file", () => window.__RICHOS_MOCK__.homeVideoSaves().length > 0);
+      T.post({ file: { name: "video.mp4", base64: window.__RICHOS_MOCK__.homeVideoSaves().pop().base64 } });
+      T.post({ done: out });
+    } catch (e) {
+      T.post({ done: { error: String((e && e.message) || e), errors } });
+    }
+  };
+  const fixture = () => {
+    const MB = 1048576;
+    const line = (mb) => ({ now: mb * MB, avg: mb * MB, peak: mb * MB, hist: Array.from({ length: 60 }, (_, i) => Math.round((mb + 20 * Math.sin(i / 6)) * MB)) });
+    const apps = [["richos", "RichOS", 2, 1320], ["richscribe", "RichScribe", 1, 604], ["richbrief", "RichBrief", 1, 142], ["richfiles", "RichFiles", 1, 118],
+      ["richglance", "RichGlance", 1, 93], ["richfinder", "RichFinder", 0, 0, "richos"], ["richpass", "RichPass", 0, 0, "richos"], ["richcleaner", "RichCleaner", 0, 0],
+      ["richglance-capture", "RichGlance Capture", 0, 0], ["window-gestures", "Window Gestures", 1, 21], ["richdoctor", "RichDoctor", 1, 46],
+      ["claude-code", "Claude Code", 6, 1480], ["codex", "Codex", 0, 0]];
+    window.__RICHOS_MOCK_MONITOR__ = (args) => {
+      const now = Date.now();
+      const bars = (n, v) => Array.from({ length: n }, (_, i) => Math.round(v * (0.6 + 0.4 * Math.abs(Math.sin(i)))));
+      return {
+        on: true, now_ms: now,
+        tokens: {
+          since_ms: now - 7200000, last_ms: now - 2000, active: true, m1: 1262000, m5: 4131000, m15: 5230000,
+          tile: bars(10, 140000), scale: 150000, card: args.card ? bars(60, 320000) : [],
+          detail: args.detail ? {
+            span_s: args.detail.token_span_s,
+            series: { bars: bars(args.detail.token_bars, 300000), bar_ms: (args.detail.token_span_s * 1000) / args.detail.token_bars, ends_at_ms: now + 1000 },
+            sources: [{ entity: "harbor", thread: "ecs", team: true, working: 6, model: "Fable", tokens: 2144000, per_min: 517000 }],
+            models: [{ name: "Fable", tokens: 2144000 }],
+            kinds: [{ name: "Read from cache", tokens: 2000000 }, { name: "Saved to cache", tokens: 100000 }, { name: "New input", tokens: 30000 }, { name: "Written output", tokens: 14000 }],
+          } : null,
+        },
+        memory: args.card || args.detail ? {
+          status: "available", detail: "", at_ms: now, mac_total_bytes: 36 * 1024 * MB,
+          apps: apps.map(([id, name, processes, mb, within]) => Object.assign({ id, name, processes, within: within || null }, processes ? line(mb) : { now: within ? null : 0, avg: null, peak: null, hist: [] })),
+          all: line(3824),
+          series: args.detail ? { span_s: args.detail.memory_span_s, list: line(3824).hist.concat(line(3824).hist).slice(0, args.detail.memory_points) } : null,
+        } : null,
+      };
+    };
+  };
+  return [
+    `(${SEED_THEME.toString()})(${JSON.stringify(theme)});`,
+    `(function () { var c = JSON.parse(window.localStorage.getItem("richos-mock-config")); c.show_richos_monitor = true; window.localStorage.setItem("richos-mock-config", JSON.stringify(c)); })();`,
+    `(${fixture.toString()})();`,
+    `window.__RICHOS_MOCK_PRESET__ = ${JSON.stringify({ homeVideoInput: "tone" })};`,
+    `window.addEventListener("load", function () { (${drive.toString()})((${tools.toString()})()); });`,
+  ].join("\n");
+}
+
+async function myRichosAsShown(theme) {
+  const ran = await runPage(APP, myRichosRecording(theme), 150);
+  try {
+    assert(ran.code === 0 && ran.done, "the page did not finish (exit " + ran.code + "): " + JSON.stringify(ran.said.slice(-4)) + " " + ran.stderr.slice(-300));
+    const d = ran.done;
+    assert(!d.error, "the recording could not be made: " + d.error + " " + JSON.stringify(d.errors));
+    assertEqual(d.errors, [], "the page reported errors");
+    const file = path.join(ran.dir, "video.mp4");
+    const probe = JSON.parse(execFileSync("ffprobe", ["-v", "error", "-show_format", "-show_streams", "-of", "json", file], { encoding: "utf8" }));
+    assert(probe.streams.some((s) => s.codec_name === "h264"), "the file has no picture");
+    fs.mkdirSync(KEEP, { recursive: true });
+    fs.copyFileSync(file, path.join(KEEP, "my-richos-" + theme + ".mp4"));
+    for (const [name, place] of [["1-rail", d.rail], ["2-card", d.card], ["3-tokens", d.tokens], ["4-memory", d.memory], ["5-memory-scrolled", d.memoryFoot]]) {
+      execFileSync("ffmpeg", ["-v", "error", "-y", "-ss", place.at.toFixed(2), "-i", file, "-frames:v", "1", path.join(KEEP, "my-richos-" + theme + "-" + name + ".png")]);
+    }
+    const missing = [];
+    const need = (place, name, words) => { for (const w of words) if (!has(place, w)) missing.push(name + ": " + w); };
+    need(d.rail, "the rail", ["1.3M"]);
+    need(d.card, "the card", ["My", "RichOS", "Last", "minute", "1.26M/min", "Memory", "2-minute", "average", "RichFinder", "In"]);
+    need(d.tokens, "the Tokens details", ["Tokens", "used", "Where", "ECS", "By", "model", "Read", "from", "cache"]);
+    need(d.memory, "the Memory details", ["Each", "app", "RichBrief", "RichCleaner"]);
+    need(d.memoryFoot, "the Memory details scrolled to their foot", ["All", "together", "Codex"]);
+    assertEqual(missing, [], "WHAT MY RICHOS SHOWS IS NOT IN THE VIDEO");
+    assert(d.rail.ownGoldPixels > 0 && Math.abs(d.rail.goldPixels - d.rail.ownGoldPixels) <= d.rail.ownGoldPixels * 0.25,
+      "the square's bars are not in the video as on screen: " + d.rail.goldPixels + " pixels of bar ink in the file, " + d.rail.ownGoldPixels + " on the square");
+    return `${theme}: the square (1.3M; its bars ${d.rail.goldPixels} pixels of bar ink in the file, ${d.rail.ownGoldPixels} on screen), its card, the Tokens and the Memory details are in the file (${Number(probe.format.duration).toFixed(1)} s); frames in ${KEEP}`;
+  } finally {
+    fs.rmSync(ran.dir, { recursive: true, force: true });
+  }
+}
+
 function toolWindow(files) {
   const bridge = (files) => Object.defineProperty(window, "RichBridge", {
     configurable: true,
@@ -659,6 +835,10 @@ async function main() {
   await run.check("dark, with the microphone: the empty message box has its hint and no placeholder under it, Settings' closed list is not drawn until it is opened, the nav tooltip is opaque, and every line of a message starts where the box puts it", async () => asShown("dark", true));
 
   await run.check("light, without the microphone: the same recorded states", async () => asShown("light", false));
+
+  for (const theme of ["dark", "light"]) {
+    await run.check(`${theme}: My RichOS, its square, the card the pointer opens and both details, is in the video as the window shows it`, async () => myRichosAsShown(theme));
+  }
 
   for (const files of [false, true]) {
     const tool = files ? "RichFiles" : "RichCleaner";

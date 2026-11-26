@@ -137,7 +137,9 @@
     ctx.fillRect(0, 0, 34, 34);
     const s = (T && T.tile) || [];
     const top = Math.max(1, (T && T.scale) || 0);
-    const x0 = 2.5, floor = 31, room = 19;
+    // whole pixels, so the bars stay crisp wherever the square is drawn at another scale (a
+    // Make a video recording draws the window at 1x)
+    const x0 = 2, floor = 31, room = 19;
     for (let i = 0; i < 10; i++) {
       const x = x0 + i * 3;
       const v = s[i] || 0;
@@ -147,7 +149,7 @@
         ctx.fillRect(x, floor - hgt, 2, hgt);
       } else {
         ctx.fillStyle = P.rest;
-        ctx.fillRect(x + 0.5, floor - 1, 1, 1);
+        ctx.fillRect(x + 1, floor - 1, 1, 1);
       }
     }
   }
