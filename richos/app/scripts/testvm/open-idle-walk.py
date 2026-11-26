@@ -20,14 +20,17 @@ WHAT IT DOES, in the guest, on fixture data, never on the host's screen (CEO rul
   first-run  adopt-walk.py's: company "Acme" with a folder that is a Git repository
   connect    a Codex connection of the first-run conversation, made with the engine's own helper
              (codex_channels.py connect --scope), no model involved
-  paused     the app quit; in that conversation, while it is closed: the Stop the app saves for the
-             team when a job is stopped, a report in Rich's inbox of a job paused for the usage
-             limit, and a READY TO LAND handover Codex wrote whose review the last run had taken up
+  paused     the app quit; in that conversation, while it is closed: a job of his paused for the
+             usage limit, as the app keeps it (its assignment record, reported waiting-for-quota by
+             the engine's own report_assignment, and its handoff, given to Stu's session and kept
+             open while the job is), the Stop the app saves for the team when a job is stopped, a
+             report in Rich's inbox of the paused job, and a READY TO LAND handover Codex wrote whose review the last run had taken up
              and Quit stopped (seeded with the engine's own review watcher, as the app's watcher
              records it). The app opened; Settings opened by its button; both rows switched (the
              conversation's to Opus, the team's to Opus and back to Fable); Settings closed with
              Escape. Then --idle-seconds pass. PASS needs: not one new answer from any model; the
-             Stop not taken from the team's inbox; the paused report not filed as a turn in the
+             paused job's handoff not given again and its record still paused; the Stop not taken
+             from the team's inbox; the paused report not filed as a turn in the
              conversation ledger (a turn there would show the chat as working); no review lock,
              review log, review ledger row or second-review process; and the app's
              own record of the chats a turn was let through in (turn-gate.json) empty
@@ -103,6 +106,61 @@ for role,row in (('stu',stop),('rich',pause)):
     with open(path,'a') as f: f.write(json.dumps(json.loads(row),separators=(',',':'))+'\n')
     out[role]=os.path.getsize(path)
 print(json.dumps(out))
+"""
+
+# A job paused for the usage limit, as the app keeps it while closed: its assignment record
+# (the app's own shape, assignment.rs), reported waiting-for-quota by the engine's own
+# report_assignment, and its handoff in Stu's inbox, given to his session (delivered) and kept
+# open while the job is. Prints the record and where the handoff ends.
+PAUSED_JOB = r"""import hashlib,json,os,runpy,sys,time,uuid
+engine,state,entity,thread=sys.argv[1:5]
+text='Prepare the quarterly summary for the board'
+obligation='open-idle-paused-'+uuid.uuid4().hex[:8]
+job=str(uuid.uuid4())
+digest=hashlib.sha256(text.encode()).hexdigest()
+ref='ledger:%s:turn-paused'%thread
+now=int(time.time()*1000)
+part=hashlib.sha256(json.dumps([entity,thread],separators=(',',':')).encode()).hexdigest()
+folder=os.path.join(state,'assignments',part)
+os.makedirs(folder,exist_ok=True)
+record={'schema':1,'id':job,'obligation_id':obligation,'seat':'work-seat:'+obligation,'entity_id':entity,'thread_id':thread,
+        'instruction_ledger_ref':ref,'instruction_sha256':digest,'title':text,'handoff':'Handoff: '+text,
+        'repositories':[],'state':'registered','detail':'Registered','registered_at_ms':now,'updated_at_ms':now}
+path=os.path.join(folder,job+'.json')
+with open(os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600),'w') as f: f.write(json.dumps(record))
+os.environ['RICHOS_APP_STATE']=state
+app=runpy.run_path(os.path.join(engine,'mega-lander','app.py'))
+reported=app['report_assignment']({'binding':dict(entity_id=entity,thread_id=thread,session_id='prior-session')},
+                                  obligation,'waiting-for-quota','Paused for the usage limit')
+inbox_dir=os.path.join(state,'messages',entity,thread)
+os.makedirs(inbox_dir,exist_ok=True)
+row={'handoff':True,'from':'rich','text':'Handoff: '+text,'instruction':{'ledger_ref':ref,'sha256':digest,'text':None},
+     'work':{'assignment_id':job,'obligation_id':obligation}}
+inbox=os.path.join(inbox_dir,'stu.jsonl')
+with open(inbox,'a') as f: f.write(json.dumps(row,separators=(',',':'))+'\n')
+end=os.path.getsize(inbox)
+cursor={'through':end,'handoffs_retained':True,'accepted':{},
+        'active':{'peer:%d'%end:{'input':'peer:%d'%end,'session_id':'prior-session','delivered':True}}}
+with open(os.path.join(inbox_dir,'stu.cursor'),'w') as f: f.write(json.dumps(cursor))
+print(json.dumps({'assignment':job,'obligation':obligation,'reported':reported,'handoff_end':end,'cursor':cursor}))
+"""
+
+# The paused job is settled by the engine once the paused step has been measured, so the later
+# steps (where he types in this chat, which opens it) do not hand Stu the fixture's handoff.
+SETTLE = r"""import json,os,runpy,sys
+engine,state,entity,thread,obligation=sys.argv[1:6]
+os.environ['RICHOS_APP_STATE']=state
+app=runpy.run_path(os.path.join(engine,'mega-lander','app.py'))
+print(json.dumps(app['report_assignment']({'binding':dict(entity_id=entity,thread_id=thread,session_id='prior-session')},
+                                          obligation,'settled','The fixture job is over')))
+"""
+
+# The paused job as the app's own records show it now.
+JOB_NOW = r"""import glob,json,os,sys
+state,entity,thread,job=sys.argv[1:5]
+record=[json.load(open(p)) for p in glob.glob(os.path.join(state,'assignments','*',job+'.json'))]
+cursor=os.path.join(state,'messages',entity,thread,'stu.cursor')
+print(json.dumps({'state':record[0]['state'] if record else None,'cursor':json.load(open(cursor)) if os.path.exists(cursor) else None}))
 """
 
 # A review the last run took up and Quit stopped: the app's own review watcher reads the READY
@@ -312,6 +370,12 @@ class OpenIdleWalk(codex.CodexWatchWalk):
         thread, entity = self.facts['thread'], self.facts['entity']
         state = self.data + '/engine-state'
         self.close_app()
+        engine = os.path.dirname(os.path.dirname(os.path.dirname(self.helper)))
+        job = self.run_python(PAUSED_JOB, engine, state, entity, thread)
+        if not job['reported'].get('recorded') or job['reported'].get('state') != 'waiting-for-quota':
+            raise StepFailed('the engine did not record the fixture job as paused: ' + json.dumps(job))
+        self.facts.update(paused_job=job)
+        self.save()
         # A job stopped and a job paused when the app quit, as the app saves them for later.
         stop = {'from': 'user-control', 'text': json.dumps({'event': 'user_stop', 'assignment_id': 'open-idle-fixture',
                                                              'obligation_id': 'open-idle-fixture', 'requested_at_ms': 1})}
@@ -350,15 +414,18 @@ class OpenIdleWalk(codex.CodexWatchWalk):
             '%s/messages/%s/%s/stu.cursor' % (state, entity, thread)), 60)
         cursor = json.loads(cursor) if cursor.strip() else {}
         gate = json.loads(guest(self.vm, 'cat %s' % shlex.quote(state + '/turn-gate.json'), 60))
+        job_now = self.run_python(JOB_NOW, state, entity, thread, job['assignment'])
         taken = cursor.get('through', 0) >= ends['stu'] or str(ends['stu']) in (cursor.get('accepted') or {})
         filed = self.run_python(AGENT_TURNS, self.data + '/conversation-ledger.jsonl', thread)
         evidence = {'saved_inbox_ends': ends, 'review_seeded': seeded, 'answers_before': before, 'answers_after': after,
                     'reviews_before': reviews_before, 'reviews_after': reviews_after, 'stu_cursor': cursor,
-                    'stop_taken_by_the_team': taken, 'agent_turns_filed_in_the_ledger': filed,
+                    'stop_taken_by_the_team': taken, 'paused_job_at_seeding': job, 'paused_job_now': job_now, 'agent_turns_filed_in_the_ledger': filed,
                     'turn_gate_record': gate, 'config': {k: v for k, v in self.config().items() if 'model' in k}}
         (self.out / 'paused.json').write_text(json.dumps(evidence, indent=2) + '\n')
         if after != before:
             raise StepFailed('a model answered after the app was only opened and Settings changed: see paused.json')
+        if job_now['state'] != 'waiting-for-quota' or (job_now['cursor'] or {}).get('active') != job['cursor']['active']:
+            raise StepFailed("the paused job's record or its handoff's receipt changed after the app was only opened: see paused.json")
         if taken:
             raise StepFailed('the saved Stop was taken from the team\'s inbox with nothing asked: see paused.json')
         if filed:
@@ -376,6 +443,9 @@ class OpenIdleWalk(codex.CodexWatchWalk):
         self.close_app()
         if self.facts.get('review_seeded'):
             self.run_python(UNSEED, self.data + '/engine-state')
+        if self.facts.get('paused_job'):
+            self.run_python(SETTLE, os.path.dirname(os.path.dirname(os.path.dirname(self.helper))), self.data + '/engine-state',
+                            self.facts['entity'], self.facts['thread'], self.facts['paused_job']['obligation'])
         marker = 'closed-' + uuid.uuid4().hex[:12]
         self.report(marker)
         before = self.answers()
@@ -446,7 +516,8 @@ class OpenIdleWalk(codex.CodexWatchWalk):
         if self.present('Show the sidebar'):
             self.press('Show the sidebar')
         title = self.title(self.facts['thread'])
-        self.ax('click', '--title', title, '--role', 'AXButton', '--in', 'sidebar', '--first')
+        # --contains: the row may carry the chat's state beside its title (a paused job, say).
+        self.ax('click', '--title', title, '--role', 'AXButton', '--in', 'sidebar', '--first', '--contains')
         self.wait_for('Send', seconds=120)
         self.send('This is a transport test. Did any report from Codex arrive for this chat? One sentence is enough; do nothing else.')
         rows = self.wait_fact('the held report reaching the team after his message', lambda: self.reached(marker), bool,
