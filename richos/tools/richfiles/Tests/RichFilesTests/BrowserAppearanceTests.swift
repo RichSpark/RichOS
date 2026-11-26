@@ -33,9 +33,7 @@ final class BrowserAppearanceTests: XCTestCase {
     ///
     /// Declared exemptions, as in the round's README: the hover tint and the selected fill carry
     /// no state on their own (the name on them is checked, and the selected state is the 1 px
-    /// line, checked against the pane and against the plain fill). The line against the deeper
-    /// fill under the pointer measures 3.29:1 light and 2.86:1 dark; there the line still meets
-    /// 4.05:1 and 3.81:1 against the pane around it, which is what marks the item.
+    /// line, checked against the pane, the plain fill and the deeper fill under the pointer).
     func testRound107ItemStatesTreeAndQuickInfoClearTheContrastFloorInBothThemes() {
         for scheme in [ColorScheme.light, .dark] {
             let g = BrowserPalette.grounds(scheme)
@@ -73,6 +71,7 @@ final class BrowserAppearanceTests: XCTestCase {
                 ("folder icon on the sidebar", BrowserPalette.folderValue(scheme), g.sidebar, 3),
                 ("folder icon on the current folder", BrowserPalette.folderValue(scheme), current, 3),
                 ("current folder's bar on its fill", BrowserPalette.signalValue(scheme), current, 3),
+                ("selected line against its fill under the pointer", selection.edge, selection.fillHover, 3),
                 ("Open With chooser's Open label on its fill", button.primaryLabel, button.primaryFill, 4.5),
                 ("Open With chooser's Open button against the sheet", button.primaryFill, g.floating, 3),
                 ("Open With chooser's Cancel label on its fill", button.label, button.fill, 4.5),

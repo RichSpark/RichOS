@@ -91,9 +91,11 @@ struct BrowserPalette {
 
     /// The selected item's fill, its fill under the pointer and its 1 px line. The line carries
     /// the state (3:1 for an indicator); the fill only tells a selected item from the
-    /// keyboard-focus outline. Computed in `BrowserAppearanceTests`.
+    /// keyboard-focus outline. Computed in `BrowserAppearanceTests`. The dark line is a step
+    /// lighter than round 107.1's #7d6f48, which measured 2.86:1 against the fill under the
+    /// pointer; #84754c measures 3.12:1 there, 3.46:1 on the plain fill and 4.16:1 on the pane.
     static func selectionValues(_ scheme: ColorScheme) -> (fill: UInt32, fillHover: UInt32, edge: UInt32) {
-        scheme == .dark ? (0x1b2335, 0x222b3e, 0x7d6f48) : (0xf3ecda, 0xede4cd, 0x8f7a48)
+        scheme == .dark ? (0x1b2335, 0x222b3e, 0x84754c) : (0xf3ecda, 0xede4cd, 0x8f7a48)
     }
 
     /// The scroll bar's thumb, its thumb when pointed at or dragged, and its track (with opacity).
