@@ -255,23 +255,36 @@ impl WorkHost {
     }
 
     /// **May Stu be sent this saved input now?** ([`crate::turn_gate`]) An input whose
-    /// delivery attempt is still open was being given to him when the app last ended, and
-    /// carries on; one written to his inbox while the app is open is new; anything else in his
-    /// inbox was saved before and waits until the user is active in this chat. `input` is the
+    /// delivery was still under way when the app last ended carries on; one written to his
+    /// inbox while the app is open is new; anything else in his inbox was saved before and
+    /// waits until the user is active in this chat. `input` is the
     /// attempt's name (`peer:<offset>`, `answer:<id>`); `through` is the inbox row's end, none
     /// for an answer, whose own record is not in the inbox.
     fn may_send(&self, binding: &ThreadBinding, input: &str, through: Option<u64>) -> bool {
+        crate::turn_gate::allows(&self.turn_gate, binding, self.origin_of(binding, input, through))
+    }
+
+    /// What [`Self::may_send`] knows about the input: [`crate::turn_gate::Origin`].
+    fn origin_of(&self, binding: &ThreadBinding, input: &str, through: Option<u64>) -> crate::turn_gate::Origin {
         use crate::turn_gate::Origin;
         let scope = self.message_scope(binding);
-        let origin = if crate::session_tools::previous_attempt(&scope, "stu", input).ok().flatten().is_some() {
+        // Carrying on is a delivery begun for a session (`begin_attempt` names it) and never
+        // finished: the turn given it ended (`acknowledge`) marks it delivered, and an entry kept
+        // for a handoff whose job is still open (paused, waiting) then waits like the rest. An
+        // older build's entry that names no session is not one either.
+        let begun = crate::session_tools::previous_attempt(&scope, "stu", input).ok().flatten()
+            .is_some_and(|attempt| attempt["session_id"].is_string() && attempt["delivered"] != true
+                // An older build's delivered handoff carries no mark; the session's own record
+                // holding it (`received_handoffs`) shows it was given.
+                && attempt["received"] != true);
+        if begun {
             Origin::CarriesOn
         } else if through.is_some_and(|through| crate::session_tools::inbox(&scope, "stu")
             .is_ok_and(|inbox| crate::turn_gate::arrived(&self.turn_gate, &inbox, through))) {
             Origin::Now
         } else {
             Origin::FromBefore
-        };
-        crate::turn_gate::allows(&self.turn_gate, binding, origin)
+        }
     }
     pub fn set_retry_clock(&self, clock: Arc<dyn crate::upstream::RetryClock>) {
         *self.retry_clock.lock().unwrap() = clock;
@@ -2100,10 +2113,25 @@ impl WorkHost {
             }
             inner.binding.as_ref().is_some_and(|binding| {
                 let scope = self.message_scope(binding);
+                // Input the one rule holds until the user is active in this chat is not work
+                // that runs: a Stop saved at the last quit keeps nothing open.
+                let held = |through: u64| self.origin_of(binding, &format!("peer:{through}"), Some(through))
+                    == crate::turn_gate::Origin::FromBefore && crate::turn_gate::waiting(&self.turn_gate, binding.thread_id());
                 crate::session_tools::pending(&scope, "rich").map(|m| m.is_some()).unwrap_or(true)
-                    || crate::session_tools::undelivered(&scope, "stu").unwrap_or(true)
+                    || crate::session_tools::undelivered_where(&scope, "stu", &|through| !held(through)).unwrap_or(true)
             })
         })
+    }
+
+    /// **Does this saved intake of Rich's wait for the user?** An agent's message filed before
+    /// the app opened, in a chat the user has not been active in since, is held by the one rule
+    /// (`Spine::drain_intake`): it is not work that runs.
+    pub fn intake_waits(&self, record: &crate::steering::IntakeRecord) -> bool {
+        match record {
+            crate::steering::IntakeRecord::Channel { thread_id, source: Some(crate::ledger::Source::Agent), at, .. } =>
+                self.turn_gate.get().is_some_and(|gate| *at < gate.since_ms() && gate.waits(thread_id)),
+            _ => false,
+        }
     }
 
     fn backend(&self, thread: &str) -> Option<Arc<Backend>> {
@@ -3276,6 +3304,56 @@ mod tests {
             .write_all(line.as_bytes()).unwrap();
         h.host.wake_messages(&h.binding);
         until("after his words the saved input never reached Stu", || handed_over(&h, "saved before the quit") == 1);
+    }
+
+    /// **A paused job's handoff is not replayed at launch** (review
+    /// rv-20261126T151735Z-c45967b1-2484, finding 1). Its turn ended, its job is still open
+    /// (paused, waiting), so its receipt stays; the app opens again with nothing to show the
+    /// session holds it. It waits: a message written while the app is open goes to Stu by
+    /// itself, and the handoff is not given again before it.
+    #[test]
+    fn a_paused_jobs_delivered_handoff_is_not_replayed_when_the_app_opens() {
+        let h = harness(1);
+        let record = assignment::register(&h.state, &registration(&h)).unwrap();
+        assignment::advance(&h.state, "depot", "thread-one", &record.id, AssignmentState::WaitingForQuota, "paused for the usage limit").unwrap();
+        let scope = h.host.message_scope(&h.binding);
+        let path = h.root.join("peer-status.json");
+        crate::session_tools::bind(&path, &scope, "front-session", "rich", Some(crate::ecs::UserInstruction {
+            ledger_ref: registration(&h).instruction_ledger_ref, sha256: registration(&h).instruction_sha256, text: None })).unwrap();
+        crate::session_tools::delegate(&path, &scope, serde_json::json!({"text":"Build nightly 78"})).unwrap();
+        h.host.wake_messages(&h.binding);
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(30)), "the handoff's turn did not end");
+        h.host.shutdown();
+        assert!(crate::session_tools::pending(&scope, "stu").unwrap().is_some(), "the paused job's handoff is still open");
+        // load-bound: this only moves the millisecond clock past what was saved; host load makes the gap larger, never smaller.
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        let factory = Factory { spawns: h.spawns.clone(), prompts: h.work_prompts.clone(), commands: h.commands.clone(),
+            team: h.team.clone(), gate: h.start_gate.clone() };
+        let opened = WorkHost::new(&h.state, Box::new(factory), Arc::new(SilentNotifier));
+        opened.set_turn_gate(Arc::new(crate::turn_gate::TurnGate::at_launch(&h.state)));
+        opened.wake_messages(&h.binding);
+        assert!(!opened.peer_work_pending(), "a held handoff was counted as work still running");
+        crate::session_tools::send(&path, &scope, serde_json::json!({"text":"Written while the app is open"})).unwrap();
+        opened.wake_messages(&h.binding);
+        assert!(opened.wait_for_completed(1, std::time::Duration::from_secs(30)), "the new message never reached Stu");
+        let after: Vec<String> = h.work_prompts.lock().unwrap()[1..].to_vec();
+        assert_eq!(after.len(), 1, "turns after opening: {after:?}");
+        assert!(after[0].contains("Written while the app is open") && !after[0].contains("Build nightly 78"), "{after:?}");
+        opened.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// An agent's message the rule holds in Rich's intake is not work that runs; one filed
+    /// while the app is open is.
+    #[test]
+    fn a_held_agent_intake_is_not_running_work() {
+        let h = harness(0);
+        h.host.set_turn_gate(Arc::new(crate::turn_gate::TurnGate::at_launch(&h.state)));
+        let intake = |at| crate::steering::IntakeRecord::Channel { id: 1, thread_id: "thread-one".into(), entity_id: None,
+            text: "a report".into(), at, channel: "stu".into(), client_id: None, voice_note: false, authored_bytes: None,
+            authored_ranges: None, source: Some(crate::ledger::Source::Agent) };
+        assert!(h.host.intake_waits(&intake(1)), "a report from before the app opened was counted as running");
+        assert!(!h.host.intake_waits(&intake(crate::util::now_millis() + 1)), "a report filed while the app is open was not counted");
     }
 
     /// **THE CEO'S §56, END TO END.** A job marked `needs_screen`, on a locked screen, is not

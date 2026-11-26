@@ -11650,7 +11650,9 @@ fn registered_from(work_host: &richos_core::work_host::WorkHost, control: &TurnC
     lifecycle::Registered {
         running: work.running + usize::from(control.has_active_turns())
             + usize::from(work_host.peer_work_pending())
-            + usize::from(!control.pending_intake().is_empty()),
+            // An agent's message the one rule holds until the user is active in its chat is
+            // not work that runs (`WorkHost::intake_waits`).
+            + usize::from(control.pending_intake().iter().any(|record| !work_host.intake_waits(record))),
         awaiting_you: work.awaiting_you,
         readable: work.readable,
         // Commands Rich started, on every live lease (reap gap C5): a few small files, no lock.

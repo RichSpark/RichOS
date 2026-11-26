@@ -599,6 +599,12 @@ pub fn pending_after(scope:&StatusToolScope,role:&str,after:u64)->Result<Option<
 /// on its own record (`pending_after` still hands it back after a restart, as a reconciliation).
 /// A pure read: unlike `pending_after`, it never acknowledges anything.
 pub(crate) fn undelivered(scope:&StatusToolScope,role:&str)->Result<bool,String> {
+    undelivered_where(scope,role,&|_|true)
+}
+
+/// [`undelivered`], counting only the rows `counts` (given each row's end) says count: the one
+/// rule's held input is not work that runs (`WorkHost::peer_work_pending`).
+pub(crate) fn undelivered_where(scope:&StatusToolScope,role:&str,counts:&dyn Fn(u64)->bool)->Result<bool,String> {
     let path=inbox(scope,role)?;let cursor=cursor_state(&path)?;
     let mut file=match read_inbox(&path){Ok(f)=>f,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>return Ok(false),Err(e)=>return Err(e.to_string())};
     let mut through=cursor["through"].as_u64().unwrap();
@@ -611,6 +617,7 @@ pub(crate) fn undelivered(scope:&StatusToolScope,role:&str)->Result<bool,String>
         if cursor["accepted"].get(through.to_string()).is_some(){continue}
         let message:Message=serde_json::from_str(&line).map_err(|e|e.to_string())?;
         if role=="stu" && (archived_codex_input(&message) || (message.handoff && handoff_finished(scope,&message)?)) {continue}
+        if !counts(through) {continue}
         return Ok(true)
     }
 }
@@ -800,20 +807,25 @@ impl HandoffIndex {
 
 pub fn acknowledge(scope:&StatusToolScope,role:&str,through:u64)->Result<(),String> {
     let finished=role!="stu" || handoff_finished(scope,&input_at(&inbox(scope,role)?,through)?)?;
-    accept_input(scope,role,through,finished)
+    accept_input(scope,role,through,finished,true)
 }
 
 /// Acceptance between tool calls keeps the interrupted-turn recovery witness.
 pub(crate) fn accept_live_handoff(scope:&StatusToolScope,role:&str,through:u64)->Result<(),String> {
-    accept_input(scope,role,through,false)
+    accept_input(scope,role,through,false,false)
 }
 
-fn accept_input(scope:&StatusToolScope,role:&str,through:u64,finished:bool)->Result<(),String> {
+/// `delivered`: the turn given this input has ended ([`acknowledge`]), so an entry kept for a
+/// handoff whose job is still open says so (`"delivered": true`). An entry without the mark is
+/// an input whose delivery was still under way when the app last ended: the one rule lets only
+/// that one carry on at the next launch (`turn_gate`, `WorkHost::may_send`).
+fn accept_input(scope:&StatusToolScope,role:&str,through:u64,finished:bool,delivered:bool)->Result<(),String> {
     let path=inbox(scope,role)?;
     update_cursor(scope,role,|cursor| {
         let input=format!("peer:{through}");
         if finished {cursor["active"].as_object_mut().unwrap().remove(&input);}
         else if cursor["active"].get(&input).is_none(){cursor["active"][&input]=json!({"input":input,"session_id":null});}
+        if !finished && delivered {cursor["active"][&input]["delivered"]=json!(true);}
         let mut frontier=cursor["through"].as_u64().unwrap();
         if through<=frontier {return Ok(())}
         cursor["accepted"][through.to_string()]=json!(true);

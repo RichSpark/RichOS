@@ -152,6 +152,18 @@ impl TurnGate {
         true
     }
 
+    /// **Does what was saved from before in this chat still wait?** The rule's answer for
+    /// [`Origin::FromBefore`], asked without letting anything through: what waits is not work
+    /// that runs, so the quit question and a closing window do not count it.
+    pub fn waits(&self, thread: &str) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.pressed.contains(thread) || inner.asked.contains(thread) {
+            return false;
+        }
+        self.read_ledger(&mut inner);
+        !inner.asked.contains(thread)
+    }
+
     /// Read what was appended to the ledger since the last look: a look costs one `stat`
     /// while nothing was written.
     fn read_ledger(&self, inner: &mut Inner) {
@@ -214,6 +226,11 @@ pub type Slot = std::sync::OnceLock<std::sync::Arc<TurnGate>>;
 
 pub fn allows(slot: &Slot, binding: &ThreadBinding, origin: Origin) -> bool {
     slot.get().is_none_or(|gate| gate.may_start(binding, origin))
+}
+
+/// [`TurnGate::waits`], or no with no gate set: nothing waits where nothing is held.
+pub fn waiting(slot: &Slot, thread: &str) -> bool {
+    slot.get().is_some_and(|gate| gate.waits(thread))
 }
 
 /// [`TurnGate::arrived_while_open`], or yes with no gate set.

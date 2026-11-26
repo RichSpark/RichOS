@@ -195,9 +195,19 @@ fn the_gated_sends_ask_the_one_rule() {
     let spine = read("crates/richos-core/src/spine.rs");
     assert!(body(&spine, "deliver").contains("gate.may_start(binding,origin)"), "Spine::deliver no longer asks the rule");
     assert!(body(&spine, "drain_intake").contains("self.deliver_held()"), "held turns are never given once their chat opens");
+    // A held intake keeps the drained mark from passing it, so a later one never drops it (finding 2).
+    assert!(body(&spine, "drain_intake").contains("deferred_stop = true;\n                        continue;"), "a held intake can be marked drained by a later one");
 
     let work = read("crates/richos-core/src/work_host.rs");
-    assert!(body(&work, "may_send").contains("crate::turn_gate::allows(&self.turn_gate, binding, origin)"));
+    assert!(body(&work, "may_send").contains("crate::turn_gate::allows(&self.turn_gate, binding, self.origin_of(binding, input, through))"));
+    // Carrying on is a delivery under way when the app ended, never one whose turn ended: a
+    // paused job's handoff keeps its receipt (review rv-20261126T151735Z-c45967b1-2484, 1).
+    assert!(body(&work, "origin_of").contains("attempt[\"delivered\"] != true"), "a delivered handoff counts as carrying on");
+    let tools = read("crates/richos-core/src/session_tools.rs");
+    assert!(body(&tools, "acknowledge").contains("accept_input(scope,role,through,finished,true)"), "an ended turn does not mark its input delivered");
+    // Held input is not work that runs (finding 4).
+    assert!(body(&work, "peer_work_pending").contains("undelivered_where("), "held Stu input counts as running work");
+    assert!(body(&work, "intake_waits").contains("gate.waits(thread_id)"));
     assert!(body(&work, "next_for_stu").contains("self.may_send(binding, &format!(\"peer:{through}\"), Some(through))"),
         "Stu's inbox is selected without the rule");
     assert!(body(&work, "wake_messages").contains("self.may_send(binding, &format!(\"answer:{}\", answer.id), None)"),
@@ -224,6 +234,7 @@ fn the_gated_sends_ask_the_one_rule() {
     assert!(body(&bridge, "accept_when_asked").contains("crate::turn_gate::Origin::FromBefore"));
     let main = read("src-tauri/src/main.rs");
     assert!(!main.contains("richos_core::codex_bridge::accept("), "the app hands Codex input to Stu around the rule");
+    assert!(body(&main, "registered_from").contains("work_host.intake_waits(record)"), "a held intake counts as running work at quit");
 
     // The gate is in place before anything can start a turn.
     let at = |needle: &str| main.find(needle).unwrap_or_else(|| panic!("main.rs: {needle} not found"));
