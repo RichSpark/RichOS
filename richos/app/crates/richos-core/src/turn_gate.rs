@@ -67,6 +67,9 @@ pub struct TurnGate {
     /// the app opened ([`Self::arrived_while_open`]).
     inboxes: HashMap<PathBuf, u64>,
     inner: Mutex<Inner>,
+    /// Told when the user acts in a chat he had not acted in yet this run, so what waits there
+    /// is given at once ([`Self::when_a_chat_opens`]).
+    opened: Mutex<Vec<std::sync::Arc<dyn Fn() + Send + Sync>>>,
 }
 
 #[derive(Default)]
@@ -107,6 +110,7 @@ impl TurnGate {
             record: state.join(RECORD),
             inboxes,
             inner: Mutex::new(Inner::default()),
+            opened: Mutex::new(Vec::new()),
         };
         gate.write(&BTreeSet::new());
         gate
@@ -126,8 +130,20 @@ impl TurnGate {
     /// **The user pressed something of his own in this chat** (answered a question, stopped
     /// a job): it is open from now on.
     pub fn user_acted(&self, binding: &ThreadBinding) {
-        self.inner.lock().unwrap().pressed.insert(binding.thread_id().to_string());
+        let first = self.inner.lock().unwrap().pressed.insert(binding.thread_id().to_string());
         self.may_start(binding, Origin::Now);
+        if first {
+            let listeners = self.opened.lock().unwrap().clone();
+            for listener in listeners {
+                listener();
+            }
+        }
+    }
+
+    /// **Call `listener` each time the user first acts in a chat this run**: what waits there
+    /// for him (a saved card answer, say) is given then, by whoever holds it.
+    pub fn when_a_chat_opens(&self, listener: std::sync::Arc<dyn Fn() + Send + Sync>) {
+        self.opened.lock().unwrap().push(listener);
     }
 
     /// **THE RULE. May the app start this model turn?** The user's own input, input that

@@ -2419,6 +2419,13 @@ impl Spine {
                 Some(turn) if matches!(turn.source, Source::Text|Source::Jam) && turn.created_at<gate.since_ms() => crate::turn_gate::Origin::CarriesOn,
                 _ => crate::turn_gate::Origin::Now,
             };
+            // His own words of this run open the chat, by every road they take (the composer,
+            // voice, the phone), so what waits there for him is given now.
+            // A replay of a turn that was running is not him acting again.
+            if origin==crate::turn_gate::Origin::Now && self.ledger.turn(turn_id).is_some_and(|turn| matches!(turn.source, Source::Text|Source::Jam))
+                && !self.ledger.turns().iter().any(|turn| turn.superseded_by.as_deref()==Some(turn_id)) {
+                gate.user_acted(binding);
+            }
             if !gate.may_start(binding,origin) {
                 if !self.held_turns.iter().any(|(held,_)|held==turn_id) {
                     eprintln!("[richos] a saved turn from before RichOS opened waits until the user is active in its chat");
