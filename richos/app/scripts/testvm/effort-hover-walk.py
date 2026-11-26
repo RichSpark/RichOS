@@ -106,6 +106,23 @@ class Walk:
     def hover(self, x, y):
         command([HERE / 'pointer-drag.sh', self.vm, '%d,%d' % (round(x), round(y)), '--hover', '--rest', '0.4'], 60)
 
+    # The bottom of Settings' scrolling part on the guest's 1680x1050 screen: the footer (Your name,
+    # Splash screen, Bust a bug!) starts at y 780, and "Recommended" sits about 35 px under the steps.
+    STEPS_VISIBLE_BELOW = 740
+
+    def reveal(self):
+        """Settings scrolled, as a hand does, until Rich's effort steps are in view. Since the
+        RichFiles row ("Always open RichFiles in its own window") joined that column, the steps
+        start under the footer on the guest's screen (nightly 119 walk), so a picture or a
+        pointer at their foot would land on something else. The wheel turns over that column."""
+        for _ in range(8):
+            high = self.node('ef-rich-high')
+            if high['y'] + high['h'] <= self.STEPS_VISIBLE_BELOW:
+                return high
+            command([HERE / 'pointer-drag.sh', self.vm, '%d,%d' % (round(high['x']), 600), '--scroll', '-3'], 60)
+            time.sleep(0.6)
+        raise StepFailed('the effort steps never came into view (High at y %s)' % self.node('ef-rich-high')['y'])
+
     def found(self, *args):
         try:
             return bool([n for n in self.ax('find', *args, '--first') if n.get('role')])
@@ -185,6 +202,7 @@ class Walk:
             checked = [lv for lv in LEVELS if str(values[lv]).strip().lower() in ('1', 'true')]
             return checked if checked == ['high'] else None
         self.until('High chosen in Rich\'s row on Opus', chosen, 30)
+        self.reveal()
         self.hover(5, 5)
         picture = self.shot('opus-%s.png' % theme)
         read = subprocess.run([str(HERE.parent / 'qa' / 'ocr-find.sh'), 'recommended for Opus', str(self.out / picture),
@@ -195,6 +213,7 @@ class Walk:
         return {'checked': values, 'recommended_for_opus_on_screen': True, 'picture': picture}
 
     def hover_step(self, theme):
+        self.reveal()
         self.hover(5, 5)
         time.sleep(0.5)
         base = self.node('ef-rich-high')
