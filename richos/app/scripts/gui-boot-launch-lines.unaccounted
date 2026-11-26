@@ -612,3 +612,6 @@
 [richos] RichGlance draft handoff unavailable ({})
 [richos] could not mark the RichScribe update exit: {}
 [richos] suite restart: could not notify the running applications
+[richos] Settings was still open: Rich's model and effort were saved as it showed them
+[richos] the saved model and effort reach the sessions at their next start: {}
+[richos] Rich's model and effort, as Settings showed them, could not be saved: {}

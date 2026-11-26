@@ -5268,9 +5268,8 @@ struct HeldLeaseChoice {
 #[richos_command::command]
 fn hold_lease_models(state: State<AppState>, rich: String, stu: String, effort: Option<serde_json::Value>, chosen: Option<Vec<String>>) -> Result<(), String> {
     use richos_core::config::ModelChoice;
-    for model in [&rich, &stu] {
-        ModelChoice::parse(model).ok_or_else(|| format!("unknown model: {model}"))?;
-    }
+    ModelChoice::parse(&rich).ok_or_else(|| format!("unknown model: {rich}"))?;
+    ModelChoice::parse(&stu).ok_or_else(|| format!("unknown model: {stu}"))?;
     *state.held_lease_choice.lock().unwrap() = Some(HeldLeaseChoice { rich, stu, effort, chosen: chosen.unwrap_or_default() });
     Ok(())
 }
@@ -5279,8 +5278,9 @@ fn hold_lease_models(state: State<AppState>, rich: String, stu: String, effort: 
 fn write_lease_choice(state: &AppState, choice: &HeldLeaseChoice)
     -> Result<(richos_core::config::LeaseModels, richos_core::config::EffortChoices), String> {
     use richos_core::config::{EffortLevel, LeaseModels, ModelChoice};
-    let rich = ModelChoice::parse(&choice.rich).ok_or_else(|| format!("unknown model: {}", choice.rich))?;
-    let stu = ModelChoice::parse(&choice.stu).ok_or_else(|| format!("unknown model: {}", choice.stu))?;
+    let (rich, stu) = (&choice.rich, &choice.stu);
+    let rich = ModelChoice::parse(rich).ok_or_else(|| format!("unknown model: {rich}"))?;
+    let stu = ModelChoice::parse(stu).ok_or_else(|| format!("unknown model: {stu}"))?;
     let models = LeaseModels { rich, stu };
     let mut config = state.config.lock().unwrap();
     let mut efforts = config.effort_choices();
