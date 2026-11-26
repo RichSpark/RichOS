@@ -306,6 +306,12 @@ async function main() {
     await page.waitForFunction(() => window.RichosMonitor.state().sheet === null);
     assertEqual(await page.evaluate(() => document.activeElement && document.activeElement.id), "rom-square", "closing the details from Memory left focus nowhere");
     assertEqual(await page.evaluate(() => window.RichosMonitor.state().card), false, "the card reopened on the returned focus");
+    // a press on a rail item goes where it goes: the details step aside for RichFinder
+    await page.evaluate(() => window.RichosMonitor.openSheet("tokens"));
+    await page.waitForFunction(() => window.RichosMonitor.state().sheet === "tokens");
+    await page.click("#nr-finder");
+    await page.waitForFunction(() => window.RichosMonitor.state().sheet === null);
+    await page.keyboard.press("Escape");
   });
 
   await run.check("contrast, dark: the rail's figure, the card and the details clear WCAG AA", async () => {

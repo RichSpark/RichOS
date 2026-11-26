@@ -641,6 +641,11 @@
     });
     window.addEventListener("resize", () => { if (cardOpen()) place(); if (sheetOpen()) paintSheet(); });
     for (const sec of card.querySelectorAll(".rom-sec")) sec.addEventListener("click", () => openSheet(sec.dataset.go));
+    // A press on any rail item goes where the item goes: the details step aside first (RichFinder
+    // opens behind their scrim otherwise). Capture, so it runs before the item's own handler.
+    btn.closest("nav").addEventListener("click", (e) => {
+      if (sheetOpen() && e.target.closest(".nr-item")) closeSheet();
+    }, true);
 
     scrim.addEventListener("click", closeSheet);
     sheet.querySelector(".rom-close").addEventListener("click", closeSheet);
