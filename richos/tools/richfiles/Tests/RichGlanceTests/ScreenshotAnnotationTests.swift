@@ -125,6 +125,79 @@ final class ScreenshotAnnotationTests: XCTestCase {
         }
     }
 
+    func testRound108ArrowsAndStepsComeInSmallMediumAndLarge() async throws {
+        // Arrow shafts 6, 10 and 24 px at 1x, each with a head 3 shafts wide and 3 long, as in round 108.
+        for (size, shaft) in [(ScreenshotMarkSize.small, 6), (.medium, 10), (.large, 24)] {
+            var document = ScreenshotDocument(original: try bitmap(gray: 1), scale: 1)
+            var arrow = ScreenshotMark(tool: .arrow, start: CGPoint(x: 20, y: 75), end: CGPoint(x: 280, y: 75))
+            arrow.markSize = size
+            document.edits.marks = [arrow]
+            let image = try XCTUnwrap(ScreenshotRenderer.flattened(document))
+            let rows = try (0..<150).filter { try isRed(pixel(image, x: 100, y: $0)) }
+            XCTAssertEqual(rows, Array((75 - shaft / 2)..<(75 + shaft / 2)), "\(size) shaft")
+            let head = 3 * shaft
+            let headRows = try (0..<150).filter { try isRed(pixel(image, x: 280 - head, y: $0)) }
+            XCTAssertEqual(headRows, Array((75 - head / 2)..<(75 + head / 2)), "\(size) head")
+        }
+        // Step circles 30, 45 and 120 px: Large is 4 times Small.
+        for (size, diameter) in [(ScreenshotMarkSize.small, 30.0), (.medium, 45), (.large, 120)] {
+            var document = ScreenshotDocument(original: try bitmap(gray: 1), scale: 1)
+            var step = ScreenshotMark(tool: .steps, start: CGPoint(x: 149, y: 75), end: CGPoint(x: 149, y: 75))
+            step.markSize = size
+            document.edits.marks = [step]
+            let image = try XCTUnwrap(ScreenshotRenderer.flattened(document))
+            let top = Int((75 - diameter / 2).rounded())
+            XCTAssertTrue(try isRed(pixel(image, x: 149, y: top + 3)), "\(size) step inside its edge")
+            XCTAssertFalse(try isRed(pixel(image, x: 149, y: top - 3)), "\(size) step outside its edge")
+        }
+
+        // A mark saved before round 108 keeps its thickness: Regular reads as Small, Large as Medium.
+        let saved = ScreenshotMark(tool: .arrow, start: .zero, end: CGPoint(x: 90, y: 0), large: true)
+        let data = try JSONEncoder().encode(saved)
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("\"size\""))
+        XCTAssertEqual(try JSONDecoder().decode(ScreenshotMark.self, from: data).markSize, .medium)
+        XCTAssertEqual(ScreenshotMark(tool: .steps, start: .zero, end: .zero).markSize, .small)
+
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("glance-108-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        // A step size chosen before round 108 (Large) reads as Medium.
+        try JSONEncoder().encode(ScreenshotMarkStyle(large: true)).write(to: home.appendingPathComponent("annotation-steps.json"))
+        let store = ScreenshotStore(root: home)
+        try store.setHistory(false)
+        let editor = try makeEditor(store)
+        let canvas = try XCTUnwrap(editor.canvas)
+        let root = try XCTUnwrap(editor.window.contentView)
+        func shown() -> [String] { controls(in: root).filter { !$0.isHiddenOrHasHiddenAncestor }.map(\.title) }
+        // Nobody picked an arrow size: Medium, with Small, Medium and Large on offer. Text keeps Regular and Large.
+        canvas.tool = .arrow
+        XCTAssertEqual(canvas.size, .medium)
+        XCTAssertTrue(["Small", "Medium", "Large"].allSatisfy(shown().contains), "\(shown())")
+        XCTAssertFalse(shown().contains("Regular"))
+        canvas.tool = .text
+        XCTAssertEqual(canvas.size, .small)
+        XCTAssertTrue(["Regular", "Large"].allSatisfy(shown().contains), "\(shown())")
+        XCTAssertFalse(shown().contains("Medium"))
+        canvas.tool = .steps
+        XCTAssertEqual(canvas.size, .medium)
+        XCTAssertTrue(["Small", "Medium", "Large"].allSatisfy(shown().contains), "\(shown())")
+
+        // Picking Large with the Arrow tool draws the next arrow Large and remembers it.
+        canvas.tool = .arrow
+        prepare(canvas)
+        let large = try XCTUnwrap(controls(in: root).first { $0.title == "Large" && !$0.isHiddenOrHasHiddenAncestor })
+        large.performClick(nil)
+        XCTAssertEqual(canvas.size, .large)
+        try drag(from: CGPoint(x: 30, y: 75), to: CGPoint(x: 260, y: 75), on: canvas)
+        XCTAssertEqual(canvas.selectedMark?.markSize, .large)
+        let reopened = try XCTUnwrap(try makeEditor(store).canvas)
+        reopened.tool = .arrow
+        XCTAssertEqual(reopened.size, .large)
+        reopened.tool = .text
+        XCTAssertEqual(reopened.size, .small)
+    }
+
     func testDefaultsFollowTheEditedToolIntoANewEditAndReopenedEditor() async throws {
         try withStore { store in
             let editor = try makeEditor(store)
@@ -137,7 +210,7 @@ final class ScreenshotAnnotationTests: XCTestCase {
                 canvas.tool = .select
                 canvas.document.edits.marks = [mark]
                 canvas.selected = mark.id
-                canvas.setStyle(ink: color, large: tool == .arrow ? false : nil)
+                canvas.setStyle(ink: color, size: tool == .arrow ? .small : nil)
                 if tool == .box { for _ in 0..<3 { try press("-", on: editor) } }
                 XCTAssertEqual(canvas.selectedMark?.ink, color)
             }
@@ -155,7 +228,7 @@ final class ScreenshotAnnotationTests: XCTestCase {
                 for (tool, color) in choices {
                     edit.tool = tool
                     XCTAssertEqual(edit.ink, color, tool.title)
-                    if tool == .arrow { XCTAssertFalse(edit.large) }
+                    if tool == .arrow { XCTAssertEqual(edit.size, .small) }
                 }
             }
 
@@ -189,8 +262,8 @@ final class ScreenshotAnnotationTests: XCTestCase {
                 let mark = makeMark(tool, from: CGPoint(x: 30, y: 30), to: CGPoint(x: 130, y: 70))
                 canvas.document.edits.marks = [mark]
                 canvas.selected = mark.id
-                canvas.setStyle(ink: .blue, large: true)
-                XCTAssertEqual(canvas.selectedMark?.large, true)
+                canvas.setStyle(ink: .blue, size: .medium)
+                XCTAssertEqual(canvas.selectedMark?.markSize, .medium)
             }
             canvas.document.edits.marks = []
             canvas.selected = nil
@@ -201,20 +274,20 @@ final class ScreenshotAnnotationTests: XCTestCase {
             for fresh in [sameEditor, newEditor] {
                 for tool in [ScreenshotTool.text, .steps] {
                     fresh.tool = tool
-                    XCTAssertTrue(fresh.large, tool.title)
+                    XCTAssertEqual(fresh.size, .medium, tool.title)
                     XCTAssertEqual(fresh.ink, .blue, tool.title)
                 }
             }
             newEditor.tool = .text
-            newEditor.setStyle(large: false)
+            newEditor.setStyle(size: .small)
             let third = try makeEditor(store)
             let latest = try XCTUnwrap(third.canvas)
             latest.tool = .text
-            XCTAssertFalse(latest.large)
+            XCTAssertEqual(latest.size, .small)
             XCTAssertEqual(latest.ink, .blue)
-            XCTAssertEqual(store.annotationStyle(for: .text).large, false)
+            XCTAssertEqual(store.annotationStyle(for: .text).markSize, .small)
             latest.tool = .steps
-            XCTAssertTrue(latest.large)
+            XCTAssertEqual(latest.size, .medium)
         }
     }
 

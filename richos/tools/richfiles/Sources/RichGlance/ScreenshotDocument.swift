@@ -62,10 +62,21 @@ enum ScreenshotInk: String, CaseIterable, Codable, Sendable {
     var outline: NSColor { self == .yellow ? ScreenshotRenderer.ink : .white }
 }
 
+/// Arrow and Steps offer Small, Medium and Large; Text offers Regular (Small) and Large (Medium).
+enum ScreenshotMarkSize: String, CaseIterable, Codable, Sendable {
+    case small, medium, large
+
+    /// Marks and choices saved before there were three sizes carry only `large`: Regular reads as Small, Large as Medium.
+    init(legacyLarge large: Bool) { self = large ? .medium : .small }
+}
+
 struct ScreenshotMarkStyle: Codable {
     var ink: ScreenshotInk?
     var large: Bool?
     var thickness: Int?
+    var size: ScreenshotMarkSize?
+
+    var markSize: ScreenshotMarkSize? { size ?? large.map(ScreenshotMarkSize.init(legacyLarge:)) }
 }
 
 struct ScreenshotMark: Codable, Equatable, Identifiable, Sendable {
@@ -78,8 +89,34 @@ struct ScreenshotMark: Codable, Equatable, Identifiable, Sendable {
     var ink: ScreenshotInk = .red
     var large = false
     var thickness: Int?
+    var size: ScreenshotMarkSize?
 
     static let thicknessOptions = [1, 2, 3, 4, 6, 8, 12, 16]
+
+    /// The mark's size choice. Setting it keeps `large` in step for anything that still reads only that.
+    var markSize: ScreenshotMarkSize {
+        get { size ?? ScreenshotMarkSize(legacyLarge: large) }
+        set { size = newValue; large = newValue != .small }
+    }
+
+    /// How much a step, a callout or a highlight's line grows over Small: Medium is 1.5 times, and a Large step is
+    /// 4 times Small (120 pt circle). Text has no Large; it stays at 1.5.
+    var sizeFactor: CGFloat {
+        switch markSize {
+        case .small: 1
+        case .medium: 1.5
+        case .large: tool == .steps ? 4 : 1.5
+        }
+    }
+
+    /// The arrow's shaft in points: Small 6, Medium 10, Large 24. The head is 3 shafts wide and 3 long.
+    var arrowShaft: CGFloat {
+        switch markSize {
+        case .small: 6
+        case .medium: 10
+        case .large: 24
+        }
+    }
 
     func strokeWidth(at scale: CGFloat) -> CGFloat {
         if let thickness, Self.thicknessOptions.contains(thickness) { return CGFloat(thickness) }
@@ -261,7 +298,7 @@ enum ScreenshotRenderer {
     }
 
     static func draw(_ mark: ScreenshotMark, number: Int, scale: CGFloat, in context: CGContext) {
-        let unit = scale * (mark.large ? 1.5 : 1)
+        let unit = scale * mark.sizeFactor
         let color = mark.ink.color
         let outline = mark.ink.outline
         let rect = mark.rect
@@ -375,7 +412,7 @@ enum ScreenshotRenderer {
     static func arrowPath(for mark: ScreenshotMark, scale: CGFloat) -> CGPath? {
         let length = mark.length
         guard length > 0 else { return nil }
-        let shaft = (mark.large ? 10 : 6) * scale
+        let shaft = mark.arrowShaft * scale
         let head = min(3 * shaft, 0.6 * length)
         let halfHead = head / 2
         let halfShaft = min(shaft / 2, halfHead * 0.55)
