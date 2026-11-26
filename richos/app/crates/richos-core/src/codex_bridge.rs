@@ -180,7 +180,7 @@ pub fn accept(
 pub struct Asked {
     since_ms: u64,
     read: std::sync::Mutex<(u64, std::collections::HashSet<String>)>,
-    /// How long each connection's journal was when the app opened ([`Self::written_before`]).
+    /// How long each connection's journal was when the app opened ([`Self::nobody_wrote_since`]).
     journals: std::collections::HashMap<PathBuf, u64>,
 }
 
@@ -205,17 +205,31 @@ impl Asked {
         Self { since_ms: crate::util::now_millis(), read: std::sync::Mutex::new((0, Default::default())), journals }
     }
 
-    /// **Was this report already in its journal when the app opened?** One that ends within the
-    /// journal's length at that moment was. A journal that did not exist then, and the old
-    /// Markdown channels' spool, hold nothing from before.
-    fn written_before(&self, event: &Value) -> bool {
-        if event["record"]["kind"].as_str().is_some_and(|kind| kind.starts_with("legacy_")) {
-            return false;
+    /// **Is this a report from while the app was closed, with nothing newer behind it?**
+    ///
+    /// One that ends within its journal's length at launch was written before, and it waits
+    /// only while that journal has not grown: the watcher offers a connection's reports one at
+    /// a time, in order, so a report from before that stayed held would hold back every report
+    /// Codex writes on that connection while the app is open. Once one is written, the reports
+    /// before it are handed over ahead of it. A journal that did not exist at launch holds
+    /// nothing from before.
+    ///
+    /// The old Markdown channels (`legacy_live`) carry no position that tells before from
+    /// after: their spool is filled by the watcher once the app is open, replies written while
+    /// it was closed included. So a reply on one always counts as nobody's until the user asks
+    /// in that conversation or a job of it is open.
+    fn nobody_wrote_since(&self, event: &Value) -> bool {
+        match event["record"]["kind"].as_str() {
+            Some("legacy_live") => return true,
+            Some(kind) if kind.starts_with("legacy_") => return false,
+            _ => {}
         }
         let Some(journal) = event["locator"].as_str().and_then(|locator| Path::new(locator).join(JOURNAL).canonicalize().ok())
         else { return false };
         match (self.journals.get(&journal), event["through"].as_u64()) {
-            (Some(length), Some(through)) => through <= *length,
+            (Some(length), Some(through)) => {
+                through <= *length && std::fs::metadata(&journal).is_ok_and(|now| now.len() <= *length)
+            }
             _ => false,
         }
     }
@@ -267,7 +281,7 @@ const JOURNAL: &str = "to-rich.jsonl";
 
 /// What the watcher's log says once for a report that waits ([`accept_when_asked`]).
 pub const WAITS_FOR_THE_USER: &str =
-    "written before RichOS opened, for a conversation with no open job in which nothing was asked since; the report stays in its journal";
+    "nothing newer was written since RichOS opened, for a conversation with no open job in which nothing was asked since; the report stays in its journal";
 
 /// Does this conversation have a job that has not ended? A record that cannot be read is not
 /// counted: a report that waits can still be given later, a model turn cannot be taken back.
@@ -290,8 +304,10 @@ fn has_open_job(state: &Path, binding: &crate::entity::ThreadBinding) -> bool {
 /// after the user's next message in that conversation accepts it, in order. `coordination` is
 /// the folder `asked` was made from.
 ///
-/// Nothing else changes: a report written while the app is open reaches Stu by itself, and so
-/// does one from before for a conversation whose job has not ended.
+/// Nothing else changes for a connection's journal: a report written while the app is open
+/// reaches Stu by itself, with the held ones before it, and so does one from before for a
+/// conversation whose job has not ended. A reply on an old Markdown channel waits the same way
+/// whenever it was written ([`Asked::nobody_wrote_since`]).
 pub fn accept_when_asked(
     state: &Path,
     binding: &crate::entity::ThreadBinding,
@@ -301,7 +317,7 @@ pub fn accept_when_asked(
 ) -> Result<(), String> {
     // The app's conversation ledger sits beside its engine state (`work_host::verified_instruction`).
     let ledger = state.parent().unwrap_or(state).join("conversation-ledger.jsonl");
-    if asked.written_before(event) && !asked.in_thread(&ledger, binding.thread_id()) && !has_open_job(state, binding) {
+    if asked.nobody_wrote_since(event) && !asked.in_thread(&ledger, binding.thread_id()) && !has_open_job(state, binding) {
         return Err(WAITS_FOR_THE_USER.into());
     }
     accept(state, binding, event, coordination)
@@ -590,11 +606,17 @@ mod tests {
             accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap_err(),
             WAITS_FOR_THE_USER
         );
+        // Codex writes a second report on the same connection while the app is open. The
+        // watcher offers a connection's reports one at a time, in order: the one from before is
+        // handed over now, and the new one after it.
+        let journal = Path::new(f.event["locator"].as_str().unwrap()).join(JOURNAL);
+        std::fs::write(&journal, [b'\n'; 200]).unwrap();
+        accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap();
         let mut later = f.event.clone();
         later["record"]["message_id"] = json!("message-2");
         later["through"] = json!(200);
         accept_when_asked(&f.state, &f.binding, &later, &f.coord, &asked).unwrap();
-        assert_eq!(f.rows().len(), 1, "a report written after the app opened was held");
+        assert_eq!(f.rows().len(), 2, "a report written after the app opened, or the one before it, was held");
 
         let new = f.coord.join("connections/company-a").join(f.binding.thread_id()).join("new");
         std::fs::create_dir_all(&new).unwrap();
@@ -604,7 +626,26 @@ mod tests {
         fresh["connection"]["connection_id"] = json!("new");
         fresh["record"]["message_id"] = json!("message-3");
         accept_when_asked(&f.state, &f.binding, &fresh, &f.coord, &asked).unwrap();
-        assert_eq!(f.rows().len(), 2, "a report on a connection made after the app opened was held");
+        assert_eq!(f.rows().len(), 3, "a report on a connection made after the app opened was held");
+    }
+
+    /// A reply on an old Markdown channel starts no turn at launch either: whenever it was
+    /// written, it waits until he asks in that conversation.
+    #[test]
+    fn a_reply_on_an_old_markdown_channel_waits_until_the_user_asks() {
+        let f = Fixture::new();
+        let asked = opened(&f);
+        let mut reply = f.event.clone();
+        reply["record"]["kind"] = json!("legacy_live");
+        reply["through"] = json!(5000);
+        assert_eq!(
+            accept_when_asked(&f.state, &f.binding, &reply, &f.coord, &asked).unwrap_err(),
+            WAITS_FOR_THE_USER
+        );
+        assert!(!session_tools::inbox(&f.scope(), "stu").unwrap().exists(), "a held reply reached Stu's inbox");
+        prompt(&f, "Anything from Codex?", crate::ledger::Source::Text);
+        accept_when_asked(&f.state, &f.binding, &reply, &f.coord, &asked).unwrap();
+        assert_eq!(f.rows().len(), 1);
     }
 
     /// A job of his that has not ended is waiting for its reports: one from before the app
