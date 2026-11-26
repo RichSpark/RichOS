@@ -2,6 +2,27 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.3.8-nightly.20261126.119
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.8-nightly.20261126.119)
+
+- Added My RichOS, off until you turn it on in Settings, How it looks: a live monitor on the bar on the left, under your Mac's resources square, that shows whether RichOS is using tokens right now and how fast and how much memory the RichOS apps use; point at it for the last 15 minutes and open Tokens or Memory to see each chat, model and app
+- Added resting the pointer on a file or folder in RichFiles List or Columns view to see its kind, size and date
+- Changed Rich's recommended and default effort on Opus to High, including when RichOS moves him from Fable to Opus by itself; a level you already chose stays
+- Changed renaming in RichFiles List and Columns view to happen right in the list: press F2, choose Rename or click a selected item again after a pause, then type the new name and press Return
+- Changed Open With in RichFiles' right-click menu to list the apps that can open the file with their icons, the default first, followed by Choose Another App…
+- Changed the RichFiles sidebar into a folder tree: only folders that hold other folders get an arrow, the arrow opens them in the sidebar without changing the files on the right and open folders stay open
+- Changed how RichFiles shows files: a selected item gets a light fill instead of a heavy outline, the item under the pointer is tinted, clicking empty space deselects and right-clicking an item selects it; in List view the columns fit their names and the mouse wheel scrolls sideways
+- Changed arrows and Steps in the RichGlance editor to come in Small, Medium and Large, with a much bigger Large; a new arrow starts at Medium and a size you pick after placing a step is used for the next one
+- Changed RichGlance's menu bar icon to show the RichGlance eye instead of a viewfinder
+- Improved the main buttons in RichFiles dialogs and Disk Cleanup's Move to Trash to be easier to read in light and dark mode, for example Create, Rename, Search and Connect
+- Fixed RichOS using your Claude usage as soon as it opened: messages, Codex reports and reviews of Codex work left from while it was closed now wait until you next write or talk in that conversation, while work that was still running when RichOS closed carries on
+- Fixed pasting a copied file or folder into its own folder in RichFiles doing nothing; it now makes "name - Copy", then "name - Copy (2)"
+- Fixed the effort steps in Settings jittering when the pointer was over "Recommended"
+- Fixed the model and effort you picked in Settings being lost when you closed the window or quit RichOS with Settings still open
+- Fixed Forward Delete on your Mac desktop not moving a folder you just made with New Folder to the Trash before you named it
+- [technical] Fixed double-clicking a symbolic link to a folder on your Mac desktop opening it in Finder instead of RichFiles
+
 ## 1.3.7-nightly.20261124.118
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.7-nightly.20261124.118)
