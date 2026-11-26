@@ -289,8 +289,8 @@ struct ZipCreateSheet: View {
             HStack {
                 if task != nil { Button("Cancel Compression") { task?.cancel() } }
                 Spacer()
-                Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Create") { create() }.keyboardShortcut(.defaultAction)
+                Button("Close") { dismiss() }.sheetCancelAction()
+                Button("Create") { create() }.sheetDefaultAction()
                     .disabled(task != nil || name.isEmpty)
             }
         }.padding(16).frame(width: 445)

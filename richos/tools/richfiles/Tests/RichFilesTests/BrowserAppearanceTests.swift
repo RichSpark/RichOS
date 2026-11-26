@@ -75,7 +75,9 @@ final class BrowserAppearanceTests: XCTestCase {
                 ("Open With chooser's Open label on its fill", button.primaryLabel, button.primaryFill, 4.5),
                 ("Open With chooser's Open button against the sheet", button.primaryFill, g.floating, 3),
                 ("Open With chooser's Cancel label on its fill", button.label, button.fill, 4.5),
-                ("Open With chooser's Cancel outline against the sheet", BrowserPalette.controlLineValue(scheme), g.floating, 3)
+                ("Open With chooser's Cancel outline against the sheet", BrowserPalette.controlLineValue(scheme), g.floating, 3),
+                ("Disk Cleanup's Move to Trash against the pane", button.primaryFill, g.pane, 3),
+                ("Disk Cleanup's Move to Trash against the chrome", button.primaryFill, g.chrome, 3)
             ]
             for (name, foreground, ground, floor) in pairs {
                 let ratio = Self.contrast(foreground, ground)

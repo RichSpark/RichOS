@@ -95,8 +95,8 @@ struct ActionPaletteSheet: View {
             }.accessibilityLabel("File actions")
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Run", action: runSelection).keyboardShortcut(.defaultAction).disabled(results.isEmpty)
+                Button("Cancel") { dismiss() }.sheetCancelAction()
+                Button("Run", action: runSelection).sheetDefaultAction().disabled(results.isEmpty)
             }
         }.padding(14).frame(width: 440, height: 335)
             .onAppear { searchFocused = true; selection = results.first?.id }
@@ -589,11 +589,11 @@ struct NameSheet: View {
             }
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Cancel") { dismiss() }.sheetCancelAction()
                 Button(request.source == nil ? "Create" : "Rename") {
                     submit()
                 }
-                .keyboardShortcut(.defaultAction)
+                .sheetDefaultAction()
                 .disabled((try? FileOperations.validateName(name)) == nil)
             }
         }.padding(18).frame(width: 440)
@@ -988,10 +988,8 @@ struct OpenWithSheet: View {
             HStack(spacing: 8) {
                 Spacer()
                 // The app's own sheet buttons: the system blue left the light Open label below 4.5:1.
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                    .buttonStyle(SheetButtonStyle())
-                Button("Open") { open() }.keyboardShortcut(.defaultAction).disabled(working || selected == nil)
-                    .buttonStyle(SheetButtonStyle(primary: true))
+                Button("Cancel") { dismiss() }.sheetCancelAction()
+                Button("Open") { open() }.sheetDefaultAction().disabled(working || selected == nil)
             }
         }
         .padding(18)
@@ -1557,11 +1555,11 @@ struct SearchOptionsSheet: View {
                 }
                 .help("Search the sources configured in RichFinder.")
                 Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Cancel") { dismiss() }.sheetCancelAction()
                 Button("Search") {
                     model.submitSearch(draft)
                     dismiss()
-                }.keyboardShortcut(.defaultAction).disabled(!valid)
+                }.sheetDefaultAction().disabled(!valid)
             }
         }.padding(15).frame(width: 465, height: 420)
             .onAppear {
@@ -1845,8 +1843,8 @@ struct ConnectSheet: View {
             if !problem.isEmpty { Text(problem).foregroundStyle(.secondary) }
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Connect") { connect() }.keyboardShortcut(.defaultAction)
+                Button("Cancel") { dismiss() }.sheetCancelAction()
+                Button("Connect") { connect() }.sheetDefaultAction()
             }
         }.padding(16).frame(width: 420)
     }

@@ -185,7 +185,8 @@ enum BrowserTypography {
     }
 }
 
-/// A sheet's Cancel and Open, in the app's colors (round 107.1's chooser). A disabled button is
+/// A sheet's default button and the Cancel beside it, in the app's colors (round 107.1's
+/// chooser), and Disk Cleanup's Move to Trash. A disabled button is
 /// drawn at half strength; WCAG exempts an inactive control, and it carries no readable state.
 struct SheetButtonStyle: ButtonStyle {
     @Environment(\.colorScheme) private var scheme
@@ -205,6 +206,20 @@ struct SheetButtonStyle: ButtonStyle {
             .overlay(shape.strokeBorder(line, lineWidth: 1).allowsHitTesting(false))
             .contentShape(shape)
             .opacity(enabled ? (configuration.isPressed ? 0.85 : 1) : 0.5)
+    }
+}
+
+extension View {
+    /// A sheet's default button: Return presses it, drawn as `SheetButtonStyle(primary: true)`.
+    /// macOS's own blue default button leaves its white label at most 3.75:1 in the light theme,
+    /// so `SheetButtonColorTests` refuses a default action drawn any other way.
+    func sheetDefaultAction() -> some View {
+        keyboardShortcut(.defaultAction).buttonStyle(SheetButtonStyle(primary: true))
+    }
+
+    /// The Cancel or Close beside a sheet's default button: Esc presses it, drawn to match.
+    func sheetCancelAction() -> some View {
+        keyboardShortcut(.cancelAction).buttonStyle(SheetButtonStyle())
     }
 }
 
