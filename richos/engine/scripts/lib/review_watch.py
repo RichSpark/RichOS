@@ -407,6 +407,11 @@ def configured_repos(config):
 # what could be reviewed
 # ---------------------------------------------------------------------------
 
+def chat_partition(entity_id, thread_id):
+    """The app's name for one chat's folders (mega-lander app.py folder)."""
+    return hashlib.sha256(json.dumps([entity_id, thread_id], separators=(",", ":")).encode()).hexdigest()
+
+
 class Item(object):
     """One piece of work at one tip."""
 
@@ -775,9 +780,13 @@ class World(object):
         return {"work": work, "repo": repo, "branch": branch, "tip": tip,
                 "words": [wpath], "claims": [cpath], "at": now, "title": header[3:].strip()[:120]}
 
-    def handed_over(self, endpoint, source):
-        """How far into `source` handovers may be read; None: all of it (the terminal's watcher)."""
-        return None
+    def chat_open(self, endpoint):
+        """May this chat's handovers be read now? The terminal's watcher: always."""
+        return True
+
+    def may_start(self, item):
+        """May a review of `item` start now? The terminal's watcher: always."""
+        return True
 
     def channel_items(self, now, codex_state, connections):
         """The shared READY handler, with its own advisory reading position.
@@ -808,9 +817,9 @@ class World(object):
                 offset = channels.position(source, saved)
                 if offset == source.stat().st_size:
                     continue
-                # Only what the app has handed to the team is read (AppWorld.handed_over).
-                handed = self.handed_over(endpoint, source)
-                if handed is not None and offset >= handed:
+                # A chat the app's one rule has not let a turn through in is not read yet: no
+                # review and no notice about one from before (AppWorld.chat_open).
+                if not self.chat_open(endpoint):
                     continue
                 repos = self.channel_repositories(endpoint)
                 # Source evidence is always recoverable from the journals. No
@@ -821,8 +830,6 @@ class World(object):
                         if row.get("kind") == "task_context" or (row.get("kind", "message") == "message" and row.get("reply_to") == "task-context"):
                             words.append(("Source excerpt (%s; %s)" % (direction, row.get("provenance", "explicit task amendment")), row["text"]))
                 for _, end, row in channels.records(source, offset):
-                    if handed is not None and end > handed:
-                        break
                     if row.get("kind", "message") == "message":
                         text = row["text"]
                         first = text.lstrip().split("\n", 1)[0]
@@ -835,6 +842,7 @@ class World(object):
                                 channel_reply(path, row["message_id"], "review-held", got)
                             elif got:
                                 got["channel"] = {"locator": locator, "message_id": row["message_id"]}
+                                got["chat"] = chat_partition(endpoint["entity_id"], endpoint["thread_id"])
                                 if not any(p["channel"] == got["channel"] and p["repo"] == got["repo"] and p["tip"] == got["tip"] for p in pending):
                                     pending.append(got)
                     positions[locator] = dict(source_identity=identity, through=end)
@@ -853,6 +861,7 @@ class World(object):
             item = Item(p["work"], "codex", p["repo"], p["tip"], base, "ended", branch=p["branch"], source="codex",
                         words=p["words"], claims=p["claims"], title=p["title"])
             item.channel = p["channel"]
+            item.chat = p.get("chat", "")
             item.claude, item.accounts = getattr(self, "claude", ""), getattr(self, "accounts", "")
             items.append(item)
         return items, []
@@ -970,28 +979,34 @@ class AppWorld(World):
             if endpoint["entity_id"] != channels.TERMINAL
         ))
 
-    def handed_over(self, endpoint, source):
-        """A HANDOVER IS REVIEWED ONCE THE APP HAS HANDED IT TO THE TEAM, NEVER BEFORE (the CEO,
-        2026-11-26: "there should have been absolutely zero usage after me just opening the app").
+    def open_chats(self):
+        """THE APP'S ONE RULE FOR A MODEL RUN IT STARTS BY ITSELF (the CEO, 2026-11-26: "there
+        should have been absolutely zero usage after me just opening the app").
 
-        This watcher starts with the app and read each connection's journal by itself, so a
-        READY TO LAND written while the app was closed went straight to a reviewer at launch:
-        a model run nobody asked for, while the app's Codex watcher was holding that same
-        report back from the team (richos-core codex_bridge.rs accept_when_asked). The journal
-        is now read only as far as that watcher's accepted position for the connection
-        (<app state>/codex-watch/accepted/<connection>.json), which it saves when a report
-        reaches the team's inbox. A held report is not past it, so nothing reviews it and no
-        notice about it is written; a report handed over is reviewed at the next look.
-
-        None where the app's Codex watcher has never run (no codex-watch folder in the app
-        state): nothing is being held there."""
-        watch = os.path.join(self.app_state, "codex-watch")
-        if not os.path.isdir(watch):
-            return None
+        The chats the app has let a turn through in during this run, as richos-core turn_gate.rs
+        writes them to <app state>/turn-gate.json (empty when the app opens): the user acted in
+        the chat, input arrived there while the app is open, or a turn running when the app
+        ended carried on. Named by their registry partition (app.py folder). An unreadable
+        record is no chat: a review that waits can still start later, a model run cannot be
+        taken back."""
         try:
-            return channels.position(source, channels.load(os.path.join(watch, "accepted", endpoint["connection_id"] + ".json")))
-        except (OSError, ValueError, KeyError):
-            return 0
+            with open(os.path.join(self.app_state, "turn-gate.json"), encoding="utf-8") as f:
+                record = json.load(f)
+            return {chat_partition(c["entity_id"], c["thread_id"]) for c in record["open"]}
+        except (OSError, ValueError, KeyError, TypeError):
+            return set()
+
+    def chat_open(self, endpoint):
+        """A dedicated Codex journal is read only once its chat is open: a READY written while the
+        app was closed gets no review and no notice at launch."""
+        return chat_partition(endpoint["entity_id"], endpoint["thread_id"]) in self.open_chats()
+
+    def may_start(self, item):
+        """Every review the app's watcher starts, whatever found it (a worker workspace that ended
+        or ran long, a lost, held or stopped review from before, a Codex READY): only in an open
+        chat. Watcher.start asks this before anything else."""
+        chat = os.path.basename((item.env or {}).get("RICHOS_WORKSPACES_DIR", "")) or getattr(item, "chat", "")
+        return bool(chat) and chat in self.open_chats()
 
     def channel_repositories(self, endpoint):
         app = stall_watch._load("review_watch_app", os.path.join(self.engine_root, "mega-lander", "app.py"))
@@ -1522,6 +1537,10 @@ class Watcher(object):
         return running
 
     def start(self, item, trigger, now, attempt, supersede=None, rows=()):
+        # THE ONE PLACE A REVIEW PROCESS IS STARTED (spawn has no other caller): the app's one
+        # rule first, before a lock or a record is written (AppWorld.may_start).
+        if not self.world.may_start(item):
+            return None
         if supersede:
             if self.stop(supersede):
                 return None                         # still running: the next look tries again

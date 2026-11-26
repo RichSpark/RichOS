@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """The existing review handler on isolated framed connections, no real reviewer."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -52,8 +53,14 @@ class Reviews(unittest.TestCase):
         self.path = Path(c.connect("Exact user words", "fixture transcript line 1", scope=self.scope)["locator"])
         c.send(self.path, "ready", "## READY TO LAND: codex/fixture\nRepository: work\nCommit: " + self.tip + "\nClaims: implemented requested change")
         self.world = rw.AppWorld(str(Path(__file__).resolve().parents[2]), str(self.state), claude="/fixture/claude", accounts="/fixture/accounts")
+        # The chats the app's one rule has let a turn through in (richos-core turn_gate.rs).
+        self.open_chats(("company-a", "chat-a"), ("company-b", "chat-b"))
         # Real git and shared parser; no integration subprocess or global registry.
         self.world.integration_tip = lambda chain, repo: (self.base, "")
+
+    def open_chats(self, *chats):
+        (self.state / "turn-gate.json").write_text(json.dumps(dict(version=1, since_ms=0, open=[
+            dict(entity_id=entity, thread_id=thread) for entity, thread in chats])))
 
     def git(self, *args):
         return subprocess.check_output(["git", "-C", str(self.repo), *args], stderr=subprocess.DEVNULL, text=True).strip()
@@ -90,25 +97,55 @@ class Reviews(unittest.TestCase):
         self.assertEqual(incoming, result)
         self.assertEqual(list(rw.due(items, rw.Book([row], {}, []), 102, {}, 3600)), [])
 
-    def test_app_reviews_a_handover_only_once_it_was_handed_to_the_team(self):
-        """Opening the app starts no review: a READY the app's Codex watcher still holds (written
-        while the app was closed) is not read, queued or answered until it is accepted."""
-        watch = self.state / "codex-watch"
-        c.mkdir(watch)
+    def test_app_reads_and_reviews_nothing_in_a_chat_the_app_has_not_opened(self):
+        """Opening the app starts no review (the CEO, 2026-11-26: "there should have been
+        absolutely zero usage after me just opening the app"). A READY in a chat the app's one rule
+        has let no turn through in is not read, queued or answered; once the chat opens, the next
+        look reviews it, once."""
+        self.open_chats()
         state = {}
         self.assertEqual(self.world.codex_items(100, state), ([], []))
         self.assertEqual(state["channel_pending"], [])
-        self.assertEqual(state["channels"], {}, "a held handover moved the review position")
-        self.assertEqual(len(c.read(self.path)["records"]), 1, "a held handover got a review notice")
-        # The app handed the READY to the team: the next look reviews it, once. A report written
-        # after it is not handed over yet and stays unread.
-        source = self.path / "to-rich.jsonl"
-        ends = [end for _, end, _ in c.records(source, 0)]
-        c.send(self.path, "ready-later", "## READY TO LAND: codex/fixture\nRepository: work\nCommit: " + self.tip + "\nClaims: a later report")
-        c.save(watch / "accepted" / (self.path.name + ".json"), dict(source_identity=c.identity(source), through=ends[-1]))
+        self.assertEqual(state["channels"], {}, "a shut chat's handover moved the review position")
+        self.assertEqual(len(c.read(self.path)["records"]), 1, "a shut chat's handover got a review notice")
+        (self.state / "turn-gate.json").write_text("{not json")
+        self.assertEqual(self.world.codex_items(101, state), ([], []), "an unreadable record opened a chat")
+        self.open_chats(("company-a", "chat-a"))
         items, problems = self.world.codex_items(102, state)
         self.assertFalse(problems)
         self.assertEqual([item.channel for item in items], [dict(locator=str(self.path), message_id="ready")])
+        self.assertEqual(items[0].chat, hashlib.sha256(json.dumps(["company-a", "chat-a"], separators=(",", ":")).encode()).hexdigest())
+
+    def test_no_review_process_starts_in_a_shut_chat_whatever_found_it(self):
+        """Watcher.start is the one place a review process starts (spawn has no other caller). A
+        handover from a shut chat, a worker workspace of a shut chat that ended or ran long, and a
+        review stopped by the last quit and due again: none starts, and nothing is locked or
+        recorded for it. In an open chat the same item starts."""
+        watcher = rw.Watcher(str(Path(__file__).resolve().parents[2]), "", self.world)
+        items, _ = self.world.codex_items(100, {})
+        codex = items[0]
+        worker = rw.Item("work-1", "worker", str(self.repo), self.tip, self.base, "ended", source="app")
+        # The app's partition name for the chat (mega-lander app.py folder), computed here, not by the
+        # module under test.
+        partition = hashlib.sha256(json.dumps(["company-a", "chat-a"], separators=(",", ":")).encode()).hexdigest()
+        worker.env = {"RICHOS_WORKSPACES_DIR": str(self.state / "workspaces" / partition)}
+        stopped = dict(trigger="handover", ended_at=1, outcome="stopped")
+        book = rw.Book([], {}, [dict(stopped, repo=worker.repo, tip=worker.tip, work=worker.work)], app=True)
+        due = [it for it, _, _ in rw.due([codex, worker], book, 10 ** 6, {}, 3600)]
+        self.assertEqual({id(it) for it in due}, {id(codex), id(worker)}, "the fixture's items are not due")
+        self.open_chats()
+        with mock.patch.object(watcher, "spawn", side_effect=AssertionError("a review process started in a shut chat")), \
+                mock.patch.object(watcher, "take_lock", side_effect=AssertionError("a shut chat's review was locked")):
+            for item in due:
+                self.assertIsNone(watcher.start(item, "handover", 10 ** 6, 1))
+        self.open_chats(("company-a", "chat-a"))
+        started = []
+        with mock.patch.object(watcher, "take_lock", side_effect=lambda item, *rest: started.append(item) and None):
+            for item in due:
+                watcher.start(item, "handover", 10 ** 6, 1)
+        self.assertEqual({id(it) for it in started}, {id(codex), id(worker)}, "an open chat's review did not start")
+        # The terminal's watcher has no such record and starts as before.
+        self.assertTrue(rw.World.may_start(object.__new__(rw.World), worker))
 
     def test_unheaded_ready_uses_the_existing_scoped_handler(self):
         path = Path(c.connect("Original plain-message task", "fixture source", scope=self.scope)["locator"])
