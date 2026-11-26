@@ -20,6 +20,12 @@ struct BrowserTrashItem: Identifiable, Codable, Sendable {
     var canRestore: Bool { reference != nil }
 }
 
+struct BrowserDuplicates: Equatable, Sendable {
+    let id = UUID()
+    let folder: URL
+    let items: [FileReference]
+}
+
 @MainActor
 final class BrowserActions: ObservableObject {
     private static let recoveryLog = Logger(subsystem: "app.richos.richfiles", category: "transfer")
@@ -40,6 +46,12 @@ final class BrowserActions: ObservableObject {
     @Published private(set) var undoName: String?
     @Published private(set) var redoName: String?
     @Published private(set) var mutationRevision = UUID()
+    /// The copies the last paste made into the folder their sources are in, for the list to select.
+    @Published private(set) var lastDuplicates: BrowserDuplicates?
+    /// What the last Undo or Redo moved on disk, from where to where, in the order it moved
+    /// them, so a view that keeps state by path (the sidebar's open folders) can follow, as
+    /// the forward rename already does. Empty after any other change.
+    private(set) var mutationMoves: [BrowserMovedPath] = []
 
     var canRestartAfterUpdate: Bool {
         !busy && transfer?.running != true && transferTask == nil && preparingQueue.isEmpty
@@ -518,12 +530,21 @@ final class BrowserActions: ObservableObject {
         let history = moveHistory(for: changed)
         let backupNote = history.trash.isEmpty ? "" : " The cross-volume originals are in Trash for undo."
         if result.journal != nil { settledTransferID = result.progress.id }
+        let duplicates = request.move ? [] : result.duplicates
+        var message = lead + "\(operation) \(succeeded) of \(request.sources.count) items." + noMove + backupNote
+        if duplicates.count == 1, succeeded == 1, request.sources.count == 1, lead.isEmpty {
+            message = "Copied as “\(duplicates[0].url.lastPathComponent)”."
+        }
         let saved = finishMutation(MutationResult(
-            message: lead + "\(operation) \(succeeded) of \(request.sources.count) items." + noMove + backupNote,
+            message: message,
             issues: errors,
             changed: request.move ? !changed.isEmpty : succeeded > 0,
-            undo: history.undo, trashChanges: history.trash
-        ), title: "Move")
+            undo: duplicates.isEmpty ? history.undo : duplicates.reversed().map(HistoryStep.trash),
+            trashChanges: history.trash
+        ), title: duplicates.isEmpty ? "Move" : "Duplicate")
+        if !duplicates.isEmpty {
+            lastDuplicates = BrowserDuplicates(folder: request.folder, items: duplicates)
+        }
         if saved, let journal = result.journal { clearSettledTransfer { try journal.discard() } }
         queuePaused = !queuedTransfers.isEmpty && (result.progress.cancelled || !result.progress.issues.isEmpty)
         startNextQueuedTransfer()
@@ -589,15 +610,17 @@ final class BrowserActions: ObservableObject {
         }
     }
 
-    func rename(_ source: FileReference, to name: String) {
-        runMutation(title: "Rename") {
+    func rename(_ source: FileReference, to name: String, onRenamed: ((FileReference) -> Void)? = nil) {
+        runMutation(title: "Rename", onSuccess: { mutation in
+            if let item = mutation.createdItem { onRenamed?(item) }
+        }) {
             let receipt = try FileOperations.rename(source, to: name)
             guard receipt.original.url.absoluteString != receipt.moved.url.absoluteString else {
                 return MutationResult(message: "The name is unchanged.")
             }
             return MutationResult(
                 message: "Renamed to \(receipt.moved.url.lastPathComponent).", changed: true,
-                undo: [.undoMove(receipt, canRedoRename: true)]
+                undo: [.undoMove(receipt, canRedoRename: true)], createdItem: receipt.moved
             )
         }
     }
@@ -920,13 +943,14 @@ final class BrowserActions: ObservableObject {
                 status += " " + issue
                 issues = [issue]
             }
-            notifyMutation()
+            notifyMutation(moves: result.inverse.reversed().compactMap(\.movedPath))
         }
     }
 
     @discardableResult
-    private func notifyMutation() -> Bool {
+    private func notifyMutation(moves: [BrowserMovedPath] = []) -> Bool {
         let saved = persistRecovery()
+        mutationMoves = moves
         mutationRevision = UUID()
         didMutate?()
         return saved
@@ -974,6 +998,11 @@ final class BrowserActions: ObservableObject {
         var seen: Set<String> = []
         return sources.filter { seen.insert($0.url.path).inserted }
     }
+}
+
+struct BrowserMovedPath: Equatable, Sendable {
+    let from: URL
+    let to: URL
 }
 
 private func moveHistory(for moves: [BrowserCompletedMove]) -> (undo: [HistoryStep], trash: [TrashChange]) {
@@ -1032,6 +1061,13 @@ private enum HistoryStep: Codable, Sendable {
     case crossVolumeMove(CrossVolumeMoveReceipt, BrowserTrashItem)
     case undoCrossVolumeReplacement(CrossVolumeReplacementReceipt, BrowserTrashItem, BrowserTrashItem)
     case redoCrossVolumeReplacement(ReversedCrossVolumeReplacementReceipt, BrowserTrashItem)
+
+    /// A step that undoes a move carries that move's receipt; in a replay's inverse, that is the
+    /// move the replay just made.
+    var movedPath: BrowserMovedPath? {
+        guard case .undoMove(let receipt, _) = self else { return nil }
+        return BrowserMovedPath(from: receipt.original.url, to: receipt.moved.url)
+    }
 
     func perform() throws -> (inverse: HistoryStep?, trashChanges: [TrashChange]) {
         switch self {
