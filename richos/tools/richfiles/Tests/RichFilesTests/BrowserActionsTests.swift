@@ -640,6 +640,22 @@ final class BrowserActionsTests: XCTestCase {
         XCTAssertEqual(capped.widths, [ListColumnLayout.maximum])
     }
 
+    /// Catalog entry 15: renaming an open folder keeps it and the folders open inside it open
+    /// under the new name, in every root it appears under, and leaves other folders alone.
+    @MainActor
+    func testRenamingAFolderKeepsItsOpenBranchesOpen() {
+        let tree = FolderTreeState()
+        for id in ["place:/Users/a/Desktop", "place:/Users/a/Desktop/Projects", "place:/Users/a/Desktop/Projects/Active",
+                   "pin:/Users/a/Desktop/Projects", "place:/Users/a/Desktop/Projects Old"] {
+            tree.setOpen(id, true)
+        }
+        tree.move(from: URL(fileURLWithPath: "/Users/a/Desktop/Projects"),
+                  to: URL(fileURLWithPath: "/Users/a/Desktop/Client Projects"))
+        XCTAssertEqual(tree.open, ["place:/Users/a/Desktop", "place:/Users/a/Desktop/Client Projects",
+                                   "place:/Users/a/Desktop/Client Projects/Active", "pin:/Users/a/Desktop/Client Projects",
+                                   "place:/Users/a/Desktop/Projects Old"])
+    }
+
     /// Catalog entry 2: Enter keeps a new name, refuses one macOS cannot use or one already in the
     /// folder (ignoring case), and leaves an empty or unchanged name alone; the box selects the
     /// part before the extension.

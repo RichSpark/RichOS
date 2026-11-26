@@ -1736,6 +1736,7 @@ struct BrowserView: View {
             focus = .items
             let folder = model.folder
             actions.rename(source, to: name) { moved in
+                folderTree.move(from: item, to: moved.url)
                 guard model.folder == folder else { return }
                 model.selectCreatedItem(moved)
                 model.selection.rangeAnchor = moved.url
@@ -2298,6 +2299,19 @@ final class FolderTreeState: ObservableObject {
     func setOpen(_ id: String, _ value: Bool) {
         if value { if !open.contains(id) { open.insert(id) } }
         else if open.contains(id) { open.remove(id) }
+    }
+
+    /// A folder renamed or moved keeps itself and everything inside it open as it was. A row's
+    /// place is a root prefix ("place:", "pin:", "volume:") and the folder's full path.
+    func move(from old: URL, to new: URL) {
+        let before = old.standardizedFileURL.path, after = new.standardizedFileURL.path
+        let moved = Set(open.map { id -> String in
+            guard let colon = id.firstIndex(of: ":") else { return id }
+            let path = String(id[id.index(after: colon)...])
+            guard path == before || path.hasPrefix(before + "/") else { return id }
+            return String(id[...colon]) + after + path.dropFirst(before.count)
+        })
+        if moved != open { open = moved }
     }
 }
 
