@@ -749,15 +749,17 @@ fn the_team_digest_moves_with_what_a_lease_registers_and_nothing_else() {
 }
 
 /// CEO 2026-11-17: Rich defaults to Fable at low effort and Stu to Fable at medium effort.
-/// Rich's recommended level is low on either model (2026-10-14: immediate replies first) and
-/// Stu's on Opus is high (§119); a level chosen in Settings replaces it (round 86.1). Each role's flags come from the one function
+/// Rich's recommended level is low on Fable (2026-10-14: immediate replies first) and high on
+/// Opus (CEO 2026-11-26: *"for Rich let's change our recommendation (and default setting) to
+/// "High" when the user selects Opus instead of Fable for Rich"*), and Stu's on Opus is high
+/// (§119); a level chosen in Settings replaces it (round 86.1). Each role's flags come from the one function
 /// `spawn_with_tools` appends to the child's argument vector, given the profile every product
 /// lease is spawned with, which reads `config.json` in the data folder.
 #[test]
 fn each_role_defaults_to_fable_and_its_effort_follows_the_role_and_the_model() {
     use richos_core::config::{ConfigStore, ModelChoice};
     use richos_core::native::lease_model_args;
-    let rich_opus = ["--model", "opus", "--effort", "low"];
+    let rich_opus = ["--model", "opus", "--effort", "high"];
     let rich_fable = ["--model", "fable", "--effort", "low"];
     let stu_opus = ["--model", "opus", "--effort", "high"];
     let stu_fable = ["--model", "fable", "--effort", "medium"];
