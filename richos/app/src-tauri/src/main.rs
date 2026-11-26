@@ -509,8 +509,8 @@ static CODEX_SINK: std::sync::OnceLock<richos_core::codex_watch::Sink> = std::sy
 /// run of the app began, for a conversation with no open job in which the user has asked
 /// nothing since, is not handed to Stu. It waits in its journal
 /// (`codex_bridge::accept_when_asked`).
-fn codex_sink(app: AppHandle) -> richos_core::codex_watch::Sink {
-    let asked = richos_core::codex_bridge::Asked::at_launch(&richos_core::codex_bridge::root());
+fn codex_sink(app: AppHandle, state_root: &Path) -> richos_core::codex_watch::Sink {
+    let asked = richos_core::codex_bridge::Asked::at_launch(&richos_core::codex_bridge::root(), state_root);
     Arc::new(move |line:&str| {
         let state=app.try_state::<AppState>().ok_or("the app is still starting")?;
         let event:serde_json::Value=serde_json::from_str(line).map_err(|e|e.to_string())?;
@@ -3961,7 +3961,7 @@ fn main() {
                 work.start();
                 eprintln!("[richos] compute connection: starts with the first cancellable request over {}", claude_bin.display());
                 // Codex's entries, for Stu, the app's own child from launch to quit (gap X).
-                if CODEX_SINK.set(codex_sink(app.clone())).is_err() {
+                if CODEX_SINK.set(codex_sink(app.clone(), &data_dir.join("engine-state"))).is_err() {
                     eprintln!("[richos] Codex watch: its sink was already set");
                 }
                 // **THE APP CLEANS UP ITS OWN GARBAGE, NO MATTER WHAT** (CEO §54 addendum 2): what an

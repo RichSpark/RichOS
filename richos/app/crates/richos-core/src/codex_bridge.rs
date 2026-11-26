@@ -182,13 +182,22 @@ pub struct Asked {
     read: std::sync::Mutex<(u64, std::collections::HashSet<String>)>,
     /// How long each connection's journal was when the app opened ([`Self::nobody_wrote_since`]).
     journals: std::collections::HashMap<PathBuf, u64>,
+    /// The same for each old Markdown channel file the watcher reads, and, once asked for, how
+    /// many lines that length holds.
+    markdown: std::collections::HashMap<PathBuf, u64>,
+    markdown_lines: std::sync::Mutex<std::collections::HashMap<PathBuf, u64>>,
 }
 
+/// Where the app's watcher keeps its place in each old Markdown channel file
+/// (`codex_watch.py` `_legacy_tick`, the app host's session directory).
+const MARKDOWN_PLACES: &str = "codex-watch/watch/app-host/live-offsets.json";
+
 impl Asked {
-    /// **The app is opening now.** The journals carry no clock, so how long each one is at this
-    /// moment is what tells a report from before from one written while the app is open: a few
-    /// dozen `stat` calls, once.
-    pub fn at_launch(coordination: &Path) -> Self {
+    /// **The app is opening now.** Neither the journals nor the Markdown channels carry a
+    /// clock, so how long each file is at this moment is what tells a report from before from
+    /// one written while the app is open: a few dozen `stat` calls, once. `state` is the app's
+    /// engine state folder.
+    pub fn at_launch(coordination: &Path, state: &Path) -> Self {
         let mut journals = std::collections::HashMap::new();
         let mut folders = vec![coordination.join("connections")];
         // connections/<company>/<conversation>/<connection>/to-rich.jsonl
@@ -202,36 +211,69 @@ impl Asked {
                 journals.insert(journal, length);
             }
         }
-        Self { since_ms: crate::util::now_millis(), read: std::sync::Mutex::new((0, Default::default())), journals }
+        // The files the watcher already has a place in. One it has never read starts at its
+        // end (`look_one`), so it holds nothing from before.
+        let mut markdown = std::collections::HashMap::new();
+        let places: Value = std::fs::read(state.join(MARKDOWN_PLACES)).ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or(Value::Null);
+        for file in places.as_object().into_iter().flat_map(|places| places.keys()) {
+            if let Ok(length) = std::fs::metadata(file).map(|file| file.len()) {
+                markdown.insert(PathBuf::from(file), length);
+            }
+        }
+        Self { since_ms: crate::util::now_millis(), read: std::sync::Mutex::new((0, Default::default())), journals,
+            markdown, markdown_lines: Default::default() }
     }
 
-    /// **Is this a report from while the app was closed, with nothing newer behind it?**
+    /// **Is this a report nobody has followed up since the app opened?**
     ///
-    /// One that ends within its journal's length at launch was written before, and it waits
-    /// only while that journal has not grown: the watcher offers a connection's reports one at
-    /// a time, in order, so a report from before that stayed held would hold back every report
-    /// Codex writes on that connection while the app is open. Once one is written, the reports
-    /// before it are handed over ahead of it. A journal that did not exist at launch holds
-    /// nothing from before.
+    /// A report that ends within its journal's length at launch was written while the app was
+    /// closed. So was, in effect, a notice the app's own review watcher writes about one at
+    /// startup (`review_result`): neither starts a turn. Both wait only while Codex has written
+    /// nothing on that connection since launch: the watcher offers a connection's reports one
+    /// at a time, in order, so a report that stayed held would hold back every report Codex
+    /// writes there while the app is open. Once Codex writes one, what was held is handed over
+    /// ahead of it. A journal that did not exist at launch holds nothing from before.
     ///
-    /// The old Markdown channels (`legacy_live`) carry no position that tells before from
-    /// after: their spool is filled by the watcher once the app is open, replies written while
-    /// it was closed included. So a reply on one always counts as nobody's until the user asks
-    /// in that conversation or a job of it is open.
+    /// A reply on an old Markdown channel (`legacy_live`) names the lines it came from, and it
+    /// is from before when it starts within the file's length at launch. It waits only while
+    /// that file has not grown, for the same reason.
     fn nobody_wrote_since(&self, event: &Value) -> bool {
-        match event["record"]["kind"].as_str() {
-            Some("legacy_live") => return true,
+        let kind = event["record"]["kind"].as_str();
+        match kind {
+            Some("legacy_live") => return self.markdown_reply_from_before(event["record"]["text"].as_str().unwrap_or_default()),
             Some(kind) if kind.starts_with("legacy_") => return false,
             _ => {}
         }
         let Some(journal) = event["locator"].as_str().and_then(|locator| Path::new(locator).join(JOURNAL).canonicalize().ok())
         else { return false };
-        match (self.journals.get(&journal), event["through"].as_u64()) {
-            (Some(length), Some(through)) => {
-                through <= *length && std::fs::metadata(&journal).is_ok_and(|now| now.len() <= *length)
-            }
-            _ => false,
+        let (Some(length), Some(through)) = (self.journals.get(&journal), event["through"].as_u64()) else { return false };
+        (through <= *length || kind == Some("review_result")) && !codex_wrote_after(&journal, *length)
+    }
+
+    /// The watcher's block for a Markdown entry opens with where it came from:
+    /// `... (lines 12-15 of /path/to-rich.md); every new line follows:` (`codex_watch.py`
+    /// `look_one`). A block that says nothing of the kind is held: it cannot be shown to be new.
+    fn markdown_reply_from_before(&self, text: &str) -> bool {
+        let head = text.lines().next().unwrap_or_default();
+        let Some((first, file)) = head.rsplit_once("(lines ").and_then(|(_, rest)| rest.split_once(" of "))
+            .and_then(|(lines, rest)| Some((lines.split('-').next()?.parse::<u64>().ok()?, rest.rsplit_once(");")?.0)))
+        else { return true };
+        let file = PathBuf::from(file);
+        let Some(length) = self.markdown.get(&file) else { return false };
+        if std::fs::metadata(&file).is_ok_and(|now| now.len() > *length) {
+            return false;
         }
+        let mut lines = self.markdown_lines.lock().unwrap();
+        let before = *lines.entry(file.clone()).or_insert_with(|| {
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            match std::fs::File::open(&file).map(|opened| opened.take(*length).read_to_end(&mut bytes)) {
+                Ok(Ok(_)) => bytes.iter().filter(|byte| **byte == b'\n').count() as u64,
+                _ => u64::MAX,
+            }
+        });
+        first <= before
     }
 
     /// An unreadable ledger answers no: the report waits and stays in its journal.
@@ -279,6 +321,19 @@ impl Asked {
 /// The file in a connection's folder Codex and the review watcher write to Rich's team in.
 const JOURNAL: &str = "to-rich.jsonl";
 
+/// Has Codex written a report in this journal past `length`? A review watcher's notice
+/// (`review_result`) is the app's own writing, not Codex's.
+fn codex_wrote_after(journal: &Path, length: u64) -> bool {
+    use std::io::{BufRead, Seek, SeekFrom};
+    let Ok(mut file) = std::fs::File::open(journal) else { return false };
+    if file.seek(SeekFrom::Start(length)).is_err() {
+        return false;
+    }
+    std::io::BufReader::new(file).lines().map_while(Result::ok).any(|line| {
+        serde_json::from_str::<Value>(&line).is_ok_and(|record| record.is_object() && record["kind"] != "review_result")
+    })
+}
+
 /// What the watcher's log says once for a report that waits ([`accept_when_asked`]).
 pub const WAITS_FOR_THE_USER: &str =
     "nothing newer was written since RichOS opened, for a conversation with no open job in which nothing was asked since; the report stays in its journal";
@@ -306,8 +361,8 @@ fn has_open_job(state: &Path, binding: &crate::entity::ThreadBinding) -> bool {
 ///
 /// Nothing else changes for a connection's journal: a report written while the app is open
 /// reaches Stu by itself, with the held ones before it, and so does one from before for a
-/// conversation whose job has not ended. A reply on an old Markdown channel waits the same way
-/// whenever it was written ([`Asked::nobody_wrote_since`]).
+/// conversation whose job has not ended. A reply on an old Markdown channel is held and handed
+/// over by the same rule ([`Asked::nobody_wrote_since`]).
 pub fn accept_when_asked(
     state: &Path,
     binding: &crate::entity::ThreadBinding,
@@ -540,7 +595,15 @@ mod tests {
         std::fs::write(Path::new(f.event["locator"].as_str().unwrap()).join(JOURNAL), [b'\n'; 100]).unwrap();
         // The ledger's clock is in milliseconds: what was written before is strictly earlier.
         std::thread::sleep(std::time::Duration::from_millis(3));
-        Asked::at_launch(&f.coord)
+        Asked::at_launch(&f.coord, &f.state)
+    }
+
+    /// One line of a journal, as the engine writes a record.
+    fn written(f: &Fixture, record: Value) {
+        use std::io::Write;
+        let journal = Path::new(f.event["locator"].as_str().unwrap()).join(JOURNAL);
+        let mut file = std::fs::OpenOptions::new().append(true).open(journal).unwrap();
+        writeln!(file, "{record}").unwrap();
     }
 
     fn prompt(f: &Fixture, text: &str, source: crate::ledger::Source) {
@@ -609,8 +672,7 @@ mod tests {
         // Codex writes a second report on the same connection while the app is open. The
         // watcher offers a connection's reports one at a time, in order: the one from before is
         // handed over now, and the new one after it.
-        let journal = Path::new(f.event["locator"].as_str().unwrap()).join(JOURNAL);
-        std::fs::write(&journal, [b'\n'; 200]).unwrap();
+        written(&f, json!({"version":1,"message_id":"message-2","text":"A second report"}));
         accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap();
         let mut later = f.event.clone();
         later["record"]["message_id"] = json!("message-2");
@@ -629,22 +691,85 @@ mod tests {
         assert_eq!(f.rows().len(), 3, "a report on a connection made after the app opened was held");
     }
 
-    /// A reply on an old Markdown channel starts no turn at launch either: whenever it was
-    /// written, it waits until he asks in that conversation.
+    /// **The app's own review watcher writes a notice at startup** about a report from while
+    /// the app was closed. That notice is not Codex writing: the report stays held, and the
+    /// notice starts no turn either. A report Codex then writes hands all three over, in order.
     #[test]
-    fn a_reply_on_an_old_markdown_channel_waits_until_the_user_asks() {
+    fn a_review_notice_written_at_startup_releases_nothing_and_starts_no_turn() {
         let f = Fixture::new();
         let asked = opened(&f);
-        let mut reply = f.event.clone();
-        reply["record"]["kind"] = json!("legacy_live");
-        reply["through"] = json!(5000);
+        written(&f, json!({"version":1,"kind":"review_result","message_id":"review-1","reply_to":"message-1","text":"no review started"}));
+        let mut notice = f.event.clone();
+        notice["record"] = json!({"version":1,"kind":"review_result","message_id":"review-1","reply_to":"message-1","text":"no review started"});
+        notice["through"] = json!(250);
+        for event in [&f.event, &notice] {
+            assert_eq!(
+                accept_when_asked(&f.state, &f.binding, event, &f.coord, &asked).unwrap_err(),
+                WAITS_FOR_THE_USER
+            );
+        }
+        assert!(!session_tools::inbox(&f.scope(), "stu").unwrap().exists(), "a startup notice reached Stu's inbox");
+
+        written(&f, json!({"version":1,"message_id":"message-2","text":"A second report"}));
+        accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap();
+        accept_when_asked(&f.state, &f.binding, &notice, &f.coord, &asked).unwrap();
+        assert_eq!(f.rows().len(), 2);
+    }
+
+    /// **The old Markdown channel.** A reply written while the app was closed starts no turn at
+    /// launch; one written while it is open reaches Stu by itself, and the held one goes ahead
+    /// of it. Each block names the lines it came from, as the engine's watcher writes it.
+    #[test]
+    fn a_markdown_reply_from_before_waits_and_one_written_while_open_arrives_by_itself() {
+        let f = Fixture::new();
+        let channel = f.root.join("rich-codex/to-rich.md");
+        std::fs::create_dir_all(channel.parent().unwrap()).unwrap();
+        std::fs::write(&channel, "## read long ago\nold\n## written while closed\nbacklog\n").unwrap();
+        // The watcher had read the first two lines when the app last quit.
+        let places = f.state.join(MARKDOWN_PLACES);
+        std::fs::create_dir_all(places.parent().unwrap()).unwrap();
+        std::fs::write(&places, json!({channel.to_str().unwrap(): {"offset": 21, "inode": 1, "seen": 21}}).to_string()).unwrap();
+        let asked = opened(&f);
+        let block = |lines: &str, body: &str, id: &str, through: u64| {
+            let mut event = f.event.clone();
+            event["record"] = json!({"version":1,"kind":"legacy_live","message_id":id,
+                "text":format!("CODEX-WATCH 10:04Z: Codex wrote a new entry to you in rich-codex/to-rich.md (lines {lines} of {}); every new line follows:\n{body}", channel.display())});
+            event["through"] = json!(through);
+            event
+        };
+        let backlog = block("3-4", "## written while closed\nbacklog", "legacy-live-a", 5000);
         assert_eq!(
-            accept_when_asked(&f.state, &f.binding, &reply, &f.coord, &asked).unwrap_err(),
+            accept_when_asked(&f.state, &f.binding, &backlog, &f.coord, &asked).unwrap_err(),
             WAITS_FOR_THE_USER
         );
         assert!(!session_tools::inbox(&f.scope(), "stu").unwrap().exists(), "a held reply reached Stu's inbox");
-        prompt(&f, "Anything from Codex?", crate::ledger::Source::Text);
-        accept_when_asked(&f.state, &f.binding, &reply, &f.coord, &asked).unwrap();
+
+        use std::io::Write;
+        std::fs::OpenOptions::new().append(true).open(&channel).unwrap().write_all(b"## written while open\nlive\n").unwrap();
+        let live = block("5-6", "## written while open\nlive", "legacy-live-b", 6000);
+        accept_when_asked(&f.state, &f.binding, &backlog, &f.coord, &asked).unwrap();
+        accept_when_asked(&f.state, &f.binding, &live, &f.coord, &asked).unwrap();
+        assert_eq!(f.rows().len(), 2, "a reply written while the app is open, or the one before it, was held");
+    }
+
+    /// With nothing waiting at launch, the first Markdown reply written while the app is open
+    /// arrives by itself, hours later or not.
+    #[test]
+    fn the_first_markdown_reply_written_while_open_is_never_held() {
+        let f = Fixture::new();
+        let channel = f.root.join("rich-codex/to-rich.md");
+        std::fs::create_dir_all(channel.parent().unwrap()).unwrap();
+        std::fs::write(&channel, "## read long ago\nold\n").unwrap();
+        let places = f.state.join(MARKDOWN_PLACES);
+        std::fs::create_dir_all(places.parent().unwrap()).unwrap();
+        std::fs::write(&places, json!({channel.to_str().unwrap(): {"offset": 21, "inode": 1, "seen": 21}}).to_string()).unwrap();
+        let asked = opened(&f);
+        use std::io::Write;
+        std::fs::OpenOptions::new().append(true).open(&channel).unwrap().write_all(b"## written while open\nlive\n").unwrap();
+        let mut live = f.event.clone();
+        live["record"] = json!({"version":1,"kind":"legacy_live","message_id":"legacy-live-b",
+            "text":format!("CODEX-WATCH 13:00Z: Codex wrote a new entry to you in rich-codex/to-rich.md (lines 3-4 of {}); every new line follows:\n## written while open\nlive", channel.display())});
+        accept_when_asked(&f.state, &f.binding, &live, &f.coord, &asked).unwrap();
         assert_eq!(f.rows().len(), 1);
     }
 
