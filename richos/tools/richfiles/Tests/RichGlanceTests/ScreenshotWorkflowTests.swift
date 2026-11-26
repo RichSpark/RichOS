@@ -228,25 +228,25 @@ final class ScreenshotWorkflowTests: XCTestCase {
     func testRound100ToolDefaultsAndIndependentStyles() async throws {
         let canvas = ScreenshotCanvas(document: ScreenshotDocument(original: try fixture(), scale: 1))
         canvas.tool = .arrow
-        XCTAssertTrue(canvas.large)
+        XCTAssertEqual(canvas.size, .medium)
         XCTAssertEqual(canvas.ink, .red)
-        canvas.setStyle(ink: .blue, large: false)
+        canvas.setStyle(ink: .blue, size: .small)
         canvas.tool = .highlight
         XCTAssertEqual(canvas.ink, .yellow)
         canvas.setStyle(ink: .black)
         canvas.tool = .box
-        XCTAssertFalse(canvas.large)
+        XCTAssertEqual(canvas.size, .small)
         XCTAssertEqual(canvas.ink, .red)
         canvas.tool = .text
-        canvas.setStyle(large: true)
-        XCTAssertTrue(canvas.large)
+        canvas.setStyle(size: .medium)
+        XCTAssertEqual(canvas.size, .medium)
         canvas.tool = .arrow
-        XCTAssertFalse(canvas.large)
+        XCTAssertEqual(canvas.size, .small)
         XCTAssertEqual(canvas.ink, .blue)
         canvas.tool = .highlight
         XCTAssertEqual(canvas.ink, .black)
         canvas.tool = .steps
-        XCTAssertFalse(canvas.large)
+        XCTAssertEqual(canvas.size, .small)
     }
 
     func testSameEditorKeepsWorkingMarksAndUndoAsCapturesChange() async throws {

@@ -90,7 +90,8 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
     private let zoomModes = ScreenshotChoice(["Fit", "100%"], label: "Zoom mode")
     private let zoomOutButton = ScreenshotButton("Zoom out", symbol: "minus")
     private let zoomInButton = ScreenshotButton("Zoom in", symbol: "plus")
-    private let size = ScreenshotChoice(["Regular", "Large"], label: "Mark size")
+    private let size = ScreenshotChoice(ScreenshotMarkSize.allCases.map { $0.rawValue.capitalized }, label: "Mark size")
+    private let textSize = ScreenshotChoice(["Regular", "Large"], label: "Text size")
     private let thickness = ScreenshotButton("Thickness", symbol: "lineweight")
     private lazy var thicknessMenu: NSPopover = {
         let popover = NSPopover()
@@ -226,7 +227,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
         NotificationCenter.default.addObserver(self, selector: #selector(scrolled),
                                                name: NSView.boundsDidChangeNotification, object: scroll.contentView)
         for view in [scroll, inspector, empty, reveal, toast] { work.addSubview(view) }
-        for view in [inspection, hint, size, thickness, edit, delete, earlier, later, acceptCrop, cancelCrop] { inspector.addSubview(view) }
+        for view in [inspection, hint, size, textSize, thickness, edit, delete, earlier, later, acceptCrop, cancelCrop] { inspector.addSubview(view) }
         swatches = ScreenshotInk.allCases.map { ink in
             let button = ScreenshotButton(ink.rawValue.capitalized, style: .swatch)
             button.swatch = ink.color
@@ -269,7 +270,10 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
         zoomInButton.onPress = { [weak self] in self?.changeZoom(direction: 1) }
         thickness.trailingSymbol = "chevron.down"
         thickness.onPress = { [weak self] in self?.showThicknessMenu() }
-        size.changed = { [weak self] in self?.canvas?.setStyle(large: $0 == 1); self?.focusPicture() }
+        size.changed = { [weak self] in
+            self?.canvas?.setStyle(size: ScreenshotMarkSize.allCases[$0]); self?.focusPicture()
+        }
+        textSize.changed = { [weak self] in self?.canvas?.setStyle(size: $0 == 1 ? .medium : .small); self?.focusPicture() }
         edit.onPress = { [weak self] in self?.canvas?.startCallout() }
         delete.onPress = { [weak self] in self?.canvas?.deleteSelected(); self?.focusPicture() }
         earlier.onPress = { [weak self] in self?.canvas?.reorderSelected(by: -1); self?.focusPicture() }
@@ -1187,8 +1191,18 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
             thickness.title = "Thickness · " + width
             thickness.setAccessibilityValue(width)
         }
-        size.isHidden = !styled || !selectedTool.hasSizeChoice
-        size.selection = (mark?.large ?? canvas?.large) == true ? 1 : 0
+        let chosenSize = mark?.markSize ?? canvas?.size ?? .small
+        size.isHidden = !styled || !selectedTool.hasSizeChoice || selectedTool == .text
+        textSize.isHidden = !styled || selectedTool != .text
+        if !size.isHidden {
+            size.selection = ScreenshotMarkSize.allCases.firstIndex(of: chosenSize) ?? 0
+            size.setAccessibilityLabel(selectedTool == .arrow ? "Arrow size" : "Step size")
+            // Arrow: a bar half the shaft (3, 5, 12 pt). Steps: a dot (6, 9, 14 pt). As in round 108.
+            let samples: [ScreenshotButton.SizeSample] = selectedTool == .arrow
+                ? [.bar(3), .bar(5), .bar(12)] : [.dot(6), .dot(9), .dot(14)]
+            for (button, sample) in zip(size.buttons, samples) { button.sizeSample = sample }
+        }
+        textSize.selection = chosenSize == .small ? 0 : 1
         edit.isHidden = cropping || mark?.tool != .text
         delete.isHidden = cropping || mark == nil
         earlier.isHidden = cropping || mark?.tool != .steps
@@ -1351,6 +1365,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate, NSSearchFieldDelegate,
         let colors = swatches.filter { !$0.isHidden }.map { ($0 as NSView, CGFloat(34)) }
         if !colors.isEmpty { groups.append(colors) }
         if !size.isHidden { groups.append([(size, size.naturalWidth)]) }
+        if !textSize.isHidden { groups.append([(textSize, textSize.naturalWidth)]) }
         if !thickness.isHidden { groups.append([(thickness, thickness.naturalWidth())]) }
         for button in [earlier, later, edit, delete, cancelCrop, acceptCrop] where !button.isHidden {
             groups.append([(button, button.naturalWidth())])
