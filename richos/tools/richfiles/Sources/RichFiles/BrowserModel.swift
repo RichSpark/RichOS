@@ -82,10 +82,17 @@ final class BrowserSelection: ObservableObject {
     var rangeAnchor: URL?
     var references: [URL: FileReference] = [:]
 
+    /// Items that just appeared (a pasted duplicate) flash once when their row is drawn.
+    private(set) var flashed: (paths: Set<String>, at: TimeInterval) = ([], 0)
+
     func moveCursor(to item: URL?, scrolling: Bool = false) {
         if cursor != item { cursor = item }
         let scrollTarget = scrolling ? item : nil
         if scrollToItem != scrollTarget { scrollToItem = scrollTarget }
+    }
+
+    func flash(_ items: [URL]) {
+        flashed = (Set(items.map { $0.standardizedFileURL.path }), ProcessInfo.processInfo.systemUptime)
     }
 }
 
@@ -316,10 +323,16 @@ final class BrowserModel: ObservableObject {
     }
 
     func selectCreatedItem(_ item: FileReference) {
-        selected = [item.url]
-        selectionToRestore = [item.url.path: .sameFile(item.identity)]
+        selectCreatedItems([item])
+    }
+
+    func selectCreatedItems(_ items: [FileReference]) {
+        guard let last = items.last else { return }
+        selected = Set(items.map(\.url))
+        selectionToRestore = Dictionary(items.map { ($0.url.path, SelectionTarget.sameFile($0.identity)) },
+                                        uniquingKeysWith: { _, latest in latest })
         firstVisibleItem = nil
-        scrollAnchor = item.url
+        scrollAnchor = last.url
     }
 
     func resetTypeSelection() {

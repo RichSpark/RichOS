@@ -55,6 +55,10 @@ struct BrowserView: View {
     @State private var folderReveal: FolderTreeReveal?
     @State private var commandOwner = UUID()
     @State private var paletteChoice: BrowserCommand?
+    // Held as plain references: typing a new name or resting the pointer redraws only the
+    // views that observe them, never the whole window.
+    @State private var renaming = InlineRename()
+    @State private var quickInfo = ItemQuickInfo()
     @StateObject private var folderTree = FolderTreeState()
 
     private var palette: BrowserPalette { BrowserPalette(scheme) }
@@ -141,8 +145,17 @@ struct BrowserView: View {
                                    shortcuts: BrowserShortcut.load(shortcutData),
                                    activate: { workspace.select(side) },
                                    perform: perform, prefix: { model.typeToSelect($0) }))
-        .onAppear { workspace.setCommands(for: side, owner: commandOwner, handler: perform) }
-        .onDisappear { workspace.clearCommands(for: side, owner: commandOwner) }
+        .onAppear {
+            workspace.setCommands(for: side, owner: commandOwner, handler: perform)
+            configureQuickInfo()
+        }
+        .onDisappear {
+            workspace.clearCommands(for: side, owner: commandOwner)
+            quickInfo.hide()
+        }
+        .onChange(of: scheme) { _ in configureQuickInfo() }
+        .onChange(of: textSize) { _ in configureQuickInfo() }
+        .onChange(of: model.showHidden) { _ in configureQuickInfo() }
         .onChange(of: model.tabs.map(\.folder)) { _ in sessionChanged() }
         .onChange(of: model.currentTabID) { _ in sessionChanged() }
         .onChange(of: actions.mutationRevision) { _ in model.refresh() }
@@ -154,6 +167,21 @@ struct BrowserView: View {
             focus = nil
             suggestions = []
             feedback = ""
+            renaming.end()
+            quickInfo.hide()
+        }
+        .onChange(of: actions.lastDuplicates) { duplicates in
+            // Catalog entry 1: the new copy takes its sorted place, is selected and scrolled into view.
+            guard let duplicates, activePane,
+                  duplicates.folder.resolvingSymlinksInPath().standardizedFileURL.path
+                    == model.folder.resolvingSymlinksInPath().standardizedFileURL.path else { return }
+            model.selectCreatedItems(duplicates.items)
+            if let last = duplicates.items.last {
+                model.selection.rangeAnchor = last.url
+                model.selection.moveCursor(to: last.url, scrolling: true)
+                model.selection.flash(duplicates.items.map(\.url))
+            }
+            focus = .items
         }
         .background {
             observeSelection { selection in
@@ -172,6 +200,23 @@ struct BrowserView: View {
             sheetContents(value)
                 .font(BrowserTypography.reading(16 * textSize.scale))
                 .background(palette.floating)
+        }
+    }
+
+    /// Catalog entry 13: what the quick-info box says about an item, in the app's own terms and
+    /// formats: Kind, Size (a folder: Contains) and Modified.
+    private func configureQuickInfo() {
+        quickInfo.style = .init(scheme: scheme, size: 16 * textSize.scale)
+        quickInfo.showHidden = model.showHidden
+        let model = model
+        let renaming = renaming
+        quickInfo.describe = { url in
+            guard renaming.item == nil, let entry = model.entries.first(where: { $0.url == url }) else { return nil }
+            let directory = entry.kind == .directory
+            var lines = [QuickInfo.Line(label: "Kind", value: entry.typeDescription ?? (directory ? "Folder" : "Document"))]
+            if !directory, let size = entry.size { lines.append(.init(label: "Size", value: formattedBytes(size))) }
+            if let modified = entry.modified { lines.append(.init(label: "Modified", value: formattedDate(modified))) }
+            return QuickInfo(lines: lines, countFolder: directory ? entry.url : nil)
         }
     }
 
@@ -680,7 +725,7 @@ struct BrowserView: View {
             if focus != .items { focus = .items }
             select(entry, modifiers: modifiers)
             return true
-        }, click: { start, end, event in
+        }, click: { start, end, event, wasKey in
             // AppKit has already counted the clicks. An unhandled first press
             // still selects on release and the second release opens the item.
             guard model.viewMode != .details,
@@ -689,10 +734,18 @@ struct BrowserView: View {
             workspace.select(side)
             if focus != .items { focus = .items }
             if event.clickCount == 2 {
+                renaming.cancelArm()
                 select(entry, modifiers: [])
                 activate([entry])
             } else {
+                // Catalog entry 2: a click on the item that is already the only selection, after a
+                // pause, opens the inline name box once no second click makes it a double-click.
+                let armed = wasKey && model.selected == [url] && renaming.item == nil && supportsInlineRename
+                    && event.modifierFlags.intersection([.command, .shift, .control, .option]).isEmpty
                 select(entry, modifiers: event.modifierFlags)
+                if armed {
+                    renaming.arm(after: NSEvent.doubleClickInterval) { beginInlineRename(entry) }
+                }
             }
             return true
         }, controlClick: { point, windowPoint, window in
@@ -705,6 +758,32 @@ struct BrowserView: View {
             if model.viewMode == .details { detailsViewport.focusTable() }
             else { focus = .items }
             return true
+        }, blankClick: { point in
+            // Catalog entry 6: a click on empty space deselects; the last item keeps only its
+            // thin keyboard-focus outline.
+            guard model.viewMode != .details, canSelectFromBlankSpace(at: point) else { return }
+            workspace.select(side)
+            if focus != .items { focus = .items }
+            if !model.selected.isEmpty { model.selected = [] }
+        }, secondaryPress: { point in
+            // Catalog entry 8: a right-click selects the item before its menu opens, so the menu
+            // plainly belongs to it. On empty space it deselects and the folder menu opens.
+            guard model.viewMode != .details else { return }
+            renaming.cancelArm()
+            quickInfo.hide()
+            if let url = rowAt(point), let entry = model.entries.first(where: { $0.url == url }) {
+                workspace.select(side)
+                if !model.selected.contains(url) { select(entry, modifiers: []) }
+                else { model.selection.moveCursor(to: url) }
+                if focus != .items { focus = .items }
+            } else if canSelectFromBlankSpace(at: point) {
+                workspace.select(side)
+                if !model.selected.isEmpty { model.selected = [] }
+                if focus != .items { focus = .items }
+            }
+        }, anyPress: { inText in
+            renaming.cancelArm()
+            if renaming.item != nil && !inText { commitInlineRename(quiet: true) }
         }))
         .onPreferenceChange(RowFramesKey.self) { rowFrames = $0 }
         .onPreferenceChange(FileColumnFrameKey.self) { fileColumnFrame = $0 }
@@ -734,8 +813,12 @@ struct BrowserView: View {
         ))
         .contextMenu { folderMenu }
         .focusable(model.viewMode != .details)
+        .modifier(NoFocusRing())
         .focused($focus, equals: .items)
     }
+
+    /// The views whose items show their name with `nameLabel`, which can turn into the inline box.
+    private var supportsInlineRename: Bool { model.viewMode == .list || model.viewMode == .columns }
 
     private func rowAt(_ point: CGPoint) -> URL? {
         rowFrames.first { row in
@@ -971,41 +1054,14 @@ struct BrowserView: View {
 
     private var compactList: some View {
         GeometryReader { geometry in
-            let rowHeight = (model.searchActive ? 48 : 28) * textSize.scale
-            let rows = max(1, Int((geometry.size.height - 12) / rowHeight))
-            let width = max(1, geometry.size.width - 12)
-            let visibleColumns = max(1, Int(width / (325 * textSize.scale)))
-            let columnWidth = width / CGFloat(visibleColumns)
-            let entries = model.entries
-            let columns = (entries.count + rows - 1) / rows
+            // Catalog entries 10, 11 and 12: rows 24 px apart, each column as wide as its own
+            // longest name, columns separated only by a 12 px gap, no lines between them.
+            let rowHeight: CGFloat = (model.searchActive ? 48 : 24) * textSize.scale
+            let scrollerHeight: CGFloat = NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)
+            let rows: Int = max(1, Int((geometry.size.height - 12 - scrollerHeight) / rowHeight))
             ScrollViewReader { scroll in
-                ScrollView(.horizontal) {
-                    LazyHStack(alignment: .top, spacing: 0) {
-                        ForEach(0..<columns, id: \.self) { column in
-                            let start = column * rows
-                            let end = min(start + rows, entries.count)
-                            VStack(spacing: 0) {
-                                ForEach(entries[start..<end]) { entry in
-                                    selectable(entry) {
-                                        VStack(alignment: .leading, spacing: 1) {
-                                            nameLabel(entry)
-                                            if model.searchActive {
-                                                resultLocation(entry, font: BrowserTypography.reading(14 * textSize.scale))
-                                            }
-                                        }.frame(maxWidth: .infinity, alignment: .leading)
-                                    }.frame(height: rowHeight)
-                                }
-                            }
-                            .padding(.horizontal, 5)
-                            .frame(width: columnWidth, height: max(0, geometry.size.height - 12), alignment: .top)
-                            .overlay(alignment: .trailing) {
-                                if column + 1 < columns {
-                                    Rectangle().fill(palette.line).frame(width: 1).allowsHitTesting(false)
-                                }
-                            }
-                            .id(column)
-                        }
-                    }.padding(6)
+                Observing(object: renaming) { rename in
+                    listColumns(rows: rows, rowHeight: rowHeight, rename: rename)
                 }
                 .onAppear {
                     listRows = rows
@@ -1025,6 +1081,62 @@ struct BrowserView: View {
         .accessibilityIdentifier("file-list")
         .accessibilityLabel("List view, filenames and extensions")
     }
+
+    private func listColumns(rows: Int, rowHeight: CGFloat, rename: InlineRename) -> some View {
+        let entries = model.entries
+        let columns = (entries.count + rows - 1) / rows
+        let layout = listLayout(entries, rows: rows, rename: rename)
+        let renamingColumn: Int? = rename.item.flatMap { item in entries.firstIndex { $0.url == item } }.map { $0 / rows }
+        return ScrollView(.horizontal) {
+            LazyHStack(alignment: .top, spacing: ListColumnLayout.gap) {
+                ForEach(0..<columns, id: \.self) { column in
+                    listColumn(entries[(column * rows)..<min(column * rows + rows, entries.count)],
+                               rowHeight: rowHeight, rename: rename)
+                        .frame(width: column < layout.widths.count ? layout.widths[column] : 0, alignment: .top)
+                        .zIndex(renamingColumn == column ? 1 : 0)
+                        .id(column)
+                }
+            }
+            .padding(6)
+            .background(PaneScrollBridge(horizontal: true, colors: palette.scrollerColors(on: palette.pane),
+                                         scrolled: { quickInfo.hide() }))
+        }
+    }
+
+    private func listColumn(_ slice: ArraySlice<FileEntry>, rowHeight: CGFloat, rename: InlineRename) -> some View {
+        VStack(spacing: 0) {
+            ForEach(slice) { entry in
+                selectable(entry) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        nameLabel(entry)
+                        if model.searchActive {
+                            resultLocation(entry, font: BrowserTypography.reading(14 * textSize.scale))
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(height: rowHeight)
+                .zIndex(rename.item == entry.url ? 1 : 0)
+            }
+        }
+    }
+
+    /// Column widths for the List view. A name being edited is measured as typed, so its column
+    /// and every column after it move with each letter (catalog entry 11).
+    private func listLayout(_ entries: [FileEntry], rows: Int, rename: InlineRename) -> ListColumnLayout {
+        let size = 16 * textSize.scale
+        let cut = actions.cutURLs
+        return ListColumnLayout(names: entries.map(\.name), rows: rows, extra: { index in
+            let entry = entries[index]
+            if rename.item == entry.url {
+                return NameWidths.measure(rename.text, size: size) + Self.renameBoxPadding - NameWidths.measure(entry.name, size: size)
+            }
+            return cut.contains(where: { $0.path == entry.url.path }) ? 26 : 0
+        }, measure: { NameWidths.measure($0, size: size) })
+    }
+
+    /// The inline box's room around the typed name: 4 px of text inset on each side, the 1 px
+    /// border on each side and a 2 px caret allowance.
+    private static let renameBoxPadding: CGFloat = 12
 
     private func scrollList(to url: URL?, rows: Int, using scroll: ScrollViewProxy, anchor: UnitPoint? = nil) {
         guard let url, let index = model.entries.firstIndex(where: { $0.url == url }) else { return }
@@ -1076,7 +1188,10 @@ struct BrowserView: View {
         let itemsFocused = focus == .items
         let location = model.searchActive ? entry.url.deletingLastPathComponent().path : ""
         let outline = RoundedRectangle(cornerRadius: 5)
-        let marker = activePane ? palette.signal : palette.muted
+        // Catalog entries 4, 6 and 7: one light fill and one thin line for a selected item, the
+        // line alone for the keyboard-focus item, a faint tint under the pointer. No bar, no ring.
+        let edge = activePane ? palette.selectionEdge : palette.muted
+        let quickInfoHere = model.viewMode == .list || model.viewMode == .columns
         let row = content()
         return observeSelection { selection in
             let selected = selection.urls.contains(entry.url)
@@ -1085,17 +1200,15 @@ struct BrowserView: View {
                 .padding(.horizontal, 8)
                 .background {
                     RowHighlight(selection: model.selection, url: entry.url,
-                                 color: NSColor(activePane ? palette.selected : palette.inactiveSelection))
+                                 fill: NSColor(activePane ? palette.selectionFill : palette.inactiveSelection),
+                                 fillHover: NSColor(activePane ? palette.selectionFillHover : palette.inactiveSelection),
+                                 hover: NSColor(palette.hover),
+                                 quickInfo: quickInfoHere ? quickInfo : nil)
                 }
                 .overlay {
                     if selected || cursor || cut {
-                        outline.strokeBorder(marker, style: StrokeStyle(lineWidth: cursor ? 2 : 1, dash: cut ? [4, 3] : []))
+                        outline.strokeBorder(edge, style: StrokeStyle(lineWidth: 1, dash: cut ? [4, 3] : []))
                             .allowsHitTesting(false)
-                    }
-                }
-                .overlay(alignment: .leading) {
-                    if selected {
-                        Capsule().fill(marker).frame(width: 3).padding(.vertical, 2).allowsHitTesting(false)
                     }
                 }
                 .background(dragFrame(for: entry.url))
@@ -1103,13 +1216,14 @@ struct BrowserView: View {
                 .contextMenu {
                     selectionMenu(selected ? model.selectedEntries : [entry])
                 }
-                .help(model.searchActive ? entry.url.path : entry.name)
+                .modifier(NameHelp(text: quickInfoHere ? nil : (model.searchActive ? entry.url.path : entry.name)))
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(entry.name)
                 .accessibilityValue(location)
                 .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
                 .accessibilityAction { select(entry, modifiers: [], scroll: true) }
                 .accessibilityAction(named: "Open") { activate([entry]) }
+                .accessibilityAction(named: "Rename") { requestRename(entry) }
         }.id(entry.url)
     }
 
@@ -1128,18 +1242,38 @@ struct BrowserView: View {
 
     private func nameLabel(_ entry: FileEntry) -> some View {
         let cut = actions.cutURLs.contains { $0.path == entry.url.path }
-        let font = BrowserTypography.reading(16 * textSize.scale)
-        return HStack(spacing: 8) {
-            Image(systemName: fileSymbol(entry))
-                .foregroundStyle(entry.kind == .directory ? palette.folder : palette.muted)
-                .frame(width: 18)
-            Text(entry.name).lineLimit(1).truncationMode(.middle)
-                .font(cut ? font.italic() : font)
-            if cut { Image(systemName: "scissors").foregroundStyle(palette.muted).accessibilityLabel("Cut") }
+        let size = 16 * textSize.scale
+        let font = BrowserTypography.reading(size)
+        return Observing(object: renaming) { rename in
+            HStack(spacing: 8) {
+                Image(systemName: fileSymbol(entry))
+                    .foregroundStyle(entry.kind == .directory ? palette.folder : palette.muted)
+                    .frame(width: 18)
+                if rename.item == entry.url {
+                    InlineRenameField(rename: rename, font: BrowserTypography.readingNSFont(size),
+                                      ink: NSColor(palette.ink), ground: NSColor(palette.pane),
+                                      commit: { commitInlineRename(quiet: $0) }, cancel: { cancelInlineRename() })
+                        .frame(width: NameWidths.measure(rename.text, size: size) + Self.renameBoxPadding,
+                               height: 22 * textSize.scale)
+                        .overlay(alignment: .topLeading) {
+                            if !rename.problem.isEmpty {
+                                Text(rename.problem)
+                                    .padding(.horizontal, 9).padding(.vertical, 6)
+                                    .background(palette.floating, in: RoundedRectangle(cornerRadius: 6))
+                                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(palette.attention, lineWidth: 1))
+                                    .fixedSize()
+                                    .offset(y: 22 * textSize.scale + 4)
+                            }
+                        }
+                } else {
+                    Text(entry.name).lineLimit(1).truncationMode(.middle)
+                        .font(cut ? font.italic() : font)
+                }
+                if cut { Image(systemName: "scissors").foregroundStyle(palette.muted).accessibilityLabel("Cut") }
+            }
+            .opacity(cut ? 0.65 : 1)
+            .accessibilityLabel(entry.name)
         }
-        .opacity(cut ? 0.65 : 1)
-        .help(entry.name)
-        .accessibilityLabel(entry.name)
     }
 
     @ViewBuilder
@@ -1162,7 +1296,7 @@ struct BrowserView: View {
                     }
                     Button("Quick Look") { sheet = .preview(first) }
                 }
-                Button("Rename…") { requestRename(first) }.disabled(actions.busy)
+                Button(supportsInlineRename ? "Rename" : "Rename…") { requestRename(first) }.disabled(actions.busy)
                 Button("Properties") { sheet = .properties(first) }
                 if first.kind == .regularFile {
                     Button("Verify Checksum…") { checksum(first) }
@@ -1550,11 +1684,58 @@ struct BrowserView: View {
     }
 
     private func requestRename(_ entry: FileEntry) {
+        if supportsInlineRename {
+            beginInlineRename(entry)
+            return
+        }
         withReferences([entry]) { references in
             guard let source = references.first else { return }
             sheet = .name(NameRequest(source: source, folder: model.folder,
                                       directory: entry.kind == .directory, name: entry.name))
         }
+    }
+
+    /// Catalog entry 2: the name turns into a box in place, the part before the extension
+    /// selected. F2, the toolbar's Rename, the menu's Rename and click, pause, click all open it.
+    private func beginInlineRename(_ entry: FileEntry) {
+        guard !actions.busy, model.entries.contains(where: { $0.url == entry.url }) else { return }
+        quickInfo.hide()
+        let folder = model.folder
+        withReferences([entry]) { references in
+            guard let source = references.first, model.folder == folder else { return }
+            workspace.select(side)
+            model.selected = [entry.url]
+            model.selection.rangeAnchor = entry.url
+            model.selection.moveCursor(to: entry.url, scrolling: true)
+            renaming.begin(entry, source: source)
+        }
+    }
+
+    private func commitInlineRename(quiet: Bool) {
+        guard let item = renaming.item, let source = renaming.source else { return }
+        let parent = item.deletingLastPathComponent().path
+        let siblings = model.entries.filter { $0.url.deletingLastPathComponent().path == parent }.map(\.name)
+        switch InlineRename.outcome(for: renaming.text, original: renaming.original, siblings: siblings) {
+        case .cancel:
+            cancelInlineRename()
+        case .refuse(let message):
+            if quiet { cancelInlineRename() } else { renaming.problem = message }
+        case .rename(let name):
+            renaming.end()
+            focus = .items
+            let folder = model.folder
+            actions.rename(source, to: name) { moved in
+                guard model.folder == folder else { return }
+                model.selectCreatedItem(moved)
+                model.selection.rangeAnchor = moved.url
+                model.selection.moveCursor(to: moved.url, scrolling: true)
+            }
+        }
+    }
+
+    private func cancelInlineRename() {
+        renaming.end()
+        focus = .items
     }
 
     private func checksum(_ entry: FileEntry) {
@@ -1873,49 +2054,117 @@ struct BrowserView: View {
 }
 
 /// Paint the row fill as soon as selection changes. SwiftUI can update the
-/// toolbar, outline and accessibility traits in its next layout pass.
+/// toolbar, outline and accessibility traits in its next layout pass. The same view follows the
+/// pointer: a faint tint on the item under it (catalog entry 7), and the quick-info box after a
+/// rest (entry 13), both without redrawing any SwiftUI view.
 private struct RowHighlight: NSViewRepresentable {
     let selection: BrowserSelection
     let url: URL
-    let color: NSColor
+    let fill: NSColor
+    let fillHover: NSColor
+    let hover: NSColor
+    let quickInfo: ItemQuickInfo?
 
     func makeNSView(context: Context) -> Highlight { Highlight() }
 
     func updateNSView(_ view: Highlight, context: Context) {
-        view.configure(selection: selection, url: url, color: color)
+        view.configure(selection: selection, url: url, colors: (fill, fillHover, hover), quickInfo: quickInfo)
     }
 
     final class Highlight: NSView {
         private weak var selection: BrowserSelection?
+        private weak var quickInfo: ItemQuickInfo?
         private var url: URL?
-        private var color: NSColor = .clear
+        private var colors: (fill: NSColor, fillHover: NSColor, hover: NSColor) = (.clear, .clear, .clear)
         private var subscription: AnyCancellable?
+        private var selected = false
+        private var pointed = false
 
+        override var isFlipped: Bool { true }
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-        func configure(selection: BrowserSelection, url: URL, color: NSColor) {
+        func configure(selection: BrowserSelection, url: URL,
+                       colors: (fill: NSColor, fillHover: NSColor, hover: NSColor), quickInfo: ItemQuickInfo?) {
             if !wantsLayer {
                 wantsLayer = true
                 layer?.cornerRadius = 5
             }
-            self.color = color
+            self.colors = colors
+            self.quickInfo = quickInfo
             if self.selection !== selection || self.url != url {
                 self.selection = selection
                 self.url = url
+                selected = selection.urls.contains(url)
                 subscription = selection.$urls.map { $0.contains(url) }.removeDuplicates().sink { [weak self] in
-                    self?.paint(selected: $0)
+                    self?.selected = $0
+                    self?.paint()
                 }
-            } else {
-                paint(selected: selection.urls.contains(url))
+                flashIfNew(selection, url)
+            }
+            paint()
+        }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            trackingAreas.forEach(removeTrackingArea)
+            addTrackingArea(NSTrackingArea(
+                rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeInActiveApp, .inVisibleRect], owner: self
+            ))
+        }
+
+        override func mouseEntered(with event: NSEvent) {
+            pointed = true
+            paint()
+        }
+
+        override func mouseMoved(with event: NSEvent) {
+            if !pointed { pointed = true; paint() }
+            if let url { quickInfo?.moved(over: url, at: NSEvent.mouseLocation) }
+        }
+
+        override func mouseExited(with event: NSEvent) {
+            pointed = false
+            paint()
+            if let url { quickInfo?.left(url) }
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window == nil, pointed, let url {
+                pointed = false
+                quickInfo?.left(url)
             }
         }
 
-        private func paint(selected: Bool) {
+        private func paint() {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            layer?.backgroundColor = selected ? color.cgColor : nil
+            layer?.backgroundColor = selected ? (pointed ? colors.fillHover : colors.fill).cgColor
+                : pointed ? colors.hover.cgColor : nil
             CATransaction.commit()
         }
+
+        /// A pasted duplicate flashes once (catalog entry 1): its fill fades from the deeper
+        /// pointed-at tone to the plain selected tone.
+        private func flashIfNew(_ selection: BrowserSelection, _ url: URL) {
+            let flashed = selection.flashed
+            let elapsed = ProcessInfo.processInfo.systemUptime - flashed.at
+            guard elapsed < 0.9, flashed.paths.contains(url.standardizedFileURL.path) else { return }
+            let animation = CABasicAnimation(keyPath: "backgroundColor")
+            animation.fromValue = colors.fillHover.cgColor
+            animation.duration = 0.9 - elapsed
+            animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            layer?.add(animation, forKey: "flash")
+        }
+    }
+}
+
+/// The system tooltip with an item's full name, in the views that do not show quick info.
+private struct NameHelp: ViewModifier {
+    let text: String?
+
+    func body(content: Content) -> some View {
+        if let text { content.help(text) } else { content }
     }
 }
 

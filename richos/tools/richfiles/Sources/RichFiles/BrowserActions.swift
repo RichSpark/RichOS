@@ -606,15 +606,17 @@ final class BrowserActions: ObservableObject {
         }
     }
 
-    func rename(_ source: FileReference, to name: String) {
-        runMutation(title: "Rename") {
+    func rename(_ source: FileReference, to name: String, onRenamed: ((FileReference) -> Void)? = nil) {
+        runMutation(title: "Rename", onSuccess: { mutation in
+            if let item = mutation.createdItem { onRenamed?(item) }
+        }) {
             let receipt = try FileOperations.rename(source, to: name)
             guard receipt.original.url.absoluteString != receipt.moved.url.absoluteString else {
                 return MutationResult(message: "The name is unchanged.")
             }
             return MutationResult(
                 message: "Renamed to \(receipt.moved.url.lastPathComponent).", changed: true,
-                undo: [.undoMove(receipt, canRedoRename: true)]
+                undo: [.undoMove(receipt, canRedoRename: true)], createdItem: receipt.moved
             )
         }
     }
