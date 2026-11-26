@@ -203,6 +203,9 @@ fn the_gated_sends_ask_the_one_rule() {
     // Carrying on is a delivery under way when the app ended, never one whose turn ended: a
     // paused job's handoff keeps its receipt (review rv-20261126T151735Z-c45967b1-2484, 1).
     assert!(body(&work, "origin_of").contains("attempt[\"delivered\"] != true"), "a delivered handoff counts as carrying on");
+    // "Quit and stop the work" stops what was under way, so it does not carry on at launch.
+    assert!(body(&work, "origin_of").contains("attempt[\"stopped\"] != true"), "a delivery stopped at the quit counts as carrying on");
+    assert!(body(&work, "record_quit_and_stop").contains("stop_open_attempts("), "quit and stop leaves Stu's deliveries under way");
     let tools = read("crates/richos-core/src/session_tools.rs");
     assert!(body(&tools, "acknowledge").contains("accept_input(scope,role,through,finished,true)"), "an ended turn does not mark its input delivered");
     // Held input is not work that runs (finding 4).
@@ -264,11 +267,15 @@ fn the_review_watchers_one_start_reads_the_rules_record() {
 
 // ---- every road to a send, found from the source, not from a list -----------------------------
 
-/// The model sends, and the places that file a turn as the user's own words now (a road through
-/// one of those is a turn started in his name, which the rule then reads as his acting).
+/// The model sends; the places that file a turn as the user's own words now (a road through one
+/// of those is a turn started in his name, which the rule then reads as his acting); and the
+/// places that put what an engine process produced (a Codex or review journal, an ECS waiting
+/// order) into Rich's or Stu's inbox, the only doors from the engine's Python into a turn
+/// (`engine_input_reaches_a_turn_only_through_the_app`).
 const ROAD_ENDS: &[&str] = &[
     "enqueue_prompt", "send_input", "send_observed_input", "send_live_input", "keep_chat_alive",
     "prepare_delivery", "record_question_answer", "accept_prompt", "record_prompt",
+    "observe_waiting", "observe_channel",
 ];
 /// A function containing one of these asks the rule: a road through it is covered.
 const ASKS: &[&str] = &["may_start(", "may_send(", "turn_gate::allows(", ".waits(", "turn_gate::waiting(", "intake_waits("];
@@ -305,6 +312,9 @@ const UNASKED: &[(&str, &str)] = &[
         "NAME ONLY: its own queue_question_answer (work_host.rs) puts the answer where Stu's answer selection asks the rule; the edge to the spine's is the same name"),
     ("crates/richos-core/src/work_host.rs::run_message", "FED BY THE GATED RUN LOOP: next_for_stu and the answer selection ask may_send"),
     ("crates/richos-core/src/work_host.rs::run_assignment_message", "FED BY THE GATED RUN LOOP: through run_message"),
+    ("src-tauri/src/peer_messages.rs::reconcile_waiting",
+        "ENGINE INPUT, DATED: an order's notice found by the first look at launch says found_at_launch, and drain_inboxes files it as from before, so Spine::deliver holds it; one that comes true while the app is open runs"),
+    ("src-tauri/src/peer_messages.rs::start", "ENGINE INPUT, DATED: the waiting-work thread that runs reconcile_waiting"),
 ];
 
 /// Code with strings, character literals and comments blanked, so braces and calls in them are
@@ -474,4 +484,60 @@ fn every_road_to_a_model_send_asks_the_one_rule_or_says_why_not() {
          (richos_core::turn_gate); make the road ask it, or list the function in UNASKED with why:\n{}", new.join("\n"));
     let gone: Vec<_> = listed.difference(&unasked).cloned().collect();
     assert!(gone.is_empty(), "listed in UNASKED but no longer reaching a send unasked; take them off:\n{}", gone.join("\n"));
+}
+
+/// **What an engine process produces reaches a turn only through the app's receivers, and each
+/// asks the rule** (review rv-20261126T171959Z-6553219b-85a5: an ECS waiting order found at launch
+/// started Rich through the engine's adapter). The engine's Python never writes Rich's or Stu's
+/// inbox itself: the one place it names the inbox folder is the waiting-work wake signal. Its
+/// outputs (Codex and review journals, ECS waiting rows, review processes) enter the app at the
+/// receivers pinned here, and the call graph above carries every road from them.
+#[test]
+fn engine_input_reaches_a_turn_only_through_the_app() {
+    fn python_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                python_files(&path, out);
+            } else if path.extension().is_some_and(|e| e == "py") {
+                let name = path.file_name().unwrap().to_string_lossy();
+                if !name.contains("test") && !name.starts_with("fake") {
+                    out.push(path);
+                }
+            }
+        }
+    }
+    let engine = app().join("../engine").canonicalize().unwrap();
+    let mut files = Vec::new();
+    python_files(&engine, &mut files);
+    let mut writers = Vec::new();
+    for file in files {
+        let text = std::fs::read_to_string(&file).unwrap_or_default();
+        for (index, line) in text.lines().enumerate() {
+            let code = line.split('#').next().unwrap_or("");
+            if code.contains("\"messages\"") || code.contains("'messages'") {
+                writers.push(format!("{}:{}", file.strip_prefix(&engine).unwrap().display(), index + 1));
+            }
+        }
+    }
+    let app_adapter = read("../engine/ecs/adapters/app.py");
+    assert!(body_py(&app_adapter, "wake_waiting").contains("\"reconcile-waiting.json\").touch()"));
+    assert_eq!(writers.len(), 1, "an engine file names the app's inbox folder besides the wake signal: {writers:?}");
+    assert!(writers[0].starts_with("ecs/adapters/app.py:"), "{writers:?}");
+
+    // The receivers: Codex and review journals through the bridge, which asks the rule;
+    // waiting orders through reconcile_waiting, whose launch-time notices are filed as from before.
+    let main = read("src-tauri/src/main.rs");
+    assert!(body(&main, "codex_sink").contains("accept_when_asked("), "Codex input reaches Stu around the rule");
+    let peer = read("src-tauri/src/peer_messages.rs");
+    assert!(body(&peer, "reconcile_waiting").contains("\"found_at_launch\": at_launch"));
+    assert!(body(&peer, "drain_inboxes").contains("facts[\"found_at_launch\"] == true"));
+}
+
+/// The body of `def name` in Python source, up to the next top-level line.
+fn body_py(text: &str, name: &str) -> String {
+    let start = text.find(&format!("def {name}(")).unwrap_or_else(|| panic!("def {name} not found"));
+    let rest = &text[start..];
+    let end = rest[1..].find("\ndef ").map_or(rest.len(), |p| p + 1);
+    rest[..end].to_string()
 }

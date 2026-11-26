@@ -885,6 +885,16 @@ pub fn complete_attempt(scope:&StatusToolScope,role:&str,input:&str)->Result<(),
     update_cursor(scope, role, |cursor| { cursor["active"].as_object_mut().unwrap().remove(input); Ok(()) })
 }
 
+/// **He chose "Quit and stop the work"**: every delivery still under way in this inbox is marked
+/// stopped, so the next launch does not carry it on as a turn the quit cut off (`turn_gate`,
+/// `WorkHost::origin_of`). Its input stays saved and waits for him like the rest.
+pub(crate) fn stop_open_attempts(scope:&StatusToolScope,role:&str)->Result<(),String> {
+    update_cursor(scope, role, |cursor| {
+        for entry in cursor["active"].as_object_mut().unwrap().values_mut() { entry["stopped"]=json!(true); }
+        Ok(())
+    })
+}
+
 /// Preserve the actual native session that may have acted before an interrupted delivery.
 pub fn begin_attempt(scope:&StatusToolScope,role:&str,input:&str,session:&str)->Result<(),String> {
     update_cursor(scope, role, |cursor| { cursor["active"][input]=json!({"input":input,"session_id":session}); Ok(()) })

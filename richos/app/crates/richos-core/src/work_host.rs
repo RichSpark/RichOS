@@ -274,6 +274,8 @@ impl WorkHost {
         // older build's entry that names no session is not one either.
         let begun = crate::session_tools::previous_attempt(&scope, "stu", input).ok().flatten()
             .is_some_and(|attempt| attempt["session_id"].is_string() && attempt["delivered"] != true
+                // He chose "Quit and stop the work": what was under way then was stopped.
+                && attempt["stopped"] != true
                 // An older build's delivered handoff carries no mark; the session's own record
                 // holding it (`received_handoffs`) shows it was given.
                 && attempt["received"] != true);
@@ -2699,6 +2701,15 @@ impl WorkHost {
                 Err(error) => errors.push(error),
             }
         }
+        // Every delivery to Stu still under way is stopped too, a job's or not (a Codex report,
+        // a notice): the next launch carries none of them on (the one rule, `origin_of`).
+        let backends: Vec<_> = self.backends.lock().unwrap().values().cloned().collect();
+        for backend in backends {
+            let Some(binding) = backend.inner.lock().unwrap().binding.clone() else { continue };
+            if let Err(error) = crate::session_tools::stop_open_attempts(&self.message_scope(&binding), "stu") {
+                errors.push(error);
+            }
+        }
         (stopped, errors)
     }
 
@@ -3341,6 +3352,35 @@ mod tests {
         assert!(after[0].contains("Written while the app is open") && !after[0].contains("Build nightly 78"), "{after:?}");
         opened.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **A delivery cut off by "Quit and stop the work" does not carry on at launch** (review
+    /// rv-20261126T171959Z-6553219b-85a5, finding 1); one cut off by a crash or an update restart
+    /// does. A report written while the app is open goes to Stu by itself either way.
+    #[test]
+    fn quit_and_stop_keeps_a_cut_off_delivery_from_carrying_on() {
+        for stopped in [false, true] {
+            let h = harness(0);
+            let scope = h.host.message_scope(&h.binding);
+            crate::session_tools::observe_stall(&scope, "a report cut off by the quit").unwrap();
+            let through = crate::session_tools::pending(&scope, "stu").unwrap().unwrap().1;
+            crate::session_tools::begin_attempt(&scope, "stu", &format!("peer:{through}"), "prior-session").unwrap();
+            if stopped {
+                crate::session_tools::stop_open_attempts(&scope, "stu").unwrap();
+            }
+            // load-bound: this only moves the millisecond clock past what was saved; host load makes the gap larger, never smaller.
+            std::thread::sleep(std::time::Duration::from_millis(3));
+            h.host.set_turn_gate(Arc::new(crate::turn_gate::TurnGate::at_launch(&h.state)));
+            h.host.wake_messages(&h.binding);
+            crate::session_tools::observe_stall(&scope, "a report written while the app is open").unwrap();
+            h.host.wake_messages(&h.binding);
+            until("the report written while open never reached Stu", || handed_over(&h, "written while the app is open") == 1);
+            let turns = if stopped { 1 } else { 2 };
+            assert!(h.host.wait_for_completed(turns, std::time::Duration::from_secs(30)), "stopped={stopped}: turns did not end");
+            assert_eq!(handed_over(&h, "cut off by the quit"), usize::from(!stopped),
+                "stopped={stopped}: {:?}", h.work_prompts.lock().unwrap());
+            std::fs::remove_dir_all(&h.root).unwrap();
+        }
     }
 
     /// An agent's message the rule holds in Rich's intake is not work that runs; one filed
