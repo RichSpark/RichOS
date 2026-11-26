@@ -60,6 +60,10 @@ struct BrowserView: View {
     @State private var renaming = InlineRename()
     @State private var quickInfo = ItemQuickInfo()
     @StateObject private var folderTree = FolderTreeState()
+    /// Changes on every file change made here, on Refresh and when RichFiles comes back to the
+    /// front, so the sidebar asks each folder again whether it holds folders (one made in
+    /// Finder gets its arrow) and reloads the open ones.
+    @State private var treeRevision = UUID()
 
     private var palette: BrowserPalette { BrowserPalette(scheme) }
     private var activePane: Bool { !workspace.isSplit || workspace.active == side }
@@ -158,9 +162,13 @@ struct BrowserView: View {
         .onChange(of: model.showHidden) { _ in configureQuickInfo() }
         .onChange(of: model.tabs.map(\.folder)) { _ in sessionChanged() }
         .onChange(of: model.currentTabID) { _ in sessionChanged() }
-        .onChange(of: actions.mutationRevision) { _ in model.refresh() }
+        .onChange(of: actions.mutationRevision) { _ in
+            model.refresh()
+            treeRevision = UUID()
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             actions.refreshClipboard()
+            treeRevision = UUID()
         }
         .onChange(of: model.folder) { _ in
             editingAddress = false
@@ -372,7 +380,7 @@ struct BrowserView: View {
                             ForEach(Array(model.favorites.enumerated()), id: \.element) { index, url in
                                 FolderTreeRow(url: url, title: url.lastPathComponent, symbol: "pin",
                                               current: model.folder, showHidden: model.showHidden,
-                                              reveal: reveal(for: url), revision: actions.mutationRevision, tree: folderTree,
+                                              reveal: reveal(for: url), revision: treeRevision, tree: folderTree,
                                               open: model.openFolder, opened: { showOpened($0, scroll) }, isPin: true)
                                     .contextMenu {
                                         Button("Remove from Quick Access") { model.removeFavorite(url) }
@@ -397,7 +405,7 @@ struct BrowserView: View {
                             ForEach(model.places) { place in
                                 FolderTreeRow(url: place.url, title: place.title, symbol: place.symbol,
                                               current: model.folder, showHidden: model.showHidden,
-                                              reveal: reveal(for: place.url), revision: actions.mutationRevision, tree: folderTree,
+                                              reveal: reveal(for: place.url), revision: treeRevision, tree: folderTree,
                                               open: model.openFolder, opened: { showOpened($0, scroll) })
                             }
                             ForEach(model.volumes) { volume in
@@ -405,7 +413,7 @@ struct BrowserView: View {
                                     FolderTreeRow(url: volume.url, title: volume.name,
                                                   symbol: volume.isLocal == false ? "network" : "externaldrive",
                                                   current: model.folder, showHidden: model.showHidden,
-                                                  reveal: reveal(for: volume.url), revision: actions.mutationRevision,
+                                                  reveal: reveal(for: volume.url), revision: treeRevision,
                                                   tree: folderTree, open: model.openFolder, opened: { showOpened($0, scroll) },
                                                   volume: volume)
                                     if volume.isEjectable == true {
@@ -1519,6 +1527,7 @@ struct BrowserView: View {
         case .refresh:
             dropDestination = nil
             destinationRefresh = UUID()
+            treeRevision = UUID()
             model.refreshVolumes()
             model.refresh()
         case .address: editAddress()
