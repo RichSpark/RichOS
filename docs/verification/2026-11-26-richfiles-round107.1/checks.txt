@@ -1,0 +1,44 @@
+PASS app bundle signature verifies in the guest
+PASS guest Music folder holds no folder (the no-arrow case): 0 folders
+PASS fixture holds 129 items: 129 items
+PASS daybreak: RichFiles opened the fixture: pid 1130
+PASS daybreak: Open With lists Choose Another App…
+PASS daybreak: Choose Another App opens the app chooser
+PASS daybreak: wheel down moves the list right: scroll bar value 0 -> 0.847457627118644
+PASS daybreak: wheel up moves it back left: scroll bar value 0.847457627118644 -> 0
+PASS daybreak: Ctrl+C, Ctrl+V, Ctrl+V makes - Copy and - Copy (2)
+PASS daybreak: the new copy is in the list (its selected look is in the screenshot)
+PASS daybreak: Ctrl+Z undoes the last duplicate
+PASS daybreak: a folder duplicates as - Copy
+PASS daybreak: click, pause, click renames in place
+PASS daybreak: the next column moves right while the name is typed: next column x 581 -> 829
+PASS daybreak: with Home open, Music (no folders inside) has no arrow: Home opened
+PASS daybreak: Desktop has an arrow
+PASS daybreak: seven levels open (white paper is shown)
+PASS daybreak: to sort (empty) has no arrow
+PASS daybreak: the arrow left the right pane alone: 'Home107 — RichFiles' -> 'Home107 — RichFiles'
+PASS daybreak: closing AI book hides everything under it
+PASS daybreak: reopening brings back what was open inside
+PASS daybreak: a click on the name shows its files on the right: landing pages — RichFiles
+PASS guest Music folder holds no folder (the no-arrow case): 0 folders
+PASS fixture holds 129 items: 129 items
+PASS sovereign: RichFiles opened the fixture: pid 3052
+PASS sovereign: Open With lists Choose Another App…
+PASS sovereign: Choose Another App opens the app chooser
+PASS sovereign: wheel down moves the list right: scroll bar value 0 -> 0.847457627118644
+PASS sovereign: wheel up moves it back left: scroll bar value 0.847457627118644 -> 0
+PASS sovereign: Ctrl+C, Ctrl+V, Ctrl+V makes - Copy and - Copy (2)
+PASS sovereign: the new copy is in the list (its selected look is in the screenshot)
+PASS sovereign: Ctrl+Z undoes the last duplicate
+PASS sovereign: a folder duplicates as - Copy
+PASS sovereign: click, pause, click renames in place
+PASS sovereign: the next column moves right while the name is typed: next column x 581 -> 829
+PASS sovereign: with Home open, Music (no folders inside) has no arrow: Home opened
+PASS sovereign: Desktop has an arrow
+PASS sovereign: seven levels open (white paper is shown)
+PASS sovereign: to sort (empty) has no arrow
+PASS sovereign: the arrow left the right pane alone: 'Home107 — RichFiles' -> 'Home107 — RichFiles'
+PASS sovereign: closing AI book hides everything under it
+PASS sovereign: reopening brings back what was open inside
+PASS sovereign: a click on the name shows its files on the right: landing pages — RichFiles
+PASS RichFiles is quit and its process is gone
