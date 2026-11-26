@@ -6144,11 +6144,35 @@ function paintModelRows(lit, rising) {
     note.classList.toggle("is-fable", moved.length > 0);
   }
 }
+/// What Settings shows after a press is HELD by the app, neither saved nor applied, so that
+/// closing the window or quitting with Settings still open saves it too (`hold_lease_models`
+/// in src-tauri). Closing Settings saves it as before, and nothing is held after that.
+///
+/// A MAX NOBODY CONFIRMED IS NEVER HELD. Max shows in the row the moment it is pressed, with its
+/// warning over it; until "Use Max anyway" is pressed, what is held for that row is the level
+/// that is saved, so a window closed on the open warning cannot save Max.
+const maxKept = new Set();
+function holdModelDraft() {
+  const held = choiceCopy(modelDraft);
+  for (const who of ["rich", "stu"]) {
+    for (const m of ["opus", "fable"]) {
+      if (held.effort[who][m] === "max" && modelSaved.effort[who][m] !== "max" && !maxKept.has(`${who}_${m}`)) {
+        held.effort[who][m] = modelSaved.effort[who][m];
+      }
+    }
+  }
+  Bridge.invoke("hold_lease_models", { rich: held.rich, stu: held.stu, effort: held.effort, chosen: [...modelPressed].sort() })
+    .catch(() => {});
+}
 function pickModel(who, v, focus) {
   modelPressed.add(`${who}_model`);
-  if (modelDraft[who] === v) return;
+  if (modelDraft[who] === v) {
+    holdModelDraft();
+    return;
+  }
   modelDraft[who] = v;
   effortPreview[who] = null;
+  holdModelDraft();
   paintModelRows(who);
   if (focus) el(who === "rich" ? "md-rich" : "md-stu").querySelector(`[data-v="${v}"]`).focus();
 }
@@ -6158,10 +6182,12 @@ function pickEffort(who, level, focus) {
   modelPressed.add(`${who}_effort_${model}`);
   effortPreview[who] = null;
   if (before === level) {
+    holdModelDraft();
     paintModelRows(null);
     return;
   }
   modelDraft.effort[who][model] = level;
+  holdModelDraft();
   const rising = EFFORT_LEVELS.indexOf(level) > EFFORT_LEVELS.indexOf(before);
   paintModelRows(null, rising ? who : null);
   const ef = el(who === "rich" ? "ef-rich" : "ef-stu");
@@ -6234,6 +6260,8 @@ function maxWarnDialog() {
     const ef = el(who === "rich" ? "ef-rich" : "ef-stu");
     ef.classList.remove("is-warned");
     if (useMax) {
+      maxKept.add(`${who}_${modelDraft[who]}`);
+      holdModelDraft();
       ef.querySelector('.ef-step[data-l="max"]').focus({ preventScroll: true });
     } else {
       pickEffort(who, EFFORT_DEFAULT[who][modelDraft[who]], true);
@@ -6592,6 +6620,7 @@ function settingsPanelOpen() {
 /// hundred bytes, on an explicit click.
 function onSettingsOpen() {
   effortPreview.rich = effortPreview.stu = null;
+  maxKept.clear();
   modelDraft = choiceCopy(modelSaved);
   paintModelRows(null);
   syncRetentionFromBackend();
