@@ -150,6 +150,7 @@
 [richos] LEDGER RECORD SKIPPED ({}): line {} ({} bytes) — {}
 [richos] LEDGER SUMMARY for {}: {} records read, {} applied, {} skipped ({} from a newer version, {} damaged, {} undetermined). Nothing was deleted or rewritten.
 [richos] LEDGER: {} further skipped records not listed individually
+[richos] My RichOS could not start its memory reader: {}
 [richos] RichCleaner Service: {}
 [richos] RichCleaner busy: {}
 [richos] RichCleaner cancel before note acceptance: {}
