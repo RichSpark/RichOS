@@ -682,6 +682,33 @@ async function main() {
     return "both themes: his words, Escape, outside, End, Use Max anyway, the line on close";
   });
 
+  // ---- 9. what Settings shows is held by the app, so a window closed with it open saves it ---
+  await run.check("9. each press hands the app what Settings now shows, to save if the window closes or the app quits with Settings open; nothing is saved or applied by the press", async () => {
+    const page = await openApp(browser);
+    await openPrefs(page);
+    await rowsShow(page, { rich: "fable", stu: "fable" });
+    await page.click('#md-rich .seg-opt[data-v="opus"]');
+    await rowsShow(page, { rich: "opus", stu: "fable" });
+    await page.click('#md-stu .seg-opt[data-v="opus"]');
+    await rowsShow(page, { rich: "opus", stu: "opus" });
+    const held = (await calls(page, "hold_lease_models")).map((c) => c.args);
+    assertEqual(held, [
+      { rich: "opus", stu: "fable", effort: RECOMMENDED, chosen: ["rich_model"] },
+      { rich: "opus", stu: "opus", effort: RECOMMENDED, chosen: ["rich_model", "stu_model"] },
+    ], "what the app holds after each press");
+    assertEqual(await calls(page, "set_lease_models"), [], "a press saved or applied the choice");
+    assertEqual(await stored(page), { rich: "fable", stu: "fable" }, "the store changed while Settings was open");
+    assertEqual(await toastText(page), null, "a toast fired before Settings closed");
+    // A level pressed is held too, with the models as they are shown.
+    await page.click('#ef-stu .ef-step[data-l="medium"]');
+    await levelIs(page, "stu", "medium");
+    const last = (await calls(page, "hold_lease_models")).map((c) => c.args).pop();
+    assertEqual(last, { rich: "opus", stu: "opus", effort: withEffort({ stu: { opus: "medium" } }), chosen: ["rich_model", "stu_effort_opus", "stu_model"] }, "a pressed level is held");
+    assertEqual(page.__errors, [], "no page errors");
+    await page.close();
+    return "held after each press, saved by none";
+  });
+
   await browser.close();
   const failed = run.report();
   process.exitCode = failed ? 1 : 0;

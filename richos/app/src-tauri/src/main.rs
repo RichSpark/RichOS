@@ -1218,6 +1218,10 @@ struct AppState {
     /// thread id rather than a bool because he has more than one conversation and each has its
     /// own desk (`spine.rs`'s residency).
     front_desk_primed_for: Mutex<std::collections::HashSet<String>>,
+    /// What Settings shows for Rich's model and effort while it is open and differs from what
+    /// is saved (`hold_lease_models`): saved when the window closes or the app quits with
+    /// Settings still open, and gone once Settings closes and saves it itself.
+    held_lease_choice: Mutex<Option<HeldLeaseChoice>>,
     spine: Mutex<Spine>,
     reader: SpineReader,
     /// Durable CEO-facing preferences (company name, the assertiveness dial) — stored
@@ -2899,6 +2903,7 @@ fn main() {
             #[cfg(target_os = "macos")]
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.app_handle().config().app.windows.first().is_some_and(|main| main.label == window.label()) {
+                    save_held_lease_choice(window.app_handle(), true);
                     lifecycle::hide_main_window(window, api);
                 }
             }
@@ -4270,6 +4275,7 @@ fn main() {
                     provider_auth: Mutex::new(Default::default()),
                     account_auth: Mutex::new(None),
                     front_desk_primed_for: Mutex::new(Default::default()),
+                    held_lease_choice: Mutex::new(None),
                     reader: spine.reader(),
                     spine: Mutex::new(spine),
                     config: Mutex::new(config),
@@ -4579,6 +4585,7 @@ fn main() {
             set_assertiveness,
             get_lease_models,
             set_lease_models,
+            hold_lease_models,
             get_worker_status,
             get_work_status,
             get_assignments,
@@ -4920,7 +4927,7 @@ fn main() {
         // launch is read as a crash-restart — an undercount by one, no splash once — which
         // is not worth refusing to close the app over.
         .run(|handle, event| {
-            if matches!(&event, tauri::RunEvent::Exit) {richpass_host::shutdown(handle);}
+            if matches!(&event, tauri::RunEvent::Exit) {save_held_lease_choice(handle, false);richpass_host::shutdown(handle);}
             // =========================================================================
             // ROW 5 — "You close the window. The work keeps going. Quit ends it."
             // =========================================================================
@@ -5234,26 +5241,65 @@ fn get_lease_models(state: State<AppState>) -> serde_json::Value {
 /// An unknown name refuses every choice before any is written.
 #[richos_command::command]
 fn set_lease_models(state: State<AppState>, rich: String, stu: String, effort: Option<serde_json::Value>, chosen: Option<Vec<String>>) -> Result<(), String> {
+    // Settings closed and is saving what it shows: nothing is held any longer.
+    *state.held_lease_choice.lock().unwrap() = None;
+    let choice = HeldLeaseChoice { rich, stu, effort, chosen: chosen.unwrap_or_default() };
+    let (models, efforts) = write_lease_choice(&state, &choice)?;
+    apply_lease_choice(&state, models, efforts)
+}
+
+/// Rich's model and effort as Settings shows them while it is open.
+#[derive(Clone)]
+struct HeldLeaseChoice {
+    rich: String,
+    stu: String,
+    effort: Option<serde_json::Value>,
+    chosen: Vec<String>,
+}
+
+/// **What Settings shows after a press, held here and neither saved nor applied** (the CEO's
+/// addendum to §119 stands: *"The switch simply shouldn't happen while the user is still on
+/// that preferences screen. Closing the preferences panel IS the confirmation"*).
+///
+/// It is held so that closing the WINDOW, or quitting, with Settings still open is that
+/// confirmation too ([`save_held_lease_choice`]). On 2026-11-26 the CEO switched both rows from
+/// Fable to Opus and closed the window with the red button: Settings never closed, nothing was
+/// saved, and the next launch would have started both sessions on Fable again.
+#[richos_command::command]
+fn hold_lease_models(state: State<AppState>, rich: String, stu: String, effort: Option<serde_json::Value>, chosen: Option<Vec<String>>) -> Result<(), String> {
+    use richos_core::config::ModelChoice;
+    for model in [&rich, &stu] {
+        ModelChoice::parse(model).ok_or_else(|| format!("unknown model: {model}"))?;
+    }
+    *state.held_lease_choice.lock().unwrap() = Some(HeldLeaseChoice { rich, stu, effort, chosen: chosen.unwrap_or_default() });
+    Ok(())
+}
+
+/// Write a choice to `config.json`. An unknown name refuses every choice before any is written.
+fn write_lease_choice(state: &AppState, choice: &HeldLeaseChoice)
+    -> Result<(richos_core::config::LeaseModels, richos_core::config::EffortChoices), String> {
     use richos_core::config::{EffortLevel, LeaseModels, ModelChoice};
-    let rich = ModelChoice::parse(&rich).ok_or_else(|| format!("unknown model: {rich}"))?;
-    let stu = ModelChoice::parse(&stu).ok_or_else(|| format!("unknown model: {stu}"))?;
+    let rich = ModelChoice::parse(&choice.rich).ok_or_else(|| format!("unknown model: {}", choice.rich))?;
+    let stu = ModelChoice::parse(&choice.stu).ok_or_else(|| format!("unknown model: {}", choice.stu))?;
     let models = LeaseModels { rich, stu };
-    let efforts = {
-        let mut config = state.config.lock().unwrap();
-        let mut efforts = config.effort_choices();
-        if let Some(sent) = effort.as_ref() {
-            for (who, model, slot) in [
-                ("rich", "opus", &mut efforts.rich_opus), ("rich", "fable", &mut efforts.rich_fable),
-                ("stu", "opus", &mut efforts.stu_opus), ("stu", "fable", &mut efforts.stu_fable),
-            ] {
-                let Some(level) = sent[who][model].as_str() else { continue };
-                *slot = EffortLevel::parse(level).ok_or_else(|| format!("unknown effort level: {level}"))?;
-            }
+    let mut config = state.config.lock().unwrap();
+    let mut efforts = config.effort_choices();
+    if let Some(sent) = choice.effort.as_ref() {
+        for (who, model, slot) in [
+            ("rich", "opus", &mut efforts.rich_opus), ("rich", "fable", &mut efforts.rich_fable),
+            ("stu", "opus", &mut efforts.stu_opus), ("stu", "fable", &mut efforts.stu_fable),
+        ] {
+            let Some(level) = sent[who][model].as_str() else { continue };
+            *slot = EffortLevel::parse(level).ok_or_else(|| format!("unknown effort level: {level}"))?;
         }
-        let pressed: Vec<&str> = chosen.iter().flatten().map(String::as_str).collect();
-        config.set_lease_choices(models, efforts, &pressed).map_err(|e| e.to_string())?;
-        efforts
-    };
+    }
+    let pressed: Vec<&str> = choice.chosen.iter().map(String::as_str).collect();
+    config.set_lease_choices(models, efforts, &pressed).map_err(|e| e.to_string())?;
+    Ok((models, efforts))
+}
+
+/// Apply a saved choice to the existing Rich and Stu sessions.
+fn apply_lease_choice(state: &AppState, models: richos_core::config::LeaseModels, efforts: richos_core::config::EffortChoices) -> Result<(), String> {
     let account = state.quota.lease_account();
     let (effective, efforts) = richos_core::quota::fable::lease_choices(
         state.quota.using_opus_for_fable(&account.id), models, efforts,
@@ -5263,6 +5309,33 @@ fn set_lease_models(state: State<AppState>, rich: String, stu: String, effort: O
         state.work.set_model(effective.stu), state.work.set_effort(efforts.stu),
     ];
     results.into_iter().collect()
+}
+
+/// **The window is closing, or the app is quitting, with Settings still open: save what it
+/// shows.** The file is written before this returns, so the choice is on disk whatever happens
+/// to the process next. With `apply`, the sessions that live on (work keeps going behind a
+/// closed window) are given it on a thread of their own, as when Settings closes; a quit has
+/// no session left to give it to.
+fn save_held_lease_choice(app: &AppHandle, apply: bool) {
+    let Some(state) = app.try_state::<AppState>() else { return };
+    let Some(choice) = state.held_lease_choice.lock().unwrap().take() else { return };
+    match write_lease_choice(&state, &choice) {
+        Ok((models, efforts)) => {
+            eprintln!("[richos] Settings was still open: Rich's model and effort were saved as it showed them");
+            if apply {
+                let app = app.clone();
+                let spawned = std::thread::Builder::new().name("richos-held-lease-choice".into()).spawn(move || {
+                    if let Err(error) = apply_lease_choice(&app.state::<AppState>(), models, efforts) {
+                        eprintln!("[richos] the saved model and effort reach the sessions at their next start: {error}");
+                    }
+                });
+                if let Err(error) = spawned {
+                    eprintln!("[richos] the saved model and effort reach the sessions at their next start: {error}");
+                }
+            }
+        }
+        Err(error) => eprintln!("[richos] Rich's model and effort, as Settings showed them, could not be saved: {error}"),
+    }
 }
 
 /// UX §3.2 / architecture P3.2: the optional AI-worker drill-down.
