@@ -690,6 +690,24 @@ final class BrowserActionsTests: XCTestCase {
         XCTAssertEqual(InlineRename.selection(afterRenaming: report, to: renamed, current: [report]), [renamed])
     }
 
+    /// Catalog entry 2: click, pause, click arms the name box; if the selection moves before it
+    /// opens (Down pressed), the box never opens on the old item.
+    @MainActor
+    func testAPendingClickPauseClickRenameIsCanceledWhenTheSelectionMoves() async throws {
+        let rename = InlineRename()
+        var selected = true
+        var opened = 0
+        rename.arm(after: 0.05, stillSelected: { selected }) { opened += 1 }
+        selected = false
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(opened, 0, "The selection moved before the box opened")
+
+        selected = true
+        rename.arm(after: 0.05, stillSelected: { selected }) { opened += 1 }
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(opened, 1, "The item still the only selection gets its box")
+    }
+
     @MainActor
     func testCopyConflictOffersTheExactReviewedFilesWithoutReplacingThem() async throws {
         try await withFixture { root, destination, board in

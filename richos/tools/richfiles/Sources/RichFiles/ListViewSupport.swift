@@ -408,14 +408,18 @@ final class InlineRename: ObservableObject {
     private(set) var source: FileReference?
     private var armed: Task<Void, Never>?
 
-    /// Click, pause, click: the box opens after `delay` unless another press cancels it first.
-    func arm(after delay: TimeInterval, _ begin: @escaping @MainActor () -> Void) {
+    /// Click, pause, click: the box opens after `delay` unless another press cancels it first,
+    /// and only if the clicked item is still the only selection then (as in round 107.1, where
+    /// the timer checks the item is still selected): a key that moved the selection in the
+    /// meantime, Down for example, cancels it.
+    func arm(after delay: TimeInterval, stillSelected: @escaping @MainActor () -> Bool,
+             _ begin: @escaping @MainActor () -> Void) {
         armed?.cancel()
         armed = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled, let self else { return }
             self.armed = nil
-            begin()
+            if stillSelected() { begin() }
         }
     }
 

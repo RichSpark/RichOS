@@ -753,7 +753,8 @@ struct BrowserView: View {
                     && event.modifierFlags.intersection([.command, .shift, .control, .option]).isEmpty
                 select(entry, modifiers: event.modifierFlags)
                 if armed {
-                    renaming.arm(after: NSEvent.doubleClickInterval) { beginInlineRename(entry) }
+                    renaming.arm(after: NSEvent.doubleClickInterval,
+                                 stillSelected: { model.selected == [url] }) { beginInlineRename(entry) }
                 }
             }
             return true
