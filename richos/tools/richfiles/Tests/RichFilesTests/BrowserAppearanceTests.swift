@@ -46,6 +46,7 @@ final class BrowserAppearanceTests: XCTestCase {
             let scroll = BrowserPalette.scrollValues(scheme)
             let track = Self.composite(scroll.track, scroll.trackOpacity, on: g.pane)
             let current = BrowserPalette.currentFolderValue(scheme)
+            let button = BrowserPalette.sheetButtonValues(scheme)
             let pairs: [(String, UInt32, UInt32, Double)] = [
                 ("name on the selected fill", ink, selection.fill, 4.5),
                 ("name on the selected fill under the pointer", ink, selection.fillHover, 4.5),
@@ -71,7 +72,11 @@ final class BrowserAppearanceTests: XCTestCase {
                 ("arrow under the pointer", ink, hover(g.sidebar), 3),
                 ("folder icon on the sidebar", BrowserPalette.folderValue(scheme), g.sidebar, 3),
                 ("folder icon on the current folder", BrowserPalette.folderValue(scheme), current, 3),
-                ("current folder's bar on its fill", BrowserPalette.signalValue(scheme), current, 3)
+                ("current folder's bar on its fill", BrowserPalette.signalValue(scheme), current, 3),
+                ("Open With chooser's Open label on its fill", button.primaryLabel, button.primaryFill, 4.5),
+                ("Open With chooser's Open button against the sheet", button.primaryFill, g.floating, 3),
+                ("Open With chooser's Cancel label on its fill", button.label, button.fill, 4.5),
+                ("Open With chooser's Cancel outline against the sheet", BrowserPalette.controlLineValue(scheme), g.floating, 3)
             ]
             for (name, foreground, ground, floor) in pairs {
                 let ratio = Self.contrast(foreground, ground)

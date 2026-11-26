@@ -984,8 +984,11 @@ struct OpenWithSheet: View {
             }
             HStack(spacing: 8) {
                 Spacer()
+                // The app's own sheet buttons: the system blue left the light Open label below 4.5:1.
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                    .buttonStyle(SheetButtonStyle())
                 Button("Open") { open() }.keyboardShortcut(.defaultAction).disabled(working || selected == nil)
+                    .buttonStyle(SheetButtonStyle(primary: true))
             }
         }
         .padding(18)

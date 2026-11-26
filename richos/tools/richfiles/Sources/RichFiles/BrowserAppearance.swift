@@ -101,6 +101,15 @@ struct BrowserPalette {
         scheme == .dark ? (0x5d6b8c, 0x6b7ea8, 0x4c6087, 0.16) : (0x767c8d, 0x5d6372, 0x3c465f, 0.10)
     }
 
+    /// A sheet's buttons as round 107.1 draws them (`.pbtn` and `.pbtn.def`): the default one is
+    /// the signal color with the pane color for its bold label (6.65:1 light, 7.80:1 dark), the
+    /// other one ink on the chrome color inside the control line. macOS's own blue default
+    /// button left at most 3.75:1 for its label in the light theme.
+    static func sheetButtonValues(_ scheme: ColorScheme) -> (primaryFill: UInt32, primaryLabel: UInt32, fill: UInt32, label: UInt32) {
+        let g = grounds(scheme)
+        return (signalValue(scheme), g.pane, g.chrome, inkValue(scheme))
+    }
+
     /// The ink color as an opaque value; `muted` and `hover` are this ink at an opacity.
     static func inkValue(_ scheme: ColorScheme) -> UInt32 { scheme == .dark ? 0xdfe4ee : 0x0c1322 }
     static func mutedOpacity(_ scheme: ColorScheme) -> Double { scheme == .dark ? 0.64 : 0.68 }
@@ -171,6 +180,29 @@ enum BrowserTypography {
         CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
         let font = CTFontCreateWithName(face as CFString, 16, nil)
         return CTFontCopyPostScriptName(font) as String == face
+    }
+}
+
+/// A sheet's Cancel and Open, in the app's colors (round 107.1's chooser). A disabled button is
+/// drawn at half strength; WCAG exempts an inactive control, and it carries no readable state.
+struct SheetButtonStyle: ButtonStyle {
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.isEnabled) private var enabled
+    var primary = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        let values = BrowserPalette.sheetButtonValues(scheme)
+        let line = BrowserPalette.rgb(primary ? values.primaryFill : BrowserPalette.controlLineValue(scheme))
+        let shape = RoundedRectangle(cornerRadius: 7)
+        configuration.label
+            .fontWeight(primary ? .semibold : .regular)
+            .padding(.horizontal, 14)
+            .frame(minWidth: 84, minHeight: 32)
+            .foregroundStyle(BrowserPalette.rgb(primary ? values.primaryLabel : values.label))
+            .background(BrowserPalette.rgb(primary ? values.primaryFill : values.fill), in: shape)
+            .overlay(shape.strokeBorder(line, lineWidth: 1).allowsHitTesting(false))
+            .contentShape(shape)
+            .opacity(enabled ? (configuration.isPressed ? 0.85 : 1) : 0.5)
     }
 }
 
