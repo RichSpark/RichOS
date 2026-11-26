@@ -692,6 +692,36 @@ final class FileOperationsTests: XCTestCase {
         }
     }
 
+    func testDuplicateNamesFollowWindowsFileExplorer() {
+        XCTAssertEqual(DuplicateName.candidate(for: "yet another test file.txt", directory: false, attempt: 1),
+                       "yet another test file - Copy.txt")
+        XCTAssertEqual(DuplicateName.candidate(for: "yet another test file.txt", directory: false, attempt: 2),
+                       "yet another test file - Copy (2).txt")
+        XCTAssertEqual(DuplicateName.candidate(for: "archive.tar.gz", directory: false, attempt: 3),
+                       "archive.tar - Copy (3).gz")
+        XCTAssertEqual(DuplicateName.candidate(for: "Plans.v2", directory: true, attempt: 1), "Plans.v2 - Copy")
+        XCTAssertEqual(DuplicateName.candidate(for: "README", directory: false, attempt: 1), "README - Copy")
+    }
+
+    func testDuplicateCopiesIntoTheSameFolderAsCopyThenCopyTwo() throws {
+        try withFixture { root in
+            let source = try write("source", named: "notes.txt", in: root)
+            let first = try FileOperations.copy(source, into: root, conflictPolicy: .duplicate)
+            let second = try FileOperations.copy(source, into: root, conflictPolicy: .duplicate)
+            XCTAssertEqual(first.copied.url.lastPathComponent, "notes - Copy.txt")
+            XCTAssertEqual(second.copied.url.lastPathComponent, "notes - Copy (2).txt")
+            XCTAssertEqual(try contents(second.copied), "source")
+            XCTAssertEqual(try contents(source), "source")
+
+            let folder = try FileOperations.createFolder(in: root, named: "Plans")
+            _ = try write("inside", named: "inside.txt", in: folder.url)
+            let copiedFolder = try FileOperations.copy(folder, into: root, conflictPolicy: .duplicate)
+            XCTAssertEqual(copiedFolder.copied.url.lastPathComponent, "Plans - Copy")
+            XCTAssertEqual(try String(contentsOf: copiedFolder.copied.url.appendingPathComponent("inside.txt"),
+                                      encoding: .utf8), "inside")
+        }
+    }
+
     private struct CrossVolumeFileMoveFixture: Encodable {
         let installed: ReviewedFile
         let backup: TrashReceipt

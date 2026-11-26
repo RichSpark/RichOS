@@ -20,6 +20,12 @@ struct BrowserTrashItem: Identifiable, Codable, Sendable {
     var canRestore: Bool { reference != nil }
 }
 
+struct BrowserDuplicates: Equatable, Sendable {
+    let id = UUID()
+    let folder: URL
+    let items: [FileReference]
+}
+
 @MainActor
 final class BrowserActions: ObservableObject {
     private static let recoveryLog = Logger(subsystem: "app.richos.richfiles", category: "transfer")
@@ -40,6 +46,8 @@ final class BrowserActions: ObservableObject {
     @Published private(set) var undoName: String?
     @Published private(set) var redoName: String?
     @Published private(set) var mutationRevision = UUID()
+    /// The copies the last paste made into the folder their sources are in, for the list to select.
+    @Published private(set) var lastDuplicates: BrowserDuplicates?
 
     var canRestartAfterUpdate: Bool {
         !busy && transfer?.running != true && transferTask == nil && preparingQueue.isEmpty
@@ -518,12 +526,21 @@ final class BrowserActions: ObservableObject {
         let history = moveHistory(for: changed)
         let backupNote = history.trash.isEmpty ? "" : " The cross-volume originals are in Trash for undo."
         if result.journal != nil { settledTransferID = result.progress.id }
+        let duplicates = request.move ? [] : result.duplicates
+        var message = lead + "\(operation) \(succeeded) of \(request.sources.count) items." + noMove + backupNote
+        if duplicates.count == 1, succeeded == 1, request.sources.count == 1, lead.isEmpty {
+            message = "Copied as “\(duplicates[0].url.lastPathComponent)”."
+        }
         let saved = finishMutation(MutationResult(
-            message: lead + "\(operation) \(succeeded) of \(request.sources.count) items." + noMove + backupNote,
+            message: message,
             issues: errors,
             changed: request.move ? !changed.isEmpty : succeeded > 0,
-            undo: history.undo, trashChanges: history.trash
-        ), title: "Move")
+            undo: duplicates.isEmpty ? history.undo : duplicates.reversed().map(HistoryStep.trash),
+            trashChanges: history.trash
+        ), title: duplicates.isEmpty ? "Move" : "Duplicate")
+        if !duplicates.isEmpty {
+            lastDuplicates = BrowserDuplicates(folder: request.folder, items: duplicates)
+        }
         if saved, let journal = result.journal { clearSettledTransfer { try journal.discard() } }
         queuePaused = !queuedTransfers.isEmpty && (result.progress.cancelled || !result.progress.issues.isEmpty)
         startNextQueuedTransfer()

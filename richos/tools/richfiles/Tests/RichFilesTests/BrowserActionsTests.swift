@@ -594,6 +594,38 @@ final class BrowserActionsTests: XCTestCase {
         }
     }
 
+    /// Catalog entry 1: Ctrl+C, then Ctrl+V in the same folder makes `name - Copy.ext`, then
+    /// `name - Copy (2).ext`, for files and folders, each selectable and undoable as a Duplicate.
+    @MainActor
+    func testPasteIntoTheSameFolderDuplicatesAsCopyThenCopyTwo() async throws {
+        try await withFixture { _, folder, board in
+            let file = try write("original", named: "yet another test file.txt", in: folder)
+            let actions = BrowserActions(pasteboard: board)
+            actions.copy([file])
+
+            try await perform(actions) { actions.paste(into: folder) }
+            let first = folder.appendingPathComponent("yet another test file - Copy.txt")
+            XCTAssertEqual(try contents(first), "original")
+            XCTAssertEqual(actions.status, "Copied as “yet another test file - Copy.txt”.")
+            XCTAssertEqual(actions.lastDuplicates?.items.map(\.url.lastPathComponent), ["yet another test file - Copy.txt"])
+            XCTAssertEqual(actions.undoName, "Duplicate")
+
+            try await perform(actions) { actions.paste(into: folder) }
+            let second = folder.appendingPathComponent("yet another test file - Copy (2).txt")
+            XCTAssertEqual(try contents(second), "original")
+            XCTAssertEqual(try contents(file.url), "original")
+            // Undo Duplicate moves the copy to the real Trash, so it is walked in the test VM, not here.
+            XCTAssertEqual(actions.undoName, "Duplicate")
+
+            let plans = try FileOperations.createFolder(in: folder, named: "Plans")
+            _ = try write("inside", named: "inside.txt", in: plans.url)
+            actions.copy([plans])
+            try await perform(actions) { actions.paste(into: folder) }
+            XCTAssertEqual(try contents(folder.appendingPathComponent("Plans - Copy/inside.txt")), "inside")
+            XCTAssertEqual(actions.lastDuplicates?.items.map(\.url.lastPathComponent), ["Plans - Copy"])
+        }
+    }
+
     @MainActor
     func testCopyConflictOffersTheExactReviewedFilesWithoutReplacingThem() async throws {
         try await withFixture { root, destination, board in
