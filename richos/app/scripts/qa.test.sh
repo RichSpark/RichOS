@@ -180,11 +180,11 @@ if [ "$HAVE_PIL" = 1 ]; then
     "$TMP/left.png" "$TMP/right.png"
   run "$QA/beside.py" "$TMP/left.png" "$TMP/right.png" "$TMP/beside.png" --height 50
   # 100 + 50 wide at 50 px high, a 24 px gap between, a 40 px label strip above.
-  expect "B1 two pictures at one height, side by side" 0 "174 x 90"
+  expect "BE1 two pictures at one height, side by side" 0 "174 x 90"
   run "$QA/beside.py" "$TMP/missing.png" "$TMP/right.png" "$TMP/out.png"
-  expect "B2 an unreadable input exits 2 with a sentence" 2 "cannot read"
+  expect "BE2 an unreadable input exits 2 with a sentence" 2 "cannot read"
 else
-  skip "B beside.py" "Pillow is not installed"
+  skip "BE beside.py" "Pillow is not installed"
 fi
 
 echo ""
