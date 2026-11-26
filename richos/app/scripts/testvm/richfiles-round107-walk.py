@@ -79,6 +79,14 @@ class Walk:
     def ls(self, folder=FIXTURE):
         return set(self.guest("ls -1 " + shlex.quote(folder))[1].splitlines())
 
+    def until_listed(self, name, seconds=15):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if name in self.ls():
+                return True
+            time.sleep(0.5)
+        return False
+
     def shot(self, name):
         code, text = run([HERE / "shot.sh", self.vm, self.out / f"{name}.png"], 90)
         if code:
@@ -242,6 +250,17 @@ class Walk:
         self.right(*self.name_point(html))
         time.sleep(1.0)
         self.shot(f"{t}-08-right-click-selects")
+        menus = [m for m in self.nodes("--role", "AXMenu") if m["h"] > 100]
+        if html and menus:
+            menu = menus[0]
+            # Clear of the row: beside its end, below it or above it.
+            clear = (menu["x"] >= html["x"] + html["w"] - 3 or menu["y"] >= html["y"] + html["h"] - 3
+                     or menu["y"] + menu["h"] <= html["y"] + 3)
+            self.record(f"{t}: the menu opens clear of the right-clicked row, its name readable", clear,
+                        f"row x {html['x']}-{html['x'] + html['w']} y {html['y']}-{html['y'] + html['h']}, "
+                        f"menu x {menu['x']} y {menu['y']}-{menu['y'] + menu['h']}")
+        else:
+            self.record(f"{t}: the right-click menu was found", False, f"row {bool(html)}, menus {len(menus)}")
         # 3: Open With lists the apps.
         open_with = self.node("Open With", "--role", "AXMenuItem")
         if open_with:
@@ -288,10 +307,12 @@ class Walk:
         self.keystroke("c", CONTROL)
         time.sleep(0.4)
         self.keystroke("v", CONTROL)
-        time.sleep(1.5)
+        # A copy is staged and verified before it is published; in a guest that can take seconds.
+        self.until_listed("yet another test file - Copy.txt")
+        time.sleep(0.8)
         self.shot(f"{t}-01-duplicate-copy")
         self.keystroke("v", CONTROL)
-        time.sleep(1.5)
+        self.until_listed("yet another test file - Copy (2).txt")
         names = self.ls()
         self.record(f"{t}: Ctrl+C, Ctrl+V, Ctrl+V makes - Copy and - Copy (2)",
                     {"yet another test file - Copy.txt", "yet another test file - Copy (2).txt"} <= names)
@@ -308,7 +329,7 @@ class Walk:
         self.keystroke("c", CONTROL)
         time.sleep(0.4)
         self.keystroke("v", CONTROL)
-        time.sleep(2.0)
+        self.until_listed("Projects - Copy")
         self.record(f"{t}: a folder duplicates as - Copy", "Projects - Copy" in self.ls())
 
         # 2, 11: click, pause, click opens the inline box; the column follows each letter.
@@ -342,6 +363,39 @@ class Walk:
             self.key(53)
             time.sleep(0.8)
         self.shot(f"{t}-10-11-12-spacing-columns-no-lines")
+
+        # 2: a drag inside the inline box selects part of the name; it never starts a file drag.
+        readme = self.node("readme.txt")
+        if readme:
+            self.click(*self.name_point(readme))
+            time.sleep(0.6)
+            self.key(120)
+            time.sleep(1.0)
+            y = round(readme["y"] + readme["h"] / 2)
+            start = round(readme["x"] + 36)
+            self.shot(f"{t}-02-f2-box")
+            self.pointer(f"{start},{y}", f"{start + 18},{y}")
+            time.sleep(0.5)
+            self.shot(f"{t}-02-drag-selects-part")
+            self.keystroke("Z")
+            time.sleep(0.3)
+            self.shot(f"{t}-02-drag-typed")
+            self.key(36)
+            time.sleep(1.5)
+            names = self.ls()
+            renamed = [n for n in names if n.endswith(".txt") and "Z" in n and n != "Z.txt" and n.endswith("me.txt")]
+            self.record(f"{t}: a drag in the rename box selects text and typing replaces it",
+                        "readme.txt" not in names and bool(renamed),
+                        ", ".join(renamed) or "names with Z: " + ", ".join(n for n in names if "Z" in n))
+
+        # 15: a folder made outside RichFiles gets its arrow on Refresh (F5).
+        self.record(f"{t}: Documents (no folders yet) has no arrow", self.node("Open Documents in the sidebar") is None)
+        self.guest("mkdir -p '/Users/admin/Documents/Made in Finder'")
+        self.key(96)
+        time.sleep(2.5)
+        self.record(f"{t}: after a folder is made outside and Refresh, Documents has an arrow",
+                    self.node("Open Documents in the sidebar") is not None)
+        self.guest("rmdir '/Users/admin/Documents/Made in Finder'")
 
         # 15, 16: the sidebar tree. Home opened by its arrow: Music (no folders inside) has no arrow.
         home_arrow = self.node("Open Home in the sidebar")
