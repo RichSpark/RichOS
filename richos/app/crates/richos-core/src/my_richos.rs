@@ -656,7 +656,7 @@ pub struct AppView {
     pub name: &'static str,
     /// Its processes now: 0 is not open.
     pub processes: i64,
-    /// The app whose figure holds this one's memory (a page in RichOS's window): `richos`.
+    /// What holds this one's memory when it has no process of its own: `richos` or `browser`.
     pub within: Option<&'static str>,
     #[serde(flatten)]
     pub line: AppLine,

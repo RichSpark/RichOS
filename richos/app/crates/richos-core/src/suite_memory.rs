@@ -79,14 +79,17 @@ impl Kind {
 
 /// The suite apps that run inside RichOS (round 109's memory view lists them beside the others):
 /// RichBrief (the meeting panel and its capture companion) and RichCleaner (its panel) have
-/// processes of their own that RichOS started, given by the host as [`Hosted`]; RichFinder and
-/// RichPass are pages in RichOS's own window, so their memory is RichOS's ([`LiveApp::within`]).
+/// processes of their own that RichOS started, given by the host as [`Hosted`] (RichCleaner's panel
+/// and its own window); RichFinder is a page in RichOS's own window, so its memory is RichOS's; and
+/// RichPass is a document that opens in the user's browser, whose memory is the browser's, which
+/// RichOS does not measure ([`LiveApp::within`]).
 const HOSTED: [(&str, &str); 4] = [("richbrief", "RichBrief"), ("richfinder", "RichFinder"), ("richpass", "RichPass"), ("richcleaner", "RichCleaner")];
-const WITHIN_RICHOS: [&str; 2] = ["richfinder", "richpass"];
+const WITHIN: [(&str, &str); 2] = [("richfinder", "richos"), ("richpass", "browser")];
 
-/// The app whose figure holds `id`'s memory, for a page in that app's window ([`LiveApp::within`]).
+/// What holds `id`'s memory when it has no process of its own: `richos` for a page in RichOS's
+/// window, `browser` for a document in the user's browser ([`LiveApp::within`]).
 pub fn within(id: &str) -> Option<&'static str> {
-    WITHIN_RICHOS.contains(&id).then_some("richos")
+    WITHIN.iter().find(|(i, _)| *i == id).map(|(_, w)| *w)
 }
 
 /// How many apps a live reading names.
@@ -123,8 +126,8 @@ pub struct LiveApp {
     pub bytes: Option<i64>,
     /// How many processes the app has now. Zero: it is not open.
     pub processes: i64,
-    /// The app whose figure holds this one's memory: a page in that app's own window, with no
-    /// process of its own to read.
+    /// What holds this one's memory when it has no process of its own: `richos` (a page in
+    /// RichOS's window) or `browser` (a document in the user's browser, not measured).
     pub within: Option<&'static str>,
 }
 
@@ -193,8 +196,8 @@ fn arrange(measured: Vec<LiveApp>, hosted: &[Hosted], footprint: impl Fn(i32) ->
     let mut by_id: std::collections::HashMap<&'static str, LiveApp> = measured.into_iter().map(|a| (a.id, a)).collect();
     for (id, app) in HOSTED {
         let mut row = LiveApp { id, app, bytes: Some(0), processes: 0, within: None };
-        if WITHIN_RICHOS.contains(&id) {
-            row.within = Some("richos");
+        if let Some(holder) = within(id) {
+            row.within = Some(holder);
             row.bytes = None;
         } else if let Some(given) = hosted.iter().find(|h| h.id == id) {
             let mut web = 0;
@@ -346,7 +349,7 @@ mod tests {
             assert_eq!(ids, apps_ids());
             // An app with no process reads as not open (0 bytes), never as unreadable; a page in
             // RichOS's window is named as within RichOS.
-            assert!(apps.iter().all(|a| a.processes > 0 || a.bytes == Some(0) || a.within == Some("richos")), "{apps:?}");
+            assert!(apps.iter().all(|a| a.processes > 0 || a.bytes == Some(0) || a.within.is_some()), "{apps:?}");
         }
         assert!(!state.exists(), "a live reading created the history");
     }
@@ -370,7 +373,7 @@ mod tests {
         assert_eq!(of("richos").bytes, Some(700), "the panels' web processes stay counted in RichOS");
         assert_eq!((of("richcleaner").bytes, of("richcleaner").processes), (Some(100), 1));
         assert_eq!((of("richbrief").bytes, of("richbrief").processes), (Some(250), 2), "an exited helper (99) is skipped");
-        assert_eq!((of("richfinder").within, of("richpass").within), (Some("richos"), Some("richos")));
+        assert_eq!((of("richfinder").within, of("richpass").within), (Some("richos"), Some("browser")));
         assert_eq!(of("richfinder").bytes, None, "a page in RichOS's window is given no figure of its own");
     }
 

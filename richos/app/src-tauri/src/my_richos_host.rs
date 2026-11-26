@@ -58,7 +58,9 @@ fn hosted(app: &tauri::AppHandle) -> Vec<richos_core::suite_memory::Hosted> {
     let own = |label: &str| web_process(app, label).filter(|pid| Some(*pid) != main).into_iter().collect::<Vec<_>>();
     let companion = app.try_state::<std::sync::Arc<crate::meetings::Meetings>>().map(|m| m.companion_pids()).unwrap_or_default();
     vec![
-        richos_core::suite_memory::Hosted { id: "richcleaner", web: own(crate::cleaner_host::PANEL), helpers: Vec::new() },
+        // RichCleaner: its panel and its own window ("cleaner", `cleaner_open_window`), which the
+        // rail opens; one web process counted once.
+        richos_core::suite_memory::Hosted { id: "richcleaner", web: { let mut web = own(crate::cleaner_host::PANEL); web.extend(own("cleaner")); web.sort_unstable(); web.dedup(); web }, helpers: Vec::new() },
         richos_core::suite_memory::Hosted { id: "richbrief", web: own(crate::meetings::PANEL), helpers: companion },
     ]
 }
