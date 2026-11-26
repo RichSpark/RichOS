@@ -509,8 +509,8 @@ static CODEX_SINK: std::sync::OnceLock<richos_core::codex_watch::Sink> = std::sy
 /// run of the app began, for a conversation with no open job in which the user has asked
 /// nothing since, is not handed to Stu. It waits in its journal
 /// (`codex_bridge::accept_when_asked`).
-fn codex_sink(app: AppHandle, state_root: &Path) -> richos_core::codex_watch::Sink {
-    let asked = richos_core::codex_bridge::Asked::at_launch(&richos_core::codex_bridge::root(), state_root);
+fn codex_sink(app: AppHandle, state_root: &Path, gate: Arc<richos_core::turn_gate::TurnGate>) -> richos_core::codex_watch::Sink {
+    let asked = richos_core::codex_bridge::Asked::at_launch(&richos_core::codex_bridge::root(), state_root, gate);
     Arc::new(move |line:&str| {
         let state=app.try_state::<AppState>().ok_or("the app is still starting")?;
         let event:serde_json::Value=serde_json::from_str(line).map_err(|e|e.to_string())?;
@@ -1222,6 +1222,9 @@ struct AppState {
     /// is saved (`hold_lease_models`): saved when the window closes or the app quits with
     /// Settings still open, and gone once Settings closes and saves it itself.
     held_lease_choice: Mutex<Option<HeldLeaseChoice>>,
+    /// The one rule for a model turn the app starts by itself (richos-core `turn_gate`), made
+    /// as the app opens, before anything can start one.
+    turn_gate: Arc<richos_core::turn_gate::TurnGate>,
     spine: Mutex<Spine>,
     reader: SpineReader,
     /// Durable CEO-facing preferences (company name, the assertiveness dial) — stored
@@ -3952,6 +3955,12 @@ fn main() {
                     Arc::new(WorkNotice { app: app.clone() }),
                 );
                 work.set_quota(quota.clone());
+                // THE ONE RULE FOR A TURN THE APP STARTS BY ITSELF (CEO 2026-11-26: "there should
+                // have been absolutely zero usage after me just opening the app"): made now, before
+                // the work host runs, the conversation recovers or the watchers start, and given
+                // to every place that sends a model turn (richos-core `turn_gate`).
+                let turn_gate = Arc::new(richos_core::turn_gate::TurnGate::at_launch(&data_dir.join("engine-state")));
+                work.set_turn_gate(Arc::clone(&turn_gate));
                 // "Keep chat alive" reaches Stu's sessions through the same readings, for the chats
                 // whose box is checked (`chat_cache_host.rs`).
                 work.set_keep_alive(Arc::clone(&chat_readings), chat_cache_host::kept(app.clone()));
@@ -3961,7 +3970,7 @@ fn main() {
                 work.start();
                 eprintln!("[richos] compute connection: starts with the first cancellable request over {}", claude_bin.display());
                 // Codex's entries, for Stu, the app's own child from launch to quit (gap X).
-                if CODEX_SINK.set(codex_sink(app.clone(), &data_dir.join("engine-state"))).is_err() {
+                if CODEX_SINK.set(codex_sink(app.clone(), &data_dir.join("engine-state"), Arc::clone(&turn_gate))).is_err() {
                     eprintln!("[richos] Codex watch: its sink was already set");
                 }
                 // **THE APP CLEANS UP ITS OWN GARBAGE, NO MATTER WHAT** (CEO §54 addendum 2): what an
@@ -4105,6 +4114,7 @@ fn main() {
                 // Restore durable Stops before any recovered message is submitted. Reconciliation
                 // queues accepted inputs locally. A provider reply must never hold the window's thread.
                 spine.detach_conversation_io();
+                spine.set_turn_gate(Arc::clone(&turn_gate));
                 if let Err(e) = spine.recover_after_restart_except(pending_codex_thread.as_deref()) {
                     eprintln!("[richos] intake reconciliation at boot: {e}");
                 }
@@ -4276,6 +4286,7 @@ fn main() {
                     account_auth: Mutex::new(None),
                     front_desk_primed_for: Mutex::new(Default::default()),
                     held_lease_choice: Mutex::new(None),
+                    turn_gate: Arc::clone(&turn_gate),
                     reader: spine.reader(),
                     spine: Mutex::new(spine),
                     config: Mutex::new(config),
@@ -5469,6 +5480,11 @@ fn dispatch_incoming_messages(app: &AppHandle, _thread_id: &str) -> Result<(), S
 #[richos_command::command]
 fn stop_assignment(state: State<AppState>, thread_id: String, assignment_id: String) -> Result<(), String> {
     let entity = assignment_scope(&state, &thread_id)?;
+    // His own press: the chat is open to the one rule from now on (richos-core `turn_gate`),
+    // so the Stop reaches Stu at once.
+    if let Ok(binding) = state.reader.snapshot().ledger().thread_binding(&thread_id) {
+        state.turn_gate.user_acted(&binding);
+    }
     let front_desk = state.control.for_thread(&thread_id).front_desk();
     state.work.stop_assignment_and_front_desk(entity.as_str(), &thread_id, &assignment_id, front_desk)
 }

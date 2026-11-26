@@ -76,6 +76,8 @@ pub fn answer(
             return Err(error.to_string());
         }
     };
+    // His own press: the chat is open to the one rule from now on (richos-core `turn_gate`).
+    state.turn_gate.user_acted(&binding);
     // His click takes its place in the conversation's input order now, not when the
     // delivery worker later reaches the spine, so a Stop he presses after it covers it.
     let mut result = store.answer_from(

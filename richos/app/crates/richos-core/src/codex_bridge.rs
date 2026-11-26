@@ -170,16 +170,12 @@ pub fn accept(
     Ok(())
 }
 
-/// **What the app knew when it opened, and which conversations the user has asked something in
-/// since**, read from the conversation ledger: a `PromptReceived` row written after that whose source is
-/// his own words (`text` or `jam`), by whichever road they came (the composer, the phone,
-/// voice). An agent's message, a re-prime and Rich speaking unprompted are not his asking.
-///
-/// The first look reads the ledger once; every later one reads only what was appended since, so
-/// a look costs nothing while nothing was written. Once a conversation is in, it stays in.
+/// **Which Codex reports were written before the app opened.** Neither the journals nor the
+/// Markdown channels carry a clock, so how long each file was at launch is what tells a report
+/// from before from one written while the app is open. Whether one from before may start a
+/// turn is the one rule's to say ([`crate::turn_gate`]); this only knows which is which.
 pub struct Asked {
-    since_ms: u64,
-    read: std::sync::Mutex<(u64, std::collections::HashSet<String>)>,
+    gate: std::sync::Arc<crate::turn_gate::TurnGate>,
     /// How long each connection's journal was when the app opened ([`Self::nobody_wrote_since`]).
     journals: std::collections::HashMap<PathBuf, u64>,
     /// The same for each old Markdown channel file the watcher reads, and, once asked for, how
@@ -197,7 +193,7 @@ impl Asked {
     /// clock, so how long each file is at this moment is what tells a report from before from
     /// one written while the app is open: a few dozen `stat` calls, once. `state` is the app's
     /// engine state folder.
-    pub fn at_launch(coordination: &Path, state: &Path) -> Self {
+    pub fn at_launch(coordination: &Path, state: &Path, gate: std::sync::Arc<crate::turn_gate::TurnGate>) -> Self {
         let mut journals = std::collections::HashMap::new();
         let mut folders = vec![coordination.join("connections")];
         // connections/<company>/<conversation>/<connection>/to-rich.jsonl
@@ -221,7 +217,7 @@ impl Asked {
                 markdown.insert(PathBuf::from(file), length);
             }
         }
-        Self { since_ms: crate::util::now_millis(), read: std::sync::Mutex::new((0, Default::default())), journals,
+        Self { gate, journals,
             markdown, markdown_lines: Default::default() }
     }
 
@@ -278,46 +274,6 @@ impl Asked {
         first <= before
     }
 
-    /// An unreadable ledger answers no: the report waits and stays in its journal.
-    pub fn in_thread(&self, ledger: &Path, thread: &str) -> bool {
-        use std::io::{BufRead, Seek, SeekFrom};
-        let mut read = self.read.lock().unwrap();
-        if read.1.contains(thread) {
-            return true;
-        }
-        let Ok(mut file) = std::fs::File::open(ledger) else { return false };
-        let length = file.metadata().map(|file| file.len()).unwrap_or(0);
-        // A ledger shorter than what was read was rewritten: read it again from its start.
-        if length < read.0 {
-            read.0 = 0;
-        }
-        if length == read.0 || file.seek(SeekFrom::Start(read.0)).is_err() {
-            return false;
-        }
-        let mut reader = std::io::BufReader::new(file);
-        let mut line = String::new();
-        loop {
-            line.clear();
-            // A concurrent append may not have completed its last record yet.
-            match reader.read_line(&mut line) {
-                Ok(count) if count > 0 && line.ends_with('\n') => read.0 += count as u64,
-                _ => break,
-            }
-            if !line.contains("PromptReceived") {
-                continue;
-            }
-            let Ok(row) = serde_json::from_str::<Value>(&line) else { continue };
-            if row["event"] == "PromptReceived"
-                && matches!(row["source"].as_str(), Some("text" | "jam"))
-                && row["at"].as_u64().is_some_and(|at| at >= self.since_ms)
-            {
-                if let Some(asked) = row["thread_id"].as_str() {
-                    read.1.insert(asked.to_string());
-                }
-            }
-        }
-        read.1.contains(thread)
-    }
 }
 
 /// The file in a connection's folder Codex and the review watcher write to Rich's team in.
@@ -338,33 +294,23 @@ fn codex_wrote_after(journal: &Path, length: u64) -> bool {
 
 /// What the watcher's log says once for a report that waits ([`accept_when_asked`]).
 pub const WAITS_FOR_THE_USER: &str =
-    "nothing newer was written since RichOS opened, for a conversation with no open job in which nothing was asked since; the report stays in its journal";
+    "written before RichOS opened, for a conversation the user has not been active in since; the report stays in its journal";
 
-/// Does this conversation have a job that has not ended? A record that cannot be read is not
-/// counted: a report that waits can still be given later, a model turn cannot be taken back.
-fn has_open_job(state: &Path, binding: &crate::entity::ThreadBinding) -> bool {
-    crate::assignment::scan_all(state, binding.entity_id().as_str(), binding.thread_id())
-        .is_ok_and(|scan| scan.rows.iter().any(|job| job.reported_state().is_some_and(|state| state.is_open())))
-}
-
-/// **[`accept`], unless the report is from before the app opened and nobody is waiting for it**
+/// **[`accept`], unless the report is from before the app opened and the one rule holds it**
 /// (CEO 2026-11-26: "Everything was either stopped, finished, ended or paused in the RichOS
 /// app. [...] there should have been absolutely zero usage after me just opening the app.").
 ///
 /// Every accepted report is a turn of Stu's, on his whole session, and usually one of Rich's
-/// after it. On 2026-11-26 the app opened after two days closed, with no job open, and the
-/// watcher handed Stu six Codex and review reports written meanwhile: 23 requests and 5.19
-/// million tokens on Fable before the user had typed a word. So a report that was already in
-/// its journal when the app opened, for a conversation with no open job, in which the user has
-/// asked nothing since, is refused here and stays in that journal, where it already waited
-/// while the app was closed. The watcher offers it again at every scan, and the first offer
-/// after the user's next message in that conversation accepts it, in order. `coordination` is
-/// the folder `asked` was made from.
-///
-/// Nothing else changes for a connection's journal: a report written while the app is open
-/// reaches Stu by itself, with the held ones before it, and so does one from before for a
-/// conversation whose job has not ended. A reply on an old Markdown channel is held and handed
-/// over by the same rule ([`Asked::nobody_wrote_since`]).
+/// after it. On 2026-11-26 the app opened after two days closed and the watcher handed Stu six
+/// Codex and review reports written meanwhile: 23 requests and 5.19 million tokens on Fable
+/// before the user had typed a word. A report that was already in its journal when the app
+/// opened is saved input from before ([`crate::turn_gate::Origin::FromBefore`]): refused here
+/// until the user is active in that conversation, and it stays in the journal, where it
+/// already waited while the app was closed. The watcher offers it again at every scan, and the
+/// first offer after that accepts it, in order. A job record that still says it is open opens
+/// nothing (a quit never rewrites it). A report written while the app is open reaches Stu by
+/// itself, with the held ones before it ([`Asked::nobody_wrote_since`]). `coordination` is the
+/// folder `asked` was made from.
 pub fn accept_when_asked(
     state: &Path,
     binding: &crate::entity::ThreadBinding,
@@ -372,9 +318,7 @@ pub fn accept_when_asked(
     coordination: &Path,
     asked: &Asked,
 ) -> Result<(), String> {
-    // The app's conversation ledger sits beside its engine state (`work_host::verified_instruction`).
-    let ledger = state.parent().unwrap_or(state).join("conversation-ledger.jsonl");
-    if asked.nobody_wrote_since(event) && !asked.in_thread(&ledger, binding.thread_id()) && !has_open_job(state, binding) {
+    if asked.nobody_wrote_since(event) && !asked.gate.may_start(binding, crate::turn_gate::Origin::FromBefore) {
         return Err(WAITS_FOR_THE_USER.into());
     }
     accept(state, binding, event, coordination)
@@ -597,7 +541,7 @@ mod tests {
         std::fs::write(Path::new(f.event["locator"].as_str().unwrap()).join(JOURNAL), [b'\n'; 100]).unwrap();
         // The ledger's clock is in milliseconds: what was written before is strictly earlier.
         std::thread::sleep(std::time::Duration::from_millis(3));
-        Asked::at_launch(&f.coord, &f.state)
+        Asked::at_launch(&f.coord, &f.state, std::sync::Arc::new(crate::turn_gate::TurnGate::at_launch(&f.state)))
     }
 
     /// One line of a journal, as the engine writes a record.
@@ -614,7 +558,7 @@ mod tests {
     }
 
     /// **Opening the app spends nothing** (CEO 2026-11-26): a Codex report for a conversation
-    /// with no open job, in which he has asked nothing since the app opened, is not handed to
+    /// in which he has asked nothing since the app opened is not handed to
     /// Stu. It stays in its journal, unaccepted, and is taken at the first offer after his next
     /// message there. What he typed before the app opened, and an agent's message, open nothing.
     #[test]
@@ -653,7 +597,7 @@ mod tests {
         let other = ledger.thread_binding(&other).unwrap();
         ledger.record_prompt_received(&other, "Hello", crate::ledger::Source::Jam).unwrap();
         drop(ledger);
-        assert!(asked.in_thread(&f.root.join("conversation-ledger.jsonl"), other.thread_id()), "his spoken words were not read as asking");
+        assert!(asked.gate.may_start(&other, crate::turn_gate::Origin::FromBefore), "his spoken words were not read as his acting");
         assert_eq!(
             accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap_err(),
             WAITS_FOR_THE_USER
@@ -805,10 +749,11 @@ mod tests {
         assert_eq!(f.rows().len(), 1);
     }
 
-    /// A job of his that has not ended is waiting for its reports: one from before the app
-    /// opened arrives at once, as before, with no message from him.
+    /// A job record that says the job is open (registered, running, paused for quota, waiting
+    /// on him) is what a quit leaves behind: it is never rewritten, so it opens nothing. The
+    /// report waits (review rv-20261126T140329Z-15e71cf5-6caa, finding 1).
     #[test]
-    fn a_chat_with_an_open_job_gets_its_codex_reports_at_once() {
+    fn a_job_record_that_still_says_open_releases_nothing_from_before() {
         let f = Fixture::new();
         let asked = opened(&f);
         let scope = f.scope();
@@ -823,8 +768,11 @@ mod tests {
             needs_screen: false,
         })
         .unwrap();
-        accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap();
-        assert_eq!(f.rows().len(), 1);
+        assert_eq!(
+            accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap_err(),
+            WAITS_FOR_THE_USER
+        );
+        assert!(!session_tools::inbox(&scope, "stu").unwrap().exists(), "an open job record released a report from before");
     }
 
     /// The same report, the job ended: it waits.

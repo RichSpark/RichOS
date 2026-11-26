@@ -190,6 +190,7 @@ fn drain_inboxes(app:&AppHandle,state:&AppState,thread:&str,binding:&richos_core
         let mut delivered=false;
         let mut after = 0;
         let mut deferred = None;
+        let inbox=session_tools::inbox(scope,"rich")?;
         while let Some((mut message,through))=session_tools::pending_after(scope,"rich",after)? {
             after = through;
             // The existing durable inbox is the retry boundary. ECS must apply
@@ -205,9 +206,15 @@ fn drain_inboxes(app:&AppHandle,state:&AppState,thread:&str,binding:&richos_core
                     }
                 }
             }
-            state.control.submit_agent_message(thread,Some(binding.entity_id().clone()),
+            // A message left here before the app opened is filed as from before, so the one rule
+            // holds its turn until the user is active in this chat (richos-core `turn_gate`,
+            // `Spine::deliver`); one written since (an order whose condition came true now, a
+            // report of work running now) is filed as now and goes.
+            let written=if state.turn_gate.arrived_while_open(&inbox,through) {richos_core::util::now_millis()}
+                else {state.turn_gate.since_ms().saturating_sub(1)};
+            state.control.submit_agent_message_written_at(thread,Some(binding.entity_id().clone()),
                 &serde_json::to_string(&message).map_err(|e|e.to_string())?,&message.from,
-                &format!("peer:{}:{}:{through}",scope.entity_id,scope.thread_id)).map_err(|e|e.to_string())?;
+                &format!("peer:{}:{}:{through}",scope.entity_id,scope.thread_id),written).map_err(|e|e.to_string())?;
             session_tools::acknowledge(scope,"rich",through)?;
             if message.from == "work-status" {
                 if let Err(error) = wake_waiting(&scope.state_root) {

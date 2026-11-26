@@ -639,6 +639,12 @@ pub struct Spine {
     turn_in_progress: bool,
     detached_delivery: bool,
     pending_delivery: VecDeque<Delivery>,
+    /// The one rule for a turn the app starts by itself ([`crate::turn_gate`]), set by the
+    /// shell before the first recovery or drain ([`Self::set_turn_gate`]).
+    turn_gate: crate::turn_gate::Slot,
+    /// Saved turns from before the app opened that the rule holds, in the order they were
+    /// held: delivered once their chat opens ([`Self::deliver_held`]).
+    held_turns: Vec<(String, ThreadBinding)>,
     /// Per conversation: the order its taken inputs are written in ([`SubmissionOrder`]).
     submission_order: std::collections::HashMap<String, std::sync::Arc<SubmissionOrder>>,
     rotation_count: u64,
@@ -866,6 +872,8 @@ impl Spine {
             turn_in_progress: false,
             detached_delivery: false,
             pending_delivery: VecDeque::new(),
+            turn_gate: crate::turn_gate::Slot::new(),
+            held_turns: Vec::new(),
             submission_order: std::collections::HashMap::new(),
             rotation_count: 0,
             last_rotation_reason: None,
@@ -2399,6 +2407,25 @@ impl Spine {
     /// from the recovery path itself so a lease that dies immediately on every respawn
     /// surfaces honestly after one attempt rather than looping forever.
     fn deliver(&mut self,turn_id:&str,binding:&ThreadBinding,text:&str,allow_recovery:bool)->Result<(),SpineError> {
+        // THE ONE RULE ([`crate::turn_gate`]), at the one road every turn of Rich's takes to his
+        // session: a turn filed before the app opened (an input saved and never started, a
+        // message an agent left) waits until the user is active in its chat. His own words of
+        // this run, input filed while the app is open, a turn replayed because it was running
+        // when the app ended (`replay_turn` files it now), and an internal turn of a turn
+        // already running go.
+        if let Some(gate)=self.turn_gate.get() {
+            let origin=match self.ledger.turn(turn_id) {
+                Some(turn) if turn.source!=Source::Internal && turn.created_at<gate.since_ms() => crate::turn_gate::Origin::FromBefore,
+                _ => crate::turn_gate::Origin::Now,
+            };
+            if !gate.may_start(binding,origin) {
+                if !self.held_turns.iter().any(|(held,_)|held==turn_id) {
+                    eprintln!("[richos] a saved turn from before RichOS opened waits until the user is active in its chat");
+                    self.held_turns.push((turn_id.to_string(),binding.clone()));
+                }
+                return Ok(());
+            }
+        }
         if let Some(claim)=self.control.for_thread(binding.thread_id()).stop_claim().filter(|claim|
             claim.covers(turn_id, self.ledger.turn(turn_id).and_then(|turn|turn.intake_id))) {
             // Preserve the existing durable Stop cut without submitting pre-Stop input.
@@ -3099,7 +3126,27 @@ impl Spine {
     /// everything behind it, which is the deliberate trade: the CEO's words surviving
     /// matters more than the liveness of the records queued after them, and a binding
     /// failure here is systemic rather than per-message.
+    pub fn set_turn_gate(&mut self, gate: std::sync::Arc<crate::turn_gate::TurnGate>) {
+        if self.turn_gate.set(gate).is_err() {
+            eprintln!("[richos] the conversation's turn gate was already set");
+        }
+    }
+
+    /// Held saved turns whose chat the user has been active in since are delivered now, in
+    /// the order they were held; the rest keep waiting. A turn settled meanwhile (stopped,
+    /// replaced) is dropped.
+    fn deliver_held(&mut self) -> Result<(), SpineError> {
+        for (turn_id, binding) in std::mem::take(&mut self.held_turns) {
+            let Some(turn) = self.ledger.turn(&turn_id) else { continue };
+            if !matches!(turn.state, crate::ledger::TurnState::Received) { continue }
+            let text = turn.user_text.clone();
+            self.deliver(&turn_id, &binding, &text, true)?;
+        }
+        Ok(())
+    }
+
     fn drain_intake(&mut self) -> Result<(), SpineError> {
+        self.deliver_held()?;
         let mut deferred_stop=false;
         for record in self.control.pending_intake() {
             match record {

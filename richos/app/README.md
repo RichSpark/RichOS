@@ -509,6 +509,8 @@ richos/app/
     tests/failed_start_leaves_nothing_tests.rs a conversation lease that cannot start removes its scope files and starts no Haiku.
     tests/request_preparation_tests.rs regressions for cancellable preparation, independent replies and startup, rotation, provider retries and restart outcomes.
     tests/restart_continuation_tests.rs restart tests for atomic continuation, uncertain native attempts, preserved control provenance and durable Stop across replay.
+    tests/turn_gate_callers.rs every production send call that reaches a model, by file and function, with how the one rule for a turn the app starts by itself (`turn_gate`, CEO 2026-11-26) covers it; a new send call fails it until it is listed. It also pins the gate calls, their feeders, the gate's setting before anything can start a turn, and the review watcher's one start.
+    tests/turn_gate_launch_tests.rs opening the app sends Rich nothing saved from before (a message an agent left waits for the user's words in that chat and then follows them), and a turn that was running when the app ended carries on.
     tests/routing_context_tests.rs verifies that classification receives the existing scoped visible conversation, including formatted replies, without hidden inputs.
     tests/onboarding_declination_tests.rs over the two spine methods the first-run
                               notice is built on. `record_declination` shipped with no caller

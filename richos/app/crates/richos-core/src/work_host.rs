@@ -179,6 +179,10 @@ struct Backend {
     lease: Mutex<Option<Box<dyn Cognition>>>,
     inner: Mutex<Inner>,
     wake: Condvar,
+    /// Inbox rows the one rule held ([`WorkHost::may_send`]), by their end: given first, oldest
+    /// first, once their chat opens, even after later input has moved the scan past them. Its own
+    /// lock, never taken while waiting on [`Self::inner`].
+    gate_held: Mutex<std::collections::BTreeSet<u64>>,
 }
 impl Backend {
     fn new() -> Arc<Self> {
@@ -186,6 +190,7 @@ impl Backend {
             live_delivery: Mutex::new(()),
             moving: Mutex::new(()),
             lease: Mutex::new(None),
+            gate_held: Mutex::new(Default::default()),
             inner: Mutex::new(Inner::default()),
             wake: Condvar::new(),
         })
@@ -214,6 +219,9 @@ pub struct WorkHost {
     /// `None` until the shell sets it ([`Self::set_keep_alive`]), and then no session of Stu's
     /// is ever sent a keep-alive.
     keep_alive: Mutex<Option<(Arc<crate::chat_cache::Readings>, crate::chat_cache::Kept)>>,
+    /// The one rule for a turn the app starts by itself ([`crate::turn_gate`]): set by the
+    /// shell at launch, before the run loop can select input ([`Self::set_turn_gate`]).
+    turn_gate: crate::turn_gate::Slot,
 }
 impl WorkHost {
     pub fn new(
@@ -237,7 +245,33 @@ impl WorkHost {
             receipts: Mutex::new(Default::default()),
             handoffs: Mutex::new(Default::default()),
             keep_alive: Mutex::new(None),
+            turn_gate: crate::turn_gate::Slot::new(),
         })
+    }
+    pub fn set_turn_gate(&self, gate: Arc<crate::turn_gate::TurnGate>) {
+        if self.turn_gate.set(gate).is_err() {
+            eprintln!("[richos] the work host's turn gate was already set");
+        }
+    }
+
+    /// **May Stu be sent this saved input now?** ([`crate::turn_gate`]) An input whose
+    /// delivery attempt is still open was being given to him when the app last ended, and
+    /// carries on; one written to his inbox while the app is open is new; anything else in his
+    /// inbox was saved before and waits until the user is active in this chat. `input` is the
+    /// attempt's name (`peer:<offset>`, `answer:<id>`); `through` is the inbox row's end, none
+    /// for an answer, whose own record is not in the inbox.
+    fn may_send(&self, binding: &ThreadBinding, input: &str, through: Option<u64>) -> bool {
+        use crate::turn_gate::Origin;
+        let scope = self.message_scope(binding);
+        let origin = if crate::session_tools::previous_attempt(&scope, "stu", input).ok().flatten().is_some() {
+            Origin::CarriesOn
+        } else if through.is_some_and(|through| crate::session_tools::inbox(&scope, "stu")
+            .is_ok_and(|inbox| crate::turn_gate::arrived(&self.turn_gate, &inbox, through))) {
+            Origin::Now
+        } else {
+            Origin::FromBefore
+        };
+        crate::turn_gate::allows(&self.turn_gate, binding, origin)
     }
     pub fn set_retry_clock(&self, clock: Arc<dyn crate::upstream::RetryClock>) {
         *self.retry_clock.lock().unwrap() = clock;
@@ -1080,6 +1114,19 @@ impl WorkHost {
     fn next_for_stu(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding, mut after: u64,
         released: &mut Vec<u64>, given: &std::collections::HashSet<u64>) -> Result<Option<(crate::session_tools::Message, u64)>, String> {
         let scope = self.message_scope(binding);
+        // Held by the one rule before: given now, oldest first, if the user has been active in
+        // this chat since.
+        let held: Vec<u64> = backend.gate_held.lock().unwrap().iter().copied().collect();
+        for through in held {
+            if given.contains(&through) || !self.may_send(binding, &format!("peer:{through}"), Some(through)) {
+                continue;
+            }
+            backend.gate_held.lock().unwrap().remove(&through);
+            let message = crate::session_tools::saved_input(&scope, "stu", through)?;
+            if !self.held_for_screen(backend, binding, &message, through) {
+                return Ok(Some((message, through)));
+            }
+        }
         while let Some(through) = released.pop() {
             let message = crate::session_tools::saved_input(&scope, "stu", through)
                 .inspect_err(|_| released.push(through))?;
@@ -1092,6 +1139,13 @@ impl WorkHost {
                 return Ok(None);
             };
             if given.contains(&through) {
+                after = through;
+                continue;
+            }
+            // Saved before the app opened and not running then: it waits, and what was
+            // written after it still goes (`may_send`).
+            if !self.may_send(binding, &format!("peer:{through}"), Some(through)) {
+                backend.gate_held.lock().unwrap().insert(through);
                 after = through;
                 continue;
             }
@@ -1157,7 +1211,8 @@ impl WorkHost {
         let result = (|| {
             if let Some(session)=session.as_deref() {
                 for answer in crate::question_work::pending(&self.state)?.into_iter().filter(|answer|
-                    answer.entity_id==binding.entity_id().as_str() && answer.thread_id==binding.thread_id()) {
+                    answer.entity_id==binding.entity_id().as_str() && answer.thread_id==binding.thread_id()
+                    && self.may_send(binding, &format!("answer:{}", answer.id), None)) {
                     let input_id=format!("answer:{}",answer.id);
                     if crate::session_tools::previous_attempt(&scope,"stu",&input_id)?.as_ref()
                         .and_then(|attempt|attempt["session_id"].as_str())==Some(session) {continue}
@@ -2145,6 +2200,7 @@ impl WorkHost {
                             .find(|d| {
                                 d.entity_id == binding.entity_id().as_str()
                                     && d.thread_id == binding.thread_id()
+                                    && self.may_send(&binding, &format!("answer:{}", d.id), None)
                                     && live_session.as_deref().is_none_or(|session| {
                                         match crate::session_tools::previous_attempt(&self.message_scope(&binding), "stu", &format!("answer:{}", d.id)) {
                                             Ok(attempt) => attempt.as_ref().and_then(|a| a["session_id"].as_str()) != Some(session),
@@ -3190,6 +3246,36 @@ mod tests {
 
     fn handed_over(h: &Harness, text: &str) -> usize {
         h.work_prompts.lock().unwrap().iter().filter(|prompt| prompt.contains(text)).count()
+    }
+
+    /// **Opening the app spends nothing** (CEO 2026-11-26: "Everything was either stopped,
+    /// finished, ended or paused in the RichOS app. [...] there should have been absolutely
+    /// zero usage after me just opening the app."). Whatever was in Stu's inbox when the app
+    /// opened (a Stop, an account notice, a report of work that has since stopped) is not sent to
+    /// him; input written while the app is open reaches him by itself, past the saved one; the
+    /// user's own words in the chat give him the saved one too.
+    #[test]
+    fn input_saved_before_the_app_opened_waits_for_the_user_and_new_input_reaches_stu_by_itself() {
+        use std::io::Write;
+        let h = harness(0);
+        let scope = h.host.message_scope(&h.binding);
+        crate::session_tools::observe_stall(&scope, "a notice saved before the quit").unwrap();
+        // The ledger's clock is in milliseconds: what was written before is strictly earlier.
+        // load-bound: this only moves the millisecond clock past what was saved; host load makes the gap larger, never smaller.
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        h.host.set_turn_gate(Arc::new(crate::turn_gate::TurnGate::at_launch(&h.state)));
+        h.host.wake_messages(&h.binding);
+        crate::session_tools::observe_stall(&scope, "a notice written while the app is open").unwrap();
+        h.host.wake_messages(&h.binding);
+        until("input written while the app is open never reached Stu", || handed_over(&h, "written while the app is open") == 1);
+        assert_eq!(handed_over(&h, "saved before the quit"), 0, "opening the app sent Stu what was saved before");
+
+        let line = serde_json::json!({"event":"PromptReceived","entity_id":"depot","thread_id":"thread-one",
+            "turn_id":"turn-8","source":"text","text":"what happened?","at":crate::util::now_millis()}).to_string() + "\n";
+        std::fs::OpenOptions::new().append(true).open(h.root.join("conversation-ledger.jsonl")).unwrap()
+            .write_all(line.as_bytes()).unwrap();
+        h.host.wake_messages(&h.binding);
+        until("after his words the saved input never reached Stu", || handed_over(&h, "saved before the quit") == 1);
     }
 
     /// **THE CEO'S §56, END TO END.** A job marked `needs_screen`, on a locked screen, is not
