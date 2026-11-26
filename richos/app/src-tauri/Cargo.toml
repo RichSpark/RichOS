@@ -88,7 +88,9 @@ richos-search = { path = "../crates/richos-search" }
 # THE UPDATE PATH (src/updates.rs). Its minisign verification — `minisign_verify` inside
 # `Update::download` — is the only thing standing between a manifest URL and code running
 # on the CEO's Mac, so it is a pinned floor rather than a bare "2".
-tauri-plugin-updater = "2.11.0"
+# The macOS updater verifies signed tar archives. Its optional zip feature adds a
+# Windows installer extractor that the separate .NET Windows companion never uses.
+tauri-plugin-updater = { version = "2.11.0", default-features = false, features = ["rustls-tls", "system-proxy"] }
 # `time` for the launch check's delay only. Already in the tree beneath `tauri` (which
 # builds on it), so no new download: `cargo tree -i tokio` in this crate shows it arriving
 # via tauri 2.x. Named here because a file that calls `tokio::time::sleep` while depending
