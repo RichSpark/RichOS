@@ -1008,11 +1008,14 @@ class AppWorld(World):
         chat = os.path.basename((item.env or {}).get("RICHOS_WORKSPACES_DIR", "")) or getattr(item, "chat", "")
         channel = getattr(item, "channel", None)
         if not chat and channel:
-            # A handover an earlier version queued names no chat; its connection's place does:
-            # <coordination>/connections/<company>/<conversation>/<connection>.
-            parts = os.path.normpath(channel["locator"]).split(os.sep)
-            if len(parts) >= 4 and parts[-4] == "connections":
-                chat = chat_partition(parts[-3], parts[-2])
+            # A handover an earlier version queued names no chat; its connection does, read the
+            # way every reader resolves one: an automatic connection's place is
+            # _automatic/codex, and the chat is the one it was bound to (codex_channels.connection).
+            try:
+                endpoint = channels.connection(channel["locator"])[1]
+                chat = chat_partition(endpoint["entity_id"], endpoint["thread_id"])
+            except (OSError, ValueError, KeyError, TypeError):
+                chat = ""
         return bool(chat) and chat in self.open_chats()
 
     def channel_repositories(self, endpoint):

@@ -155,6 +155,20 @@ class Reviews(unittest.TestCase):
         with mock.patch.object(watcher, "take_lock", side_effect=lambda item, *rest: started.append(item) and None):
             watcher.start(codex, "handover", 10 ** 6, 1)
         self.assertEqual(started, [codex], "a handover queued by an earlier version never reaches review once its chat opens")
+        # The same for an automatic connection: its place is _automatic/codex, and its chat is the
+        # one it was bound to (review rv-20261126T151735Z-c45967b1-2484, finding 3).
+        automatic = Path(c.connect("Review the delivered work", "fixture")["locator"])
+        self.assertEqual(automatic.parts[-3:-1], (c.AUTOMATIC, "codex"))
+        c.save(automatic / "connection.json", dict(c.load(automatic / "connection.json"), binding=dict(entity_id="company-a", thread_id="chat-a")))
+        codex.channel = dict(locator=str(automatic), message_id="ready")
+        self.open_chats()
+        with mock.patch.object(watcher, "take_lock", side_effect=AssertionError("an old automatic handover of a shut chat was locked")):
+            self.assertIsNone(watcher.start(codex, "handover", 10 ** 6, 1))
+        self.open_chats(("company-a", "chat-a"))
+        started.clear()
+        with mock.patch.object(watcher, "take_lock", side_effect=lambda item, *rest: started.append(item) and None):
+            watcher.start(codex, "handover", 10 ** 6, 1)
+        self.assertEqual(started, [codex], "an old automatic handover never reaches review once its bound chat opens")
         # The terminal's watcher has no such record and starts as before.
         self.assertTrue(rw.World.may_start(object.__new__(rw.World), worker))
 
