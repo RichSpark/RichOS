@@ -652,6 +652,19 @@ final class BrowserModel: ObservableObject {
         } onCancel: { worker.cancel() }
     }
 
+    /// Whether `folder` holds at least one folder, so the sidebar draws an arrow only where
+    /// opening it shows something (catalog entry 15). Stops reading at the first folder.
+    nonisolated static func hasChildFolders(of folder: URL, showHidden: Bool) async -> Bool {
+        let worker = Task.detached(priority: .utility) { () -> Bool in
+            var found = false
+            _ = try? DirectoryReader.scan(folder, showHidden: showHidden, isCancelled: { found || Task.isCancelled }) {
+                if $0.contains(where: { $0.kind == .directory }) { found = true }
+            }
+            return found
+        }
+        return await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
+    }
+
     private nonisolated static func readChildFolders(_ folder: URL, showHidden: Bool) throws -> [FileEntry] {
         var folders: [FileEntry] = []
         _ = try DirectoryReader.scan(folder, showHidden: showHidden, isCancelled: { Task.isCancelled }) {
