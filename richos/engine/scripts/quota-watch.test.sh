@@ -926,6 +926,12 @@ replay() { # <label>
     python3 "$SCRIPT_DIR/lib/quota-watch-replay.py" "$1" "$QUOTA_PAYLOAD" "$SB/$1" "$ENGINE" "$FAKE" >"$SB/$1.report" 2>&1
 }
 
+if wants "P5-101"; then
+    replay local-deadline
+    check "P5-101  a local quota deadline takes priority over a later provider slot or reset retry" \
+        "$?" "$(cat "$SB/local-deadline.report")"
+fi
+
 if wants "R01"; then
 replay r01
 R01="$(tail -1 "$SB/r01.report")"

@@ -149,7 +149,7 @@ mutant release-with-nobody-held "W03" "$L" \
     "The lead would be woken to release a hold nobody is in."
 
 mutant release-a-poll-late "E05" "$L" \
-    '            if to_release > 0:' \
+    '            if release_at > now:' \
     '            if False:' \
     "The release would come up to one 5-minute poll after the 20-minute mark."
 
@@ -209,7 +209,7 @@ mutant outage-wakes-on-first-unknown "N07" "$L" \
     "A single timeout on a weekly-only account would wake the lead over an old fallback."
 
 mutant fallback-expiry-ignored "R03" "$L" \
-    'sleep_for = max(1, min(sleep_for, expires_in))' \
+    'retry_at = min(retry_at, now + max(1, expires_in))' \
     'pass' \
     "A fallback could pass its freshness limit without a check at the boundary."
 
@@ -242,8 +242,8 @@ mutant outage-wakes-at-once "N02" "$L" \
     "A get_usage timeout at 8% would wake the lead at once, as at 15:32Z, though the threshold could not have been crossed."
 
 mutant outage-not-retried-sooner "N02" "$L" \
-    '            sleep_for = max(1, min(sleep_for, _retry_seconds(a)))' \
-    '            pass' \
+    '            retry_at = started + _retry_seconds(a)' \
+    '            retry_at = started + a.poll' \
     "A failed get_usage would stop checking the saved reading locally before the next provider slot."
 
 mutant outage-ignores-measured-rise "N04" "$L" \
@@ -284,9 +284,9 @@ mutant fast-never-ends "R12" "$L" \
     "After a burst the watcher would stay on 1-minute checks and the early pause point for the rest of the window."
 
 mutant fast-poll-clamped-back "R06" "$L" \
-    '            sleep_for = max(1, min(sleep_for, window_end - now))' \
-    '            sleep_for = max(1, min(a.poll, window_end - now))' \
-    "The window-end clamp would put the 5-minute interval back, and the 1-minute check would never happen."
+    '        sleep_for = a.fast_poll if fast or expected or provider_fast else a.poll' \
+    '        sleep_for = a.poll' \
+    "The 5-minute interval would displace the 1-minute check at high speed."
 
 mutant early-wake-never "R09" "$L" \
     '        point = five_pause_point(a, r, now, speed)' \

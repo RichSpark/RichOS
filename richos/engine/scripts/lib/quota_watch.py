@@ -2180,8 +2180,10 @@ def _poll_loop(a, out, alive, health=None):
         if weekly_blocked:
             print(quota_weekly.describe(r, now), flush=True)
             _poll_completed(health)
-            interval = _retry_seconds(a) if retry else a.fast_poll if provider_fast else a.poll
-            _sleep_after_poll(started, interval, reset_started, reset_status, r, alive, fable_until)
+            interval = a.fast_poll if provider_fast else a.poll
+            local_due = started + _retry_seconds(a) if retry else None
+            _sleep_after_poll(started, interval, reset_started, reset_status, r, alive, fable_until,
+                              local_due=local_due)
             continue
         if window_end is not None and not has_five(r) and classify(r, a.threshold, a.stale)[0] == "below":
             # THE FIVE-HOUR WINDOW WENT AWAY (second review rv-20261031T192316Z-d2322984-98af): a
@@ -2276,41 +2278,43 @@ def _poll_loop(a, out, alive, health=None):
                     out.wake("STALE" if stale else "UNKNOWN", _capture(_emit_blind, a, r, w, why, outage_detail), now)
                     blind_woken = True
         sleep_for = a.fast_poll if fast or expected or provider_fast else a.poll
+        local_due = window_end
         if window_end is not None:
-            sleep_for = max(1, min(sleep_for, window_end - now))
-            # Wake at the first second inside the last 20 minutes, where a
-            # hold releases, rather than up to one poll late.
-            to_release = window_end - now - (RESET_EXEMPTION_SECONDS - 1)
-            if to_release > 0:
-                sleep_for = max(1, min(sleep_for, to_release))
+            # Wake at the first second inside the last 20 minutes, where a hold releases.
+            release_at = window_end - (RESET_EXEMPTION_SECONDS - 1)
+            if release_at > now:
+                local_due = release_at
         if retry:
             # "retried at the next poll, or sooner" (2026-09-28).
-            sleep_for = max(1, min(sleep_for, _retry_seconds(a)))
+            retry_at = started + _retry_seconds(a)
             if verdict == "below" and r.get("source") == "the status line" and r["age"] is not None:
                 # Recheck as soon as this fallback becomes older than one poll.
                 expires_in = math.floor(a.stale - r["age"]) + 1
-                sleep_for = max(1, min(sleep_for, expires_in))
+                retry_at = min(retry_at, now + max(1, expires_in))
+            local_due = retry_at if local_due is None else min(local_due, retry_at)
         _poll_completed(health)
-        # Count local polls from their start and honor the shared provider deadline.
-        _sleep_after_poll(started, sleep_for, reset_started, reset_status, r, alive, fable_until)
+        _sleep_after_poll(started, sleep_for, reset_started, reset_status, r, alive, fable_until,
+                          local_due=local_due)
 
 
-def _sleep_after_poll(started, interval, reset_started, reset_status, reading, alive, fable_until=None):
+def _sleep_after_poll(started, interval, reset_started, reset_status, reading, alive, fable_until=None,
+                      *, local_due=None):
     deadline = started + interval
     now = time.time()
+    slots = []
     next_at = _ms(reading.get("provider_next_at"))
-    provider_due = next_at / 1000 if next_at is not None and started < next_at / 1000 <= now + interval else None
-    if provider_due is not None:
-        # A check can finish after its poll started. Align the next poll with
-        # the shared slot so a fractionally early poll doesn't miss it.
-        deadline = provider_due
+    if next_at is not None and started < next_at / 1000 <= deadline + 1:
+        slots.append(next_at / 1000)
     retry_at = _ms((reset_status.get("resets") or {}).get("retryAt"))
     if not app_state() and retry_at is not None:
-        # Align a poll that would come fractionally early with the core's
-        # millisecond deadline. Also honor an earlier retry on a slower poll.
         retry = retry_at / 1000
-        if started < retry <= reset_started + interval + 1:
-            deadline = min(provider_due, retry) if provider_due is not None else retry
+        if reset_started < retry <= deadline + 1:
+            slots.append(retry)
+    # Align an ordinary poll that is fractionally early with the shared slot.
+    # A local check keeps its own deadline. Store.claim still gates provider requests.
+    deadline = min(slots, default=deadline)
+    if local_due is not None:
+        deadline = min(deadline, local_due)
     if fable_until is not None and fable_until / 1000 > now:
         deadline = min(deadline, fable_until / 1000)
     _nap(max(1, deadline - now), alive)
