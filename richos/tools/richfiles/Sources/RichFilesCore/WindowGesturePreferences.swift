@@ -81,18 +81,27 @@ public enum WindowGesturePreferences {
                      forKey: restartContractKey)
     }
 
+    public static var didReplaceRunningHelper: Bool {
+        liveRestartContract?.pid == getpid()
+    }
+
     public static func runningHelperHandlesOwnRestart() -> Bool {
-        guard let mark = defaults.dictionary(forKey: restartContractKey), mark["freshProcess"] as? Bool == true,
+        liveRestartContract?.freshProcess == true
+    }
+
+    private static var liveRestartContract: (pid: pid_t, freshProcess: Bool)? {
+        guard let mark = defaults.dictionary(forKey: restartContractKey),
               let pid = mark["pid"] as? Int, pid > 1, let process = pid_t(exactly: pid),
-              let ready = mark["ready"] as? Date else { return false }
-        // A login item can have a running launchd job without an AppKit
-        // application registration. Use the recorded process's kernel identity.
+              let ready = mark["ready"] as? Date else { return nil }
+        // A managed helper can be alive without an AppKit registration. Check
+        // its launch time to reject a record from an earlier use of this PID.
         var info = proc_bsdinfo()
         let size = Int32(MemoryLayout<proc_bsdinfo>.size)
         guard proc_pidinfo(process, PROC_PIDTBSDINFO, 0, &info, size) == size,
-              info.pbi_uid == getuid() else { return false }
+              info.pbi_uid == getuid() else { return nil }
         let launched = Double(info.pbi_start_tvsec) + Double(info.pbi_start_tvusec) / 1_000_000
-        return launched <= ready.timeIntervalSince1970
+        guard launched <= ready.timeIntervalSince1970 else { return nil }
+        return (process, mark["freshProcess"] as? Bool == true)
     }
 
     public static var nativeTitleBarIsOff: Bool {

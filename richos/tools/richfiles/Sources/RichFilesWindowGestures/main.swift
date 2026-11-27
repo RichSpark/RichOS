@@ -15,6 +15,16 @@ if CommandLine.arguments.dropFirst().first == "--check-gesture-permission" {
     exit(GesturePermission.current.rawValue)
 }
 
+// Older helpers can exec this binary before RichOS sends its service refresh.
+// Only a process launched by launchd can replace the old restart contract.
+if WindowGesturePreferences.didReplaceRunningHelper {
+    WindowGesturePreferences.publish(.inputUnavailable)
+    if !WindowGesturePreferences.restartHelper() {
+        NSLog("RichFiles Window Gestures could not restart a replaced process")
+    }
+    exit(EXIT_FAILURE)
+}
+
 MainActor.assumeIsolated {
     let application = NSApplication.shared
     application.setActivationPolicy(.accessory)
