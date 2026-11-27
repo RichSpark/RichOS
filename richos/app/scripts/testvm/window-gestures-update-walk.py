@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
-"""Walk a signed v1.3.8 update and exercise gestures after each real RichOS reopen."""
+"""Walk a signed v1.3.8 update and exercise gestures after each real RichOS reopen.
+
+--engine TAR installs the engine release archive where an installed RichOS keeps it
+(~/Library/Application Support/RichOS/engine) before v1.3.8 first opens, as its own setup leaves
+it on a user's Mac, so companies and settings exist to be carried across the update.
+--steps STAGE=FILE runs a steps-walk.py list on this walk's guest at one stage, as many as needed:
+before-download (the update offered, nothing downloaded), after-update (the new version running),
+cycle (after each cycle's gesture checks, its record under cycle-N-steps) and end (after the
+last cycle). A walker's own checks are data, not more code here (added with the nightly 122 walk).
+"""
 import argparse
 import importlib.util
 import json
@@ -18,8 +27,27 @@ p.add_argument('--signature', type=Path, required=True)
 p.add_argument('--update-version', required=True)
 p.add_argument('--out', type=Path, required=True)
 p.add_argument('--cycles', type=int, default=3)
+p.add_argument('--engine', type=Path, help='engine release archive installed before v1.3.8 first opens')
+STAGES = ('before-download', 'after-update', 'cycle', 'end')
+p.add_argument('--steps', action='append', default=[], metavar='STAGE=FILE',
+               help='a steps-walk.py list run at STAGE: ' + ', '.join(STAGES))
 p.set_defaults(suite='gestures', scenario='restart', within=125)
 a = p.parse_args()
+steps_at = {}
+for item in a.steps:
+    stage, _, file = item.partition('=')
+    if stage not in STAGES or not Path(file).is_file():
+        p.error(f'--steps {item}: give STAGE=FILE with STAGE one of {", ".join(STAGES)} and an existing FILE')
+    if stage in steps_at:
+        p.error(f'--steps: {stage} given twice')
+    steps_at[stage] = Path(file).resolve()
+if a.engine and not a.engine.is_file():
+    p.error(f'--engine {a.engine}: no such file')
+for stage, file in steps_at.items():
+    checked = subprocess.run([sys.executable, str(a.harness / 'steps-walk.py'), '--check', str(file)],
+                             capture_output=True, text=True)
+    if checked.returncode:
+        p.error(f'--steps {stage}={file} does not check: {(checked.stdout + checked.stderr).strip()}')
 sys.path.insert(0, str(a.harness))
 spec = importlib.util.spec_from_file_location('update_walk', a.harness / 'update-in-place-walk.py')
 up = importlib.util.module_from_spec(spec)
@@ -52,8 +80,31 @@ class GestureWalk(up.Walk):
     def key(self, *args):
         return self.g(shlex.join(['python3', self.work + '/hid-key.py', *args]))
 
+    def steps(self, stage, label):
+        """The walker's steps-walk list for STAGE on this guest, recorded under <out>/LABEL."""
+        out = a.out / label
+        result = subprocess.run([sys.executable, str(a.harness / 'steps-walk.py'), self.vm, '--steps',
+                                 str(steps_at[stage]), '--out', str(out)], capture_output=True, text=True, timeout=3600)
+        rows = json.loads((out / 'steps.json').read_text()) if (out / 'steps.json').is_file() else []
+        failed = [row['i'] for row in rows if row.get('exit')]
+        if result.returncode:
+            raise RuntimeError(f'steps-walk exit {result.returncode}, failed steps {failed}: '
+                               + (result.stdout + result.stderr).strip()[-600:])
+        return {'steps': len(rows), 'failed_allowed': failed, 'record': str(out / 'steps.json')}
+
+    def install_engine(self):
+        engine = self.home + '/Library/Application Support/RichOS/engine'
+        archive = self.work + '/engine.tar.gz'
+        self.push(a.engine, archive)
+        self.g('mkdir -p ' + q(engine) + ' && tar -C ' + q(engine) + ' --strip-components 1 -xzf ' + q(archive)
+               + ' && test -d ' + q(engine + '/scripts/hooks') + ' && test -f ' + q(engine + '/VERSION'), 300)
+        return {'engine': engine, 'version': self.g('cat ' + q(engine + '/VERSION'))}
+
     def prepare_inputs(self):
         home = self.home
+        self.g('mkdir -p ' + q(self.work))
+        if a.engine:
+            self.facts['engine'] = self.install_engine()
         for name in ('hid-key.py', 'trash-diff.py', 'fake-claude-fill-first.pl'):
             self.push(a.harness / name, self.work + '/' + name)
         fake = self.work + '/claude'
@@ -249,6 +300,10 @@ def record(stage, fn, fatal=True):
         print(stage, report[stage], flush=True)
         save()
 
+def walker_steps(stage, label):
+    if stage in steps_at:
+        record(label + '-steps', lambda: w.steps(stage, label + '-steps'), False)
+
 def same_helper():
     pid = w.helper_ready()
     if pid != report['updated-helper']['result']:
@@ -262,10 +317,12 @@ try:
     assert w.version() == '1.3.8'
     record('stable-helper', w.grant_existing_permission)
     record('ready', w.ready)
+    walker_steps('before-download', 'before-download')
     record('download', w.download)
     record('updated-helper', lambda: w.wait(lambda: (pid if (pid := w.helper_ready()) and pid !=
            report['stable-helper']['result'] and w.running_build('gestures', pid, a.update_version) else None),
            'the updated launchd process', 45))
+    walker_steps('after-update', 'after-update')
     for i in range(a.cycles + 1):
         cycle = f'cycle-{i}'
         if i:
@@ -279,6 +336,8 @@ try:
         record(cycle + '-switcher', w.switcher, False)
         record(cycle + '-dock', w.dock_minimize, False)
         record(cycle + '-same-helper', same_helper, False)
+        walker_steps('cycle', cycle)
+    walker_steps('end', 'end')
 finally:
     for name in ('richfiles-window-gestures.jsonl', 'richfiles-timing.jsonl'):
         w.pull(w.home + '/Library/Logs/RichOS/' + name, a.out / name)
