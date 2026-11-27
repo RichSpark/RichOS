@@ -242,6 +242,15 @@ with tempfile.TemporaryDirectory(prefix='steps-walk-test-') as tmp:
     seen.clear()
     mod.step_run('no-such-vm', {'op': 'pointer', 'points': ['645,316'], 'double': True}, Path(tmp))
     check('pointer with double passes --double on one point', seen and seen[0][1:] == ['no-such-vm', '645,316', '--double'], seen)
+    seen.clear()
+    mod.step_run('no-such-vm', {'op': 'pointer', 'points': ['900,300', '900,300'], 'cmd': True}, Path(tmp))
+    check('pointer with cmd passes --cmd on a click', seen and seen[0][1:] == ['no-such-vm', '900,300', '900,300', '--cmd'], seen)
+    check('a Command-click step is valid', mod.problems([{'op': 'pointer', 'points': ['1,2', '1,2'], 'cmd': True}]) == [],
+          mod.problems([{'op': 'pointer', 'points': ['1,2', '1,2'], 'cmd': True}]))
+    for bad in ({'points': ['1,2'], 'cmd': True, 'double': True}, {'points': ['1,2', '1,2'], 'cmd': True, 'right': True},
+                {'points': ['1,2'], 'cmd': True, 'hover': True}, {'points': ['1,2', '1,2'], 'cmd': 'yes'}):
+        got = mod.problems([dict({'op': 'pointer'}, **bad)])
+        check('a pointer step %r is refused with a sentence' % (bad,), bool(got), got)
     check('a one-point double step is valid', mod.problems([{'op': 'pointer', 'points': ['1,2'], 'double': True}]) == [],
           mod.problems([{'op': 'pointer', 'points': ['1,2'], 'double': True}]))
     for bad in ({'points': ['1,2', '1,2'], 'double': True}, {'points': ['1,2'], 'double': True, 'right': True}):

@@ -57,6 +57,20 @@ function drive(params, frontmost, named) {
   assert.ok(posted.slice(1).every((e) => e.button === 0), "every left event names button 0");
 }
 
+// --cmd: a Command-click (the Desktop Forward Delete walk adds items to a Finder selection). Command
+// rides on the down and up events only: the move carries no flag, so no key is left down.
+{
+  const { answer, posted } = drive({ pid: 42, points: [[10, 5], [10, 5]], step: 8, pause: 0, rest: 0, cmd: true }, true);
+  assert.strictEqual(answer.cmd, true);
+  assert.deepStrictEqual(posted.map((e) => [e.type, e.flags]), [[5, undefined], [1, 0x100000], [2, 0x100000]]);
+  const plain = drive({ pid: 42, points: [[10, 5], [10, 5]], step: 8, pause: 0, rest: 0 }, true);
+  assert.strictEqual(plain.answer.cmd, false);
+  assert.ok(plain.posted.every((e) => e.flags === undefined), "a plain click sets no flag");
+  const behind = drive({ pid: 42, points: [[10, 5], [10, 5]], step: 8, pause: 0, rest: 0, cmd: true }, false);
+  assert.strictEqual(behind.answer.error, "notfront");
+  assert.strictEqual(behind.posted.length, 0);
+}
+
 // A click, then Down pressed from the same guest process after the button comes up.
 {
   const { answer, posted } = drive({ pid: 42, points: [[10, 5], [10, 5]], step: 8, pause: 0, rest: 0,
@@ -173,6 +187,7 @@ function drive(params, frontmost, named) {
   assert.deepStrictEqual(posted.map((e) => e.type), [5, 1, 2], "move, down, up: a click where the pointer is");
 }
 
+console.log("pointer-drag: a Command-click carried Command on its down and up only, and the refusal posted nothing");
 console.log("pointer-drag: a click with --as-is raised nothing and named the app in front");
 console.log("pointer-drag: a double-click with click states 1 and 2 passed");
 console.log("pointer-drag: a left drag, a right-click with no dragged event, a hover with no button, a Control-scroll in a named app and the refusals passed");

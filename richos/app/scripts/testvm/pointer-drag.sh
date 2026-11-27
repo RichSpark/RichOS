@@ -6,6 +6,11 @@
 #   testvm/pointer-drag.sh <vm> <x>,<y> --double
 #   ... [--app NAME | --as-is]
 #   ... [--then-key KEYCODE [--then-after S]]   (after a click or drag with the left or right button)
+#   ... [--cmd]                                  (Command held on a left click or drag)
+#
+#   --cmd holds Command on the button's down, dragged and up events, the way a hand Command-clicks
+#   to add an item to a Finder selection (a file, a folder and a link on the Desktop selected
+#   together). Left button only, no --hover, --double or --scroll. Added with the Desktop Forward Delete walk.
 #
 #   --then-key presses the key with that key code --then-after seconds (default 0.1, at most 5)
 #   after the button comes up, from the same guest process as the click. A key sent by a
@@ -63,12 +68,12 @@ if [ "${TESTVM_AX_SUPERVISED:-}" != 1 ]; then
 fi
 . "$HERE/lib.sh"
 
-usage="usage: pointer-drag.sh <vm> <x>,<y> <x>,<y> [<x>,<y> ...] [--step PX] [--pause S] [--rest S] [--right | --hover] [--then-key KEYCODE [--then-after S]] | <vm> <x>,<y> --scroll LINES [--ctrl] | <vm> <x>,<y> --double; any with [--app NAME | --as-is]"
+usage="usage: pointer-drag.sh <vm> <x>,<y> <x>,<y> [<x>,<y> ...] [--step PX] [--pause S] [--rest S] [--right | --hover] [--then-key KEYCODE [--then-after S]] [--cmd] | <vm> <x>,<y> --scroll LINES [--ctrl] | <vm> <x>,<y> --double; any with [--app NAME | --as-is]"
 VM="${1:-}"
 [ -n "$VM" ] || die "$usage"
 shift
 POINTS=()
-STEP=8; PAUSE=0.02; REST=0.15; RIGHT=0; HOVER=0; SCROLL=0; CTRL=0; APP=""; DOUBLE=0; ASIS=0; THEN_KEY=""; THEN_AFTER=0.1
+STEP=8; PAUSE=0.02; REST=0.15; RIGHT=0; HOVER=0; SCROLL=0; CTRL=0; APP=""; DOUBLE=0; ASIS=0; THEN_KEY=""; THEN_AFTER=0.1; CMD=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --step) STEP="${2:-}"; shift 2 ;;
@@ -80,6 +85,7 @@ while [ $# -gt 0 ]; do
     --ctrl) CTRL=1; shift ;;
     --double) DOUBLE=1; shift ;;
     --as-is) ASIS=1; shift ;;
+    --cmd) CMD=1; shift ;;
     --then-key) THEN_KEY="${2:-}"; shift 2 ;;
     --then-after) THEN_AFTER="${2:-}"; shift 2 ;;
     --app) APP="${2:-}"; [ -n "$APP" ] || die "--app needs a process name — $usage"; shift 2 ;;
@@ -89,6 +95,7 @@ while [ $# -gt 0 ]; do
 done
 [ "$ASIS" = 0 ] || [ -z "$APP" ] || die "--as-is raises no app, so it names none with --app — $usage"
 [ "$HOVER" = 0 ] || [ "$RIGHT" = 0 ] || die "--hover moves with no button, so it cannot also be --right — $usage"
+[ "$CMD" = 0 ] || { [ "$HOVER" = 0 ] && [ "$RIGHT" = 0 ] && [ "$DOUBLE" = 0 ] && [ "$SCROLL" = 0 ]; } || die "--cmd is a Command-click or drag with the left button, so it takes no --hover, --right, --double or --scroll — $usage"
 if [ -n "$THEN_KEY" ]; then
   [ "$HOVER" = 0 ] && [ "$DOUBLE" = 0 ] && [ "$SCROLL" = 0 ] || die "--then-key follows a click or drag, so it takes no --hover, --double or --scroll — $usage"
   case "$THEN_KEY" in [0-9]|[0-9][0-9]|1[0-2][0-9]) ;; *) die "--then-key takes a key code from 0 to 129 — $usage" ;; esac
@@ -143,7 +150,7 @@ DEADLINE
 # Every number is parsed here, so the guest program only ever receives JSON.
 PARAMS="$(PD_PID="$PID" PD_STEP="$STEP" PD_PAUSE="$PAUSE" PD_REST="$REST" PD_RIGHT="$RIGHT" PD_HOVER="$HOVER" \
            PD_SCROLL="$SCROLL" PD_CTRL="$CTRL" PD_APP="$APP" PD_DOUBLE="$DOUBLE" PD_ASIS="$ASIS" \
-           PD_THEN_KEY="$THEN_KEY" PD_THEN_AFTER="$THEN_AFTER" python3 - "${POINTS[@]}" <<'PY'
+           PD_THEN_KEY="$THEN_KEY" PD_THEN_AFTER="$THEN_AFTER" PD_CMD="$CMD" python3 - "${POINTS[@]}" <<'PY'
 import json, os, sys
 try:
     points = [[float(v) for v in p.split(',', 1)] for p in sys.argv[1:]]
@@ -162,6 +169,7 @@ print("var DRAG_PARAMS = " + json.dumps({"pid": int(os.environ['PD_PID']), "poin
                                          "asis": os.environ['PD_ASIS'] == '1',
                                          "thenKey": int(os.environ['PD_THEN_KEY']) if os.environ['PD_THEN_KEY'] else None,
                                          "thenAfter": then_after,
+                                         "cmd": os.environ['PD_CMD'] == '1',
                                          "app": os.environ['PD_APP'] or None}) + ";")
 PY
 )"
