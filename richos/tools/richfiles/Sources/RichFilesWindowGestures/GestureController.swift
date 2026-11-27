@@ -43,7 +43,7 @@ final class GestureController {
     private var selection: Preferences.Selection = []
     private var reportedStatus: Preferences.Status?
     private let desktopFolder = DesktopFolderClick()
-    private var desktopMenuOrigin: CGPoint?
+    private var desktopMenu: (origin: CGPoint, contextual: Bool)?
     private struct NewDesktopFolder {
         let finder: pid_t
         var foreground: NSRunningApplication?
@@ -234,7 +234,7 @@ final class GestureController {
                 let controller = Unmanaged<GestureController>.fromOpaque(context).takeUnretainedValue()
                 if type == .keyDown {
                     if controller.handleWindowShortcut(event) {
-                        controller.desktopMenuOrigin = nil
+                        controller.desktopMenu = nil
                         controller.desktopKeyRevision &+= 1
                         controller.newDesktopFolder = nil
                         controller.desktopIconClick = nil
@@ -264,7 +264,7 @@ final class GestureController {
             guard let context else { return Unmanaged.passUnretained(event) }
             let controller = Unmanaged<GestureController>.fromOpaque(context).takeUnretainedValue()
             controller.desktopKeyRevision &+= 1
-            controller.desktopMenuOrigin = nil
+            controller.desktopMenu = nil
             if type == .keyDown { return controller.desktopKeyEvent(event) }
             controller.newDesktopFolder = nil
             controller.desktopIconClick = nil
@@ -292,7 +292,7 @@ final class GestureController {
         if let desktopKeyTap { CFMachPortInvalidate(desktopKeyTap) }
         desktopKeySource = nil
         desktopKeyTap = nil
-        desktopMenuOrigin = nil
+        desktopMenu = nil
         newDesktopFolder = nil
         desktopIconClick = nil
         desktopKeyRevision &+= 1
@@ -317,7 +317,7 @@ final class GestureController {
             press = nil
             firstTitleClick = nil
             tileDrag = nil
-            desktopMenuOrigin = nil
+            desktopMenu = nil
             newDesktopFolder = nil
             desktopIconClick = nil
             if let tap, AXIsProcessTrusted() { CGEvent.tapEnable(tap: tap, enable: true) }
@@ -515,13 +515,12 @@ final class GestureController {
         record(.windowGestureTileRestore, restored ? .complete : .issues, started: started)
     }
 
-    // Finder starts editing the name as soon as its New Folder menu command runs.
-    // Remember that command only until the user interacts with the new editor.
+    // Remember Finder's New Folder command before it opens the rename editor.
     private func trackDesktopMenu(_ type: CGEventType, _ event: CGEvent) {
         let contextClick = type == .rightMouseDown || (type == .leftMouseDown && event.flags.contains(.maskControl))
         if contextClick {
             newDesktopFolder = nil
-            desktopMenuOrigin = DesktopFolderClick.isDesktopWindow(at: event.unflippedLocation) ? event.location : nil
+            desktopMenu = DesktopFolderClick.isDesktopWindow(at: event.unflippedLocation) ? (event.location, true) : nil
             return
         }
         switch type {
@@ -529,15 +528,31 @@ final class GestureController {
             newDesktopFolder = nil
         case .leftMouseUp, .rightMouseUp:
             // A press-drag-release can choose the menu command in one gesture.
-            guard let origin = desktopMenuOrigin, hypot(origin.x - event.location.x, origin.y - event.location.y) >= 5 else { return }
+            guard let origin = desktopMenu?.origin, hypot(origin.x - event.location.x, origin.y - event.location.y) >= 5 else { return }
         default: return
         }
-        guard desktopMenuOrigin != nil else { return }
-        desktopMenuOrigin = nil
+        let foreground = NSWorkspace.shared.frontmostApplication
+        guard let menu = desktopMenu else {
+            guard type == .leftMouseDown, let foreground, foreground.bundleIdentifier == "com.apple.finder",
+                  GestureDisplay.current().contains(where: { $0.frame.contains(event.location) && event.location.y < $0.usable.minY }),
+                  hit(at: event.location)?.role == kAXMenuBarItemRole,
+                  desktopFileGroup(finderElement(foreground.processIdentifier)) != nil else { return }
+            desktopMenu = (event.location, false)
+            return
+        }
+        desktopMenu = nil
         guard type != .otherMouseDown, let item = hit(at: event.location), item.role == kAXMenuItemRole,
-              item.value(kAXIdentifierAttribute) as String? == "cmdNewFolderAtMouseLocation:",
               let pid = item.processID, NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == "com.apple.finder" else { return }
-        newDesktopFolder = NewDesktopFolder(finder: pid, foreground: NSWorkspace.shared.frontmostApplication, chosenAt: Date())
+        if menu.contextual {
+            guard item.value(kAXIdentifierAttribute) as String? == "cmdNewFolderAtMouseLocation:" else { return }
+        } else {
+            // Finder's File-menu item has no stable identifier. Its standard
+            // Shift-Command-N equivalent distinguishes it from New Folder with Selection.
+            guard foreground?.processIdentifier == pid,
+                  (item.value("AXMenuItemCmdChar") as String?)?.caseInsensitiveCompare("N") == .orderedSame,
+                  item.value("AXMenuItemCmdModifiers") as Int? == 1 else { return }
+        }
+        newDesktopFolder = NewDesktopFolder(finder: pid, foreground: foreground, chosenAt: Date())
     }
 
     private func desktopFileGroup(_ finder: AXUIElement) -> AXUIElement? {
@@ -656,6 +671,12 @@ final class GestureController {
 
         switch key {
         case .passThrough:
+            return Unmanaged.passUnretained(event)
+        case .newFolder:
+            if app.bundleIdentifier == "com.apple.finder",
+               let group = desktopFileGroup(finderElement(pid)), keyboardFocus(in: pid) == group {
+                newDesktopFolder = NewDesktopFolder(finder: pid, foreground: app, chosenAt: Date())
+            }
             return Unmanaged.passUnretained(event)
         case .backspace:
             guard app.bundleIdentifier == "com.apple.finder",
