@@ -4079,6 +4079,35 @@ class DesktopWork(unittest.TestCase):
         self.assertTrue(self.call("integrate", args)["work_integrated"])
         self.assertEqual(self.land_rows(), rows)
 
+    def test_integrate_retry_preserves_ignored_files_after_the_archive_returns(self):
+        args = self.reviewed_pair("retry-archive")
+        workspaces = [self.target_of(self.record_of({"id": args[key]})) for key in ("worker_id", "reviewer_id")]
+        exclude_path = self.repo / ".git/info/exclude"
+        exclude_path.parent.mkdir(exist_ok=True)
+        with exclude_path.open("a") as exclude:
+            exclude.write("\n.env\n")
+        notes = ["worker fixture notes", "reviewer fixture notes"]
+        for workspace, content in zip(workspaces, notes):
+            (workspace / ".env").write_text(content)
+
+        archive = Path(self.app.W.state_dir()) / "kept"
+        archive.write_text("Fixture archive path temporarily unavailable")
+        first = self.call("integrate", args)
+        self.assertTrue(first["work_integrated"])
+        self.assertTrue(first["cleanup_pending"])
+        self.assertEqual([(workspace / ".env").read_text() for workspace in workspaces], notes)
+        landed = self.app.git(self.repo, "rev-parse", "main")
+
+        archive.unlink()
+        retry = self.call("integrate", args)
+        self.assertTrue(retry["work_integrated"])
+        self.assertEqual(retry["cleanup_pending"], [])
+        self.assertEqual(self.app.git(self.repo, "rev-parse", "main"), landed)
+        self.assertTrue(all(not workspace.exists() for workspace in workspaces))
+        self.assertCountEqual([path.read_text() for path in archive.rglob(".env")], notes)
+        done = self.call("complete", {"obligation_id": "fixture-task", "worker_ids": [args["worker_id"]]})
+        self.assertTrue(done["obligation_closed"])
+
     def test_land_witness_of_a_job_in_two_repositories_names_each_repositorys_own_paths(self):
         second=self.second_repository()
         spec={**self.args,"request_id":"multi-witness","repos":[str(second)]}

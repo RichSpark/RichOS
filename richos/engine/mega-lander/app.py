@@ -2839,7 +2839,7 @@ def integrate(scope_path,scope,args):
             for record in [worker,*reviews]:
                 try:
                     read_scope(scope_path)
-                    result = W.land(record["workspace_ref"],me=scope["binding"]["session_id"])
+                    result = W.land(record["workspace_ref"], me=scope["binding"]["session_id"], keep_ignored=True)
                     if not result.get("landed") or result.get("cleanup_pending"):
                         raise ValueError(f"Workspace cleanup for {record['name']} remains pending; its reviewed commit is still integrated.")
                 except Exception as error: failures.append(str(error)[-4000:])
