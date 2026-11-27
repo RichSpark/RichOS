@@ -332,12 +332,12 @@ fi
 # shellcheck source=../lib/registered-hooks.sh
 . "$_RH_LIB"
 
-if ! ROWS="$(registered_hook_rows "$SURFACE")"; then
+if ! INVENTORY="$(registered_hook_rows "$SURFACE" --with-host-order)"; then
     emit_context "enforcing-hook snapshot: NO BASELINE WRITTEN — could not derive the enforcing set from $SURFACE (missing, unparseable, registering nothing, or no python3). notice-hook-staleness.sh will say it cannot compare this session. A landed-but-inert guard will NOT be reported until this is fixed and the session restarted."
     exit 0
 fi
 
-ROW_COUNT="$(printf '%s\n' "$ROWS" | grep -c . || true)"
+ROW_COUNT="$(printf '%s\n' "$INVENTORY" | grep -vc '^#' || true)"
 if [ "${ROW_COUNT:-0}" -lt 1 ]; then
     emit_context "enforcing-hook snapshot: NO BASELINE WRITTEN — $SURFACE parsed but produced zero registration rows. Refusing to record an empty baseline: every later comparison against it would report 'no drift' for the wrong reason."
     exit 0
@@ -404,7 +404,7 @@ esac
     printf '# session=%s generated=%s engine=%s surface=%s modules=tracked rows=%s\n' \
         "${SESSION_ID:-unknown}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         "$ENGINE_ROOT" "$SURFACE" "$ROW_COUNT"
-    printf '%s\n' "$ROWS"
+    printf '%s\n' "$INVENTORY"
 } >"$TMP_PATH" 2>/dev/null || true
 
 if [ -f "$TMP_PATH" ]; then
@@ -435,5 +435,5 @@ if command -v ls >/dev/null 2>&1; then
     fi
 fi
 
-emit_context "enforcing-hook snapshot: recorded the ${ROW_COUNT} hook registrations this session actually booted with -> .claude/state/$SNAP_NAME. If a guard is landed into the engine's hooks/hooks.json later in this session, notice-hook-staleness.sh will name it at the end of a turn and tell you it is inert until you restart."
+emit_context "enforcing-hook snapshot: recorded the ${ROW_COUNT} hook registrations this session actually booted with -> .claude/state/$SNAP_NAME. If host hooks are added or reordered later in this session, notice-hook-staleness.sh will report the change at the end of a turn and tell you to restart."
 exit 0

@@ -15,7 +15,7 @@
 #   ZERO FALSE POSITIVES. A session in which the hook table did not change must
 #   produce NOTHING — not a quiet OK, not an empty JSON object, nothing at all.
 #   Cases 2, 2b, 2c and 8b assert byte-empty output under conditions that could
-#   plausibly fool a weaker design: an unchanged table, a REORDERED table, an
+#   plausibly fool a weaker design: an unchanged table, reordered event keys, an
 #   edited guard BODY, and an edited settings surface. The last two are the
 #   measured facts the whole design turns on — script bodies and settings hooks
 #   both take effect immediately, so reporting either as "inert" would be a
@@ -33,7 +33,8 @@
 #   (1)  snapshotter writes a baseline: header, rows= count, latest symlink
 #   (1b) baseline rows are DERIVED from the surface, not typed
 #   (2)  unchanged table                       -> byte-empty output
-#   (2b) REORDERED table, same set             -> byte-empty output
+#   (2b) reordered event keys                 -> byte-empty output
+#   (2d) reordered PreToolUse hooks            -> restart notice
 #   (2c) guard BODY edited mid-session         -> byte-empty (bodies are live)
 #   (3)  guard landed mid-session              -> notice naming it, INERT, and
 #                                                 RESTART as the operator's act
@@ -319,24 +320,79 @@ case "$OUT" in
     *)  bad "2m6 a legacy baseline must still check command registrations" "$OUT" ;;
 esac
 
-# A REORDER is the classic spurious-diff generator: same set, different file.
+# Event keys dispatch independently. Reordering the JSON object alone is silent.
 R2="$(make_sandbox)"
 take_baseline "$R2"
 python3 - "$R2/hooks.json" <<'PY'
 import json, sys
 p = sys.argv[1]
 d = json.load(open(p))
-for event in d.get("hooks", {}):
-    d["hooks"][event] = list(reversed(d["hooks"][event]))
 d["hooks"] = dict(reversed(list(d["hooks"].items())))
 json.dump(d, open(p, "w"), indent=2)
 PY
 OUT="$(run_notice "$R2")"
 if [ -z "$OUT" ]; then
-    ok "2b  table REORDERED, same set -> byte-empty (a set comparison, not a diff)"
+    ok "2b  event keys reordered -> byte-empty"
 else
-    bad "2b  reorder is silent" "(said: $OUT)"
+    bad "2b  event key reorder is silent" "(said: $OUT)"
 fi
+
+# Finding 65: the Pierce move in 04506a7e5 changed the order of overlapping
+# PreToolUse matchers without adding or removing a registration.
+RORDER="$(make_sandbox)"
+cat >"$RORDER/hooks.json" <<'JSON'
+{"hooks":{"PreToolUse":[
+    {"matcher":"Bash|Write|Edit|MultiEdit","hooks":[
+        {"type":"command","command":"bash ${CLAUDE_PLUGIN_ROOT}/scripts/hooks/guard-pierce.sh"}
+    ]},
+    {"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[
+        {"type":"command","command":"bash ${CLAUDE_PLUGIN_ROOT}/scripts/hooks/dispatch-pretooluse.sh Write"},
+        {"type":"command","command":"bash ${CLAUDE_PLUGIN_ROOT}/scripts/hooks/dialect-guard.sh"}
+    ]}
+]}}
+JSON
+take_baseline "$RORDER"
+cp "$RORDER/hooks.json" "$RORDER/original.json"
+python3 - "$RORDER/hooks.json" <<'PYORDER'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+entries = d["hooks"]["PreToolUse"]
+entries.append(entries.pop(0))
+json.dump(d, open(p, "w"), indent=2)
+PYORDER
+OUT="$(run_notice "$RORDER")"
+case "$OUT" in
+    *"hook order changed"*"PreToolUse"*"RESTART THIS SESSION"*)
+        ok "2d  Pierce moved behind Write hooks -> restart notice" ;;
+    *)  bad "2d  Pierce moved behind Write hooks -> restart notice" "${OUT:-<silent>}" ;;
+esac
+OUT="$(run_notice "$RORDER")"
+[ -z "$OUT" ] && ok "2d2 unchanged order drift is announced once" \
+              || bad "2d2 duplicate order notice" "$OUT"
+cp "$RORDER/original.json" "$RORDER/hooks.json"
+OUT="$(run_notice "$RORDER")"
+[ -z "$OUT" ] && ok "2d3 reverting the order is quiet" \
+              || bad "2d3 revert raised order drift" "$OUT"
+
+RLEGACYORDER="$(make_sandbox)"
+take_baseline "$RLEGACYORDER"
+LEGACY_SNAPSHOT="$RLEGACYORDER/.claude/state/enforcing-hooks-${SESSION_SHORT}.snapshot"
+sed '/^# host-order/d' "$LEGACY_SNAPSHOT" >"$LEGACY_SNAPSHOT.old"
+mv "$LEGACY_SNAPSHOT.old" "$LEGACY_SNAPSHOT"
+OUT="$(run_notice "$RLEGACYORDER")"
+case "$OUT" in
+    *"predates host hook order tracking"*"RESTART THIS SESSION"*)
+        ok "2d4 set-only baseline asks for a restart to capture host order" ;;
+    *)  bad "2d4 set-only baseline asks for a restart to capture host order" "${OUT:-<silent>}" ;;
+esac
+wire_hook "$RLEGACYORDER/hooks.json" "Stop" "zz-fixture-legacy-order.sh"
+OUT="$(run_notice "$RLEGACYORDER")"
+case "$OUT" in
+    *"zz-fixture-legacy-order.sh"*"RESTART THIS SESSION"*)
+        ok "2d5 set-only baseline still reports newly registered hooks" ;;
+    *)  bad "2d5 set-only baseline still reports newly registered hooks" "${OUT:-<silent>}" ;;
+esac
 
 # A guard BODY edit. MEASURED FACT: a registration names `bash <path>` and that
 # path is executed afresh on every event, so a body edit is live immediately.

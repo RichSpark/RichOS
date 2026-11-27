@@ -422,7 +422,7 @@ for name in sorted(found):
     printf '%s\n' "$out"
 }
 
-# registered_hook_rows <path-to-hooks.json> [--host-only]
+# registered_hook_rows <path-to-hooks.json> [--host-only|--with-host-order]
 #
 # The same registration surface, read at one more level of detail: prints one
 # TAB-separated row per registered hook script,
@@ -433,6 +433,8 @@ for name in sorted(found):
 # A plugin module uses "Plugin module", "-", and the path from modules[].
 # Inline hooks that run no script contribute nothing, exactly as above.
 # --host-only excludes rules expanded from the live dispatcher manifest.
+# --with-host-order also emits comment rows with the host command order
+# inside each event, for the staleness snapshot and comparison.
 #
 # WHY A SECOND FUNCTION RATHER THAN A RICHER FIRST ONE
 # ----------------------------------------------------
@@ -471,6 +473,7 @@ registered_hook_rows() {
 import json, os, sys
 from hook_command import executed_hooks, dispatch_keys
 host_only = sys.argv[3] == "--host-only"
+with_host_order = sys.argv[3] == "--with-host-order"
 with open(sys.argv[1], encoding="utf-8") as fh:
     doc = json.load(fh)
 
@@ -508,6 +511,7 @@ for _c in ([] if host_only else _cands):
     break
 
 rows = set()
+host_order = []
 modules = doc.get("modules", [])
 if not isinstance(modules, list):
     raise SystemExit(2)
@@ -536,7 +540,10 @@ if isinstance(hooks, dict):
                 if not isinstance(cmd, str):
                     continue
                 for m in executed_hooks(cmd):
-                    rows.add("%s\t%s\t%s" % (event, matcher, m))
+                    row = "%s\t%s\t%s" % (event, matcher, m)
+                    rows.add(row)
+                    if with_host_order:
+                        host_order.append((event, row))
                 if host_only:
                     continue
                 for dk in dispatch_keys(cmd):
@@ -548,6 +555,12 @@ if isinstance(hooks, dict):
 # A surface that never names the dispatcher needs no manifest, as before.
 if used_dispatcher and not (found_manifest and manifest_ok):
     raise SystemExit(3)
+if with_host_order and rows:
+    print("# host-order-count=%d" % len(host_order))
+    # Events dispatch independently. Keep matcher and command order within
+    # each event, without depending on the order of JSON object keys.
+    for _, row in sorted(host_order, key=lambda item: item[0]):
+        print("# host-order\t" + row)
 for row in sorted(rows):
     print(row)
 ' "$f" "$_RH_LIB_DIR" "${2:-}" 2>/dev/null)"
