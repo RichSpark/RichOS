@@ -55,9 +55,13 @@ function run() {
   // P.cmd: Command held on the button's down, dragged and up events (kCGEventFlagMaskCommand),
   // the way a hand Command-clicks to add an item to a Finder selection. Set on those events only,
   // so no key is left down. Added with the Desktop Forward Delete walk (several Desktop items selected together).
-  function mouse(type, x, y) {
+  function mouse(type, x, y, clicks) {
     var ev = $.CGEventCreateMouseEvent($(), type, { x: x, y: y }, type === 5 ? 0 : button);
-    if (P.cmd && type !== 5) $.CGEventSetFlags(ev, 0x100000);
+    // Quartz can copy flags from a preceding synthetic keyboard event.
+    // Post the exact modifiers requested for this pointer action.
+    var flags = (P.fn ? 0x800000 : 0) | (P.cmd && type !== 5 ? 0x100000 : 0);
+    $.CGEventSetFlags(ev, flags);
+    if (clicks) $.CGEventSetIntegerValueField(ev, 1, clicks);
     $.CGEventPost(0, ev);
   }
   var pts = P.points;
@@ -72,7 +76,7 @@ function run() {
     var dir = P.scroll > 0 ? 1 : -1;
     for (var w = 0; w < Math.abs(P.scroll); w++) {
       var wheel = $.CGEventCreateScrollWheelEvent2($(), 1, 1, dir, 0, 0);
-      if (P.ctrl) $.CGEventSetFlags(wheel, 0x40000);
+      $.CGEventSetFlags(wheel, (P.ctrl ? 0x40000 : 0) | (P.fn ? 0x800000 : 0));
       $.CGEventPost(0, wheel);
       delay(Math.max(P.pause, 0.05));
     }
@@ -89,9 +93,7 @@ function run() {
     var presses = 0;
     for (var c = 1; c <= 2; c++) {
       [1, 2].forEach(function (type) {
-        var ev = $.CGEventCreateMouseEvent($(), type, { x: pts[0][0], y: pts[0][1] }, 0);
-        $.CGEventSetIntegerValueField(ev, 1, c);
-        $.CGEventPost(0, ev);
+        mouse(type, pts[0][0], pts[0][1], c);
         presses += 1;
         delay(0.04);
       });

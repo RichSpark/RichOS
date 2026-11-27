@@ -35,7 +35,7 @@ function drive(params, frontmost, named) {
     },
   };
   const $ = function () { return null; };
-  $.CGEventCreateMouseEvent = (src, type, point, button) => ({ type, button, x: point.x, y: point.y });
+  $.CGEventCreateMouseEvent = (src, type, point, button) => ({ type, button, x: point.x, y: point.y, flags: 0x120000 });
   $.CGEventCreateScrollWheelEvent2 = (src, units, count, d1) => ({ type: 22, units, count, d1, flags: 0 });
   $.CGEventSetFlags = (ev, flags) => { ev.flags = flags; };
   $.CGEventSetIntegerValueField = (ev, field, value) => { if (field === 1) ev.clickState = value; };
@@ -62,13 +62,21 @@ function drive(params, frontmost, named) {
 {
   const { answer, posted } = drive({ pid: 42, points: [[10, 5], [10, 5]], step: 8, pause: 0, rest: 0, cmd: true }, true);
   assert.strictEqual(answer.cmd, true);
-  assert.deepStrictEqual(posted.map((e) => [e.type, e.flags]), [[5, undefined], [1, 0x100000], [2, 0x100000]]);
+  assert.deepStrictEqual(posted.map((e) => [e.type, e.flags]), [[5, 0], [1, 0x100000], [2, 0x100000]]);
   const plain = drive({ pid: 42, points: [[10, 5], [10, 5]], step: 8, pause: 0, rest: 0 }, true);
   assert.strictEqual(plain.answer.cmd, false);
-  assert.ok(plain.posted.every((e) => e.flags === undefined), "a plain click sets no flag");
+  assert.ok(plain.posted.every((e) => e.flags === 0), "a plain click clears inherited keyboard flags");
   const behind = drive({ pid: 42, points: [[10, 5], [10, 5]], step: 8, pause: 0, rest: 0, cmd: true }, false);
   assert.strictEqual(behind.answer.error, "notfront");
   assert.strictEqual(behind.posted.length, 0);
+}
+
+// Fn can be present on legitimate pointer events after keyboard input.
+{
+  const { answer, posted } = drive({ pid: 42, points: [[10, 5]], double: true, fn: true }, true);
+  assert.strictEqual(answer.doubled, true);
+  assert.deepStrictEqual(posted.slice(1).map((e) => e.clickState), [1, 1, 2, 2]);
+  assert.ok(posted.every((e) => e.flags === 0x800000), "Fn is the only requested modifier");
 }
 
 // A click, then Down pressed from the same guest process after the button comes up.
@@ -176,6 +184,7 @@ function drive(params, frontmost, named) {
   };
   const $ = function () { return null; };
   $.CGEventCreateMouseEvent = (src, type, point, button) => ({ type, button, x: point.x, y: point.y });
+  $.CGEventSetFlags = (ev, flags) => { ev.flags = flags; };
   $.CGEventPost = (tap, ev) => posted.push(ev);
   const fn = new Function("ObjC", "delay", "Application", "$", "DRAG_PARAMS", SOURCE + "\nreturn run();");
   const answer = JSON.parse(fn({ import() {} }, () => {}, sandbox.Application, $,
