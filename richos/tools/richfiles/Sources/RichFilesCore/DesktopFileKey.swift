@@ -10,12 +10,16 @@ public enum DesktopFileKey {
     public static func classify(_ event: CGEvent) -> Self {
         let modifiers: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift]
         guard event.type == .keyDown else { return .passThrough }
-        let key = Int(event.getIntegerValueField(.keyboardEventKeycode))
         let pressed = event.flags.intersection(modifiers)
         let repeated = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
-        if key == kVK_ANSI_N, pressed == [.maskCommand, .maskShift], !repeated { return .newFolder }
+        // Finder uses the layout's Command mapping, which can differ from
+        // the character produced with only Shift held.
+        if pressed == [.maskCommand, .maskShift], !repeated,
+           NSEvent(cgEvent: event)?.characters(byApplyingModifiers: [.command, .shift])?.lowercased() == "n" {
+            return .newFolder
+        }
         guard pressed.isEmpty else { return .passThrough }
-        switch key {
+        switch Int(event.getIntegerValueField(.keyboardEventKeycode)) {
         case kVK_Delete:
             return event.flags.contains(.maskSecondaryFn) ? .passThrough : .backspace
         case kVK_ForwardDelete:

@@ -5,17 +5,31 @@ import XCTest
 
 final class DesktopFileKeyTests: XCTestCase {
     func testOnlyTheInitialNewFolderShortcutStartsTracking() throws {
-        let key = try XCTUnwrap(CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(kVK_ANSI_N), keyDown: true))
-        key.flags = [.maskCommand, .maskShift]
-        XCTAssertEqual(DesktopFileKey.classify(key), .newFolder)
+        let keys = try (0...47).map { try key($0) }
+        let event = try XCTUnwrap(keys.first { menuCharacter($0) == "n" })
+        event.flags = [.maskCommand, .maskShift]
+        XCTAssertEqual(DesktopFileKey.classify(event), .newFolder)
 
-        key.setIntegerValueField(.keyboardEventAutorepeat, value: 1)
-        XCTAssertEqual(DesktopFileKey.classify(key), .passThrough)
-        key.setIntegerValueField(.keyboardEventAutorepeat, value: 0)
-        key.flags = [.maskCommand, .maskShift, .maskControl]
-        XCTAssertEqual(DesktopFileKey.classify(key), .passThrough)
-        key.flags = [.maskCommand]
-        XCTAssertEqual(DesktopFileKey.classify(key), .passThrough)
+        event.setIntegerValueField(.keyboardEventAutorepeat, value: 1)
+        XCTAssertEqual(DesktopFileKey.classify(event), .passThrough)
+        event.setIntegerValueField(.keyboardEventAutorepeat, value: 0)
+        event.flags = [.maskCommand, .maskShift, .maskControl]
+        XCTAssertEqual(DesktopFileKey.classify(event), .passThrough)
+        event.flags = [.maskCommand]
+        XCTAssertEqual(DesktopFileKey.classify(event), .passThrough)
+    }
+
+    func testNewFolderShortcutUsesSystemDerivedCommandCharacters() throws {
+        for code in 0...47 {
+            let event = try key(code)
+            event.flags = [.maskCommand, .maskShift]
+            let expected: DesktopFileKey = menuCharacter(event) == "n" ? .newFolder : .passThrough
+            XCTAssertEqual(DesktopFileKey.classify(event), expected)
+        }
+    }
+
+    private func menuCharacter(_ event: CGEvent) -> String? {
+        NSEvent(cgEvent: event)?.characters(byApplyingModifiers: [.command, .shift])?.lowercased()
     }
 
     func testDesktopDefaultsAndIndependentOptOutsSurviveUpgradeAndRelaunch() throws {
