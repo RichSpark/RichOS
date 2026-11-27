@@ -183,6 +183,10 @@ struct Backend {
     /// first, once their chat opens, even after later input has moved the scan past them. Its own
     /// lock, never taken while waiting on [`Self::inner`].
     gate_held: Mutex<std::collections::BTreeSet<u64>>,
+    /// Inbox rows whose delivery the app's end cut off ([`WorkHost::next_for_stu`]), read at
+    /// this back end's first selection; `None` until read. Its own lock, like
+    /// [`Self::gate_held`].
+    cut_off: Mutex<Option<std::collections::BTreeSet<u64>>>,
 }
 impl Backend {
     fn new() -> Arc<Self> {
@@ -191,6 +195,7 @@ impl Backend {
             moving: Mutex::new(()),
             lease: Mutex::new(None),
             gate_held: Mutex::new(Default::default()),
+            cut_off: Mutex::new(None),
             inner: Mutex::new(Inner::default()),
             wake: Condvar::new(),
         })
@@ -248,16 +253,28 @@ impl WorkHost {
             turn_gate: crate::turn_gate::Slot::new(),
         })
     }
-    pub fn set_turn_gate(&self, gate: Arc<crate::turn_gate::TurnGate>) {
+    pub fn set_turn_gate(self: &Arc<Self>, gate: Arc<crate::turn_gate::TurnGate>) {
+        // The moment the user first acts in a chat, what the rule held in Stu's inbox there
+        // (work cut off by the app's end, input saved before) is looked at again, so it goes
+        // then rather than at his back end's next idle check.
+        let host = Arc::downgrade(self);
+        gate.when_a_chat_opens(Arc::new(move || {
+            let Some(host) = host.upgrade() else { return };
+            let backends: Vec<_> = host.backends.lock().unwrap().values().cloned().collect();
+            for backend in backends.iter().filter(|backend| !backend.gate_held.lock().unwrap().is_empty()
+                || backend.cut_off.lock().unwrap().as_ref().is_some_and(|rows| !rows.is_empty())) {
+                backend.wake.notify_all();
+            }
+        }));
         if self.turn_gate.set(gate).is_err() {
             eprintln!("[richos] the work host's turn gate was already set");
         }
     }
 
-    /// **May Stu be sent this saved input now?** ([`crate::turn_gate`]) An input whose
-    /// delivery was still under way when the app last ended carries on; one written to his
-    /// inbox while the app is open is new; anything else in his inbox was saved before and
-    /// waits until the user is active in this chat. `input` is the
+    /// **May Stu be sent this saved input now?** ([`crate::turn_gate`]) One written to his
+    /// inbox while the app is open is new. An input whose delivery was still under way when the
+    /// app last ended was cut off by it, and anything else in his inbox was saved before: both
+    /// wait until the user is active in this chat. `input` is the
     /// attempt's name (`peer:<offset>`, `answer:<id>`); `through` is the inbox row's end, none
     /// for an answer, whose own record is not in the inbox.
     fn may_send(&self, binding: &ThreadBinding, input: &str, through: Option<u64>) -> bool {
@@ -1129,6 +1146,37 @@ impl WorkHost {
     fn next_for_stu(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding, mut after: u64,
         released: &mut Vec<u64>, given: &std::collections::HashSet<u64>) -> Result<Option<(crate::session_tools::Message, u64)>, String> {
         let scope = self.message_scope(binding);
+        // WORK THE APP'S END CUT OFF (the CEO's standing default: paused until he writes in this
+        // chat, then it carries on). An input given to a session by an earlier run, read at this
+        // back end's first selection, before this process begins any attempt: one whose turn
+        // never ended, or a handoff whose turn ended while its job still read as starting or
+        // running (a teammate still at work when the app ended). That session's record usually
+        // holds it already, so it reads as given; but a resumed session does not carry on by
+        // itself, so once he has written here it is given again, naming the earlier attempt
+        // (`run_message`'s `previous_delivery_attempt`), once. Only where the one rule is set,
+        // which is the app.
+        let cut_off: Vec<u64> = match self.turn_gate.get() {
+            None => Vec::new(),
+            Some(_) => backend.cut_off.lock().unwrap()
+                .get_or_insert_with(|| crate::session_tools::open_inputs(&scope, "stu").unwrap_or_default().into_iter()
+                    .filter(|(through, delivered)| !delivered || self.handoff_job_was_running(&scope, *through))
+                    .map(|(through, _)| through).collect())
+                .iter().copied().collect(),
+        };
+        for &through in &cut_off {
+            if !crate::turn_gate::allows(&self.turn_gate, binding, crate::turn_gate::Origin::CarriesOn) {
+                break;
+            }
+            if let Some(rows) = backend.cut_off.lock().unwrap().as_mut() {
+                rows.remove(&through);
+            }
+            backend.gate_held.lock().unwrap().remove(&through);
+            let message = crate::session_tools::saved_input(&scope, "stu", through)?;
+            if !self.held_for_screen(backend, binding, &message, through) {
+                return Ok(Some((message, through)));
+            }
+        }
+        let cut_off: std::collections::HashSet<u64> = backend.cut_off.lock().unwrap().iter().flatten().copied().collect();
         // Held by the one rule before: given now, oldest first, if the user has been active in
         // this chat since.
         let held: Vec<u64> = backend.gate_held.lock().unwrap().iter().copied().collect();
@@ -1153,7 +1201,8 @@ impl WorkHost {
             let Some((message, through)) = crate::session_tools::pending_after(&scope, "stu", after)? else {
                 return Ok(None);
             };
-            if given.contains(&through) {
+            // Cut-off input is given from above, and only from there.
+            if given.contains(&through) || cut_off.contains(&through) {
                 after = through;
                 continue;
             }
@@ -1170,6 +1219,17 @@ impl WorkHost {
             }
             after = through;
         }
+    }
+
+    /// **Is the inbox row at `through` a handoff whose job still reads as starting or running?**
+    /// A job waiting for the screen, for an allowance or for him has its own way on and is not
+    /// work the app's end cut off.
+    fn handoff_job_was_running(&self, scope: &crate::status_tools::StatusToolScope, through: u64) -> bool {
+        let Ok(message) = crate::session_tools::saved_input(scope, "stu", through) else { return false };
+        let Some(work) = message.handoff.then(|| crate::session_tools::work_reference(scope, &message).ok().flatten()).flatten()
+        else { return false };
+        assignment::read(&self.state, &scope.entity_id, &scope.thread_id, &work.assignment_id).is_ok_and(|job|
+            matches!(job.reported_state(), Some(AssignmentState::Registered | AssignmentState::Preparing | AssignmentState::Running)))
     }
 
     pub fn remember_binding(self: &Arc<Self>, binding: &ThreadBinding) {
@@ -2116,9 +2176,10 @@ impl WorkHost {
             inner.binding.as_ref().is_some_and(|binding| {
                 let scope = self.message_scope(binding);
                 // Input the one rule holds until the user is active in this chat is not work
-                // that runs: a Stop saved at the last quit keeps nothing open.
+                // that runs: a Stop saved at the last quit, or a handoff the app's end cut off,
+                // keeps nothing open.
                 let held = |through: u64| self.origin_of(binding, &format!("peer:{through}"), Some(through))
-                    == crate::turn_gate::Origin::FromBefore && crate::turn_gate::waiting(&self.turn_gate, binding.thread_id());
+                    != crate::turn_gate::Origin::Now && crate::turn_gate::waiting(&self.turn_gate, binding.thread_id());
                 crate::session_tools::pending(&scope, "rich").map(|m| m.is_some()).unwrap_or(true)
                     || crate::session_tools::undelivered_where(&scope, "stu", &|through| !held(through)).unwrap_or(true)
             })
@@ -2587,13 +2648,20 @@ impl WorkHost {
     /// Stu's back end for this conversation is in a turn (ours or an automatic one), or has
     /// saved input it has not yet been given. An inbox that cannot be read counts as busy.
     fn stu_busy(&self, scope: &crate::status_tools::StatusToolScope) -> bool {
+        let mut binding = None;
         if let Some(backend) = self.backend(&scope.thread_id) {
             let inner = backend.inner.lock().unwrap();
             if inner.processing || inner.automatic_turn {
                 return true;
             }
+            binding = inner.binding.clone();
         }
-        crate::session_tools::undelivered(scope, "stu").unwrap_or(true)
+        // Input the one rule holds (a handoff the app's end cut off, say) runs nothing until
+        // the user is active in this chat, as in `peer_work_pending`.
+        let Some(binding) = binding else { return crate::session_tools::undelivered(scope, "stu").unwrap_or(true) };
+        let held = |through: u64| self.origin_of(&binding, &format!("peer:{through}"), Some(through))
+            != crate::turn_gate::Origin::Now && crate::turn_gate::waiting(&self.turn_gate, binding.thread_id());
+        crate::session_tools::undelivered_where(scope, "stu", &|through| !held(through)).unwrap_or(true)
     }
 
     /// Stop one user's job. Persist its provenance before waiting for dispatch or provider I/O.
@@ -3369,11 +3437,105 @@ mod tests {
         std::fs::remove_dir_all(&h.root).unwrap();
     }
 
-    /// **A delivery cut off by "Quit and stop the work" does not carry on at launch** (review
-    /// rv-20261126T171959Z-6553219b-85a5, finding 1); one cut off by a crash or an update restart
-    /// does. A report written while the app is open goes to Stu by itself either way.
+    /// His words in the harness's chat, as the ledger files them.
+    fn said(h: &Harness) {
+        use std::io::Write;
+        let line = serde_json::json!({"event":"PromptReceived","entity_id":"depot","thread_id":"thread-one",
+            "turn_id":format!("turn-{}", uuid::Uuid::new_v4()),"source":"text","text":"carry on","at":crate::util::now_millis()}).to_string() + "\n";
+        std::fs::OpenOptions::new().append(true).open(h.root.join("conversation-ledger.jsonl")).unwrap()
+            .write_all(line.as_bytes()).unwrap();
+    }
+
+    /// **A Stop never starts work** (review rv-20261127T020027Z-5e9ff3e9-1d7e, finding 2, still
+    /// open in rv-20261127T025408Z-0159fa0b-818a: "handoff awaiting first delivery, Stop another
+    /// job" counted one handoff and zero user messages). A job's handoff saved before the app
+    /// opened, never begun, waits. The Stop button on another job in that chat is WorkHost's
+    /// Stop and nothing else (`main.rs` `stop_assignment`, pinned by richos-core
+    /// `tests/turn_gate_callers.rs`): its notice reaches Stu by itself, the saved handoff stays
+    /// where it is and the chat stays shut to what was saved before. His words give it to Stu.
     #[test]
-    fn quit_and_stop_keeps_a_cut_off_delivery_from_carrying_on() {
+    fn a_stop_on_another_job_starts_no_handoff_saved_before_the_app_opened() {
+        let h = harness(0);
+        assignment::register(&h.state, &registration(&h)).unwrap();
+        let other = assignment::register(&h.state, &Registration { obligation_id: "obligation-8".into(),
+            instruction_ledger_ref: "ledger:thread-one:turn-8".into(), title: "another job".into(), ..registration(&h) }).unwrap();
+        let scope = h.host.message_scope(&h.binding);
+        let path = h.root.join("peer-status.json");
+        crate::session_tools::bind(&path, &scope, "front-session", "rich", Some(crate::ecs::UserInstruction {
+            ledger_ref: registration(&h).instruction_ledger_ref, sha256: registration(&h).instruction_sha256, text: None })).unwrap();
+        crate::session_tools::delegate(&path, &scope, serde_json::json!({"text":"Build the quarterly report"})).unwrap();
+        // load-bound: this only moves the millisecond clock past what was saved; host load makes the gap larger, never smaller.
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        let gate = Arc::new(crate::turn_gate::TurnGate::at_launch(&h.state));
+        h.host.set_turn_gate(Arc::clone(&gate));
+        h.host.wake_messages(&h.binding);
+
+        h.host.stop_assignment("depot", "thread-one", &other.id).unwrap();
+        until("the Stop never reached Stu", || handed_over(&h, "user_stop") == 1);
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(30)), "the Stop's turn did not end");
+        assert_eq!(handed_over(&h, "Build the quarterly report"), 0, "a Stop on another job started the job saved before");
+        assert!(gate.waits(h.binding.thread_id()), "a Stop opened the chat to what was saved before");
+
+        said(&h);
+        gate.user_acted(&h.binding);
+        until("after his words the saved handoff never reached Stu", || handed_over(&h, "Build the quarterly report") == 1);
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **A team job still running when the app ended carries on after his words, not after a
+    /// press** (review rv-20261127T020027Z-5e9ff3e9-1d7e, findings 1 and 2). Stu's turn that took
+    /// the handoff had ended (a teammate was at work), so its receipt says delivered and his
+    /// record holds it: nothing gave Stu a turn for the job. An answer in that chat is not his
+    /// word to carry it on (nor is a Stop, which opens nothing): a report written after the
+    /// press goes alone. His words give
+    /// Stu the handoff again, naming the earlier attempt.
+    #[test]
+    fn a_team_job_still_running_when_the_app_ended_carries_on_after_his_words_and_not_after_a_press() {
+        let h = harness(0);
+        let record = assignment::register(&h.state, &registration(&h)).unwrap();
+        assignment::advance(&h.state, "depot", "thread-one", &record.id, AssignmentState::Running, "a teammate works").unwrap();
+        let scope = h.host.message_scope(&h.binding);
+        let path = h.root.join("peer-status.json");
+        crate::session_tools::bind(&path, &scope, "front-session", "rich", Some(crate::ecs::UserInstruction {
+            ledger_ref: registration(&h).instruction_ledger_ref, sha256: registration(&h).instruction_sha256, text: None })).unwrap();
+        crate::session_tools::delegate(&path, &scope, serde_json::json!({"text":"Build the quarterly report"})).unwrap();
+        let through = crate::session_tools::pending(&scope, "stu").unwrap().unwrap().1;
+        let input = format!("peer:{through}");
+        crate::session_tools::begin_attempt(&scope, "stu", &input, "prior-session").unwrap();
+        crate::session_tools::acknowledge(&scope, "stu", through).unwrap();
+        crate::session_tools::mark_received(&scope, "stu", &input).unwrap();
+        assert_eq!(crate::session_tools::previous_attempt(&scope, "stu", &input).unwrap().unwrap()["delivered"], true);
+        // load-bound: this only moves the millisecond clock past what was saved; host load makes the gap larger, never smaller.
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        let gate = Arc::new(crate::turn_gate::TurnGate::at_launch(&h.state));
+        h.host.set_turn_gate(Arc::clone(&gate));
+        h.host.wake_messages(&h.binding);
+
+        gate.user_acted(&h.binding);
+        crate::session_tools::observe_stall(&scope, "a report written after his press").unwrap();
+        h.host.wake_messages(&h.binding);
+        until("the report written after the press never reached Stu", || handed_over(&h, "written after his press") == 1);
+        assert_eq!(handed_over(&h, "Build the quarterly report"), 0, "a press carried the cut-off job on");
+
+        said(&h);
+        gate.user_acted(&h.binding);
+        until("after his words the cut-off job never carried on", || handed_over(&h, "Build the quarterly report") == 1);
+        let prompt = h.work_prompts.lock().unwrap().iter().find(|prompt| prompt.contains("Build the quarterly report")).cloned().unwrap();
+        assert!(prompt.contains("prior-session"), "the carried-on handoff does not name the earlier attempt: {prompt}");
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **A delivery cut off by the app's end stays paused after reopening until the user acts
+    /// in that chat, and then it carries on** (the CEO's standing default: a team job cut off by
+    /// a terminate signal had shown "Working" with nothing running).
+    /// It is not running work meanwhile, and the chat says it is paused. His first act there
+    /// gives it to Stu with nothing else written. One cut off by "Quit and stop the work" never
+    /// carries on (review rv-20261126T171959Z-6553219b-85a5, finding 1). A report written while
+    /// the app is open goes to Stu by itself either way.
+    #[test]
+    fn a_delivery_cut_off_by_the_apps_end_waits_for_the_user_and_quit_and_stop_ends_it() {
         for stopped in [false, true] {
             let h = harness(0);
             let scope = h.host.message_scope(&h.binding);
@@ -3382,18 +3544,39 @@ mod tests {
             crate::session_tools::begin_attempt(&scope, "stu", &format!("peer:{through}"), "prior-session").unwrap();
             if stopped {
                 crate::session_tools::stop_open_attempts(&scope, "stu").unwrap();
+            } else {
+                // As on the real app: the cut session's own record holds the input, which made
+                // it read as given forever, so nothing ever gave Stu a turn to carry it on.
+                crate::session_tools::mark_received(&scope, "stu", &format!("peer:{through}")).unwrap();
             }
             // load-bound: this only moves the millisecond clock past what was saved; host load makes the gap larger, never smaller.
             std::thread::sleep(std::time::Duration::from_millis(3));
-            h.host.set_turn_gate(Arc::new(crate::turn_gate::TurnGate::at_launch(&h.state)));
+            let gate = Arc::new(crate::turn_gate::TurnGate::at_launch(&h.state));
+            h.host.set_turn_gate(Arc::clone(&gate));
             h.host.wake_messages(&h.binding);
             crate::session_tools::observe_stall(&scope, "a report written while the app is open").unwrap();
             h.host.wake_messages(&h.binding);
             until("the report written while open never reached Stu", || handed_over(&h, "written while the app is open") == 1);
-            let turns = if stopped { 1 } else { 2 };
-            assert!(h.host.wait_for_completed(turns, std::time::Duration::from_secs(30)), "stopped={stopped}: turns did not end");
-            assert_eq!(handed_over(&h, "cut off by the quit"), usize::from(!stopped),
-                "stopped={stopped}: {:?}", h.work_prompts.lock().unwrap());
+            assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(30)), "stopped={stopped}: the new report's turn did not end");
+            assert_eq!(handed_over(&h, "cut off by the quit"), 0, "stopped={stopped}: cut-off work carried on with nothing from the user");
+            assert!(!h.host.peer_work_pending(), "stopped={stopped}: held cut-off work was counted as running");
+            assert_eq!(h.host.background_work().running, 0, "stopped={stopped}: held cut-off work was counted as running");
+            assert_eq!(gate.cut_off(h.binding.thread_id()), !stopped, "stopped={stopped}: the chat's pause is not what is true");
+
+            if !stopped {
+                // His words in that chat, as `Spine::deliver` files and announces them. Nothing
+                // else wakes Stu.
+                said(&h);
+                let acted = std::time::Instant::now();
+                gate.user_acted(&h.binding);
+                until("after the user acted the cut-off work never carried on", || handed_over(&h, "cut off by the quit") == 1);
+                // A third of the idle check's 30 s (`ACCOUNT_CHECK_EVERY`).
+                assert!(acted.elapsed() < std::time::Duration::from_secs(10), "carried on at the idle check, not at his act: {:?}", acted.elapsed());
+                assert!(!gate.cut_off(h.binding.thread_id()));
+                let prompt = h.work_prompts.lock().unwrap().iter().find(|prompt| prompt.contains("cut off by the quit")).cloned().unwrap();
+                assert!(prompt.contains("prior-session"), "the carried-on input does not name the cut attempt: {prompt}");
+            }
+            h.host.shutdown();
             std::fs::remove_dir_all(&h.root).unwrap();
         }
     }

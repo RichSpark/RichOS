@@ -128,6 +128,7 @@ import glob
 import hashlib
 import json
 import os
+from pathlib import Path
 import re
 import signal
 import subprocess
@@ -144,6 +145,9 @@ import operator_fences as F  # noqa: E402  (sibling: review_repos, the one reade
 import codex_channels as channels  # one shared framed decoder/writer
 
 POLL_SECONDS = 60
+# How long each Codex journal was when the app opened, in the app's engine state, as richos-core
+# codex_bridge.rs JOURNALS_AT_LAUNCH writes it (AppWorld.held_by_the_bridge).
+JOURNALS_AT_LAUNCH = os.path.join("codex-watch", "journals-at-launch.json")
 LONG_JOB_MINUTES = 60
 REPEAT_MINUTES = 30
 # second-review's own worst case: a 30-minute admission wait, a 60-minute
@@ -1004,7 +1008,8 @@ class AppWorld(World):
     def may_start(self, item):
         """Every review the app's watcher starts, whatever found it (a worker workspace that ended
         or ran long, a lost, held or stopped review from before, a Codex READY): only in an open
-        chat. Watcher.start asks this before anything else."""
+        chat, and a Codex READY from before the app opened only once the bridge has handed it to
+        Stu (held_by_the_bridge). Watcher.start asks this before anything else."""
         chat = os.path.basename((item.env or {}).get("RICHOS_WORKSPACES_DIR", "")) or getattr(item, "chat", "")
         channel = getattr(item, "channel", None)
         if not chat and channel:
@@ -1016,7 +1021,51 @@ class AppWorld(World):
                 chat = chat_partition(endpoint["entity_id"], endpoint["thread_id"])
             except (OSError, ValueError, KeyError, TypeError):
                 chat = ""
-        return bool(chat) and chat in self.open_chats()
+        return bool(chat) and chat in self.open_chats() and not (channel and self.held_by_the_bridge(channel))
+
+    def held_by_the_bridge(self, channel):
+        """THE ONE RULE FOR A HANDOVER FROM BEFORE THE APP OPENED (review
+        rv-20261127T025408Z-0159fa0b-818a, finding 4). A chat is open once any turn went through
+        there, a fresh Codex report among them; that says nothing of a READY written while the app
+        was closed, which the app's bridge holds until the user acts in its chat (richos-core
+        codex_bridge.rs accept_when_asked). Such a READY is reviewed only once the bridge has handed
+        it to Stu: its place in the journal is past the READY, and it is not among the reports set
+        aside. The journals' lengths at launch are the bridge's (JOURNALS_AT_LAUNCH); an app that
+        writes none holds nothing here, as before. What cannot be read holds the review: it can
+        still start later, a model run cannot be taken back."""
+        state = Path(self.app_state)
+        locator = Path(channel["locator"])
+        source = locator / "to-rich.jsonl"
+        try:
+            launch = channels.load(state / JOURNALS_AT_LAUNCH)
+        except FileNotFoundError:
+            return False
+        except (OSError, ValueError):
+            return True
+        try:
+            length = launch["journals"].get(os.path.realpath(source))
+            if length is None:
+                return False                         # a journal made since the app opened
+            end = next((end for _, end, row in channels.records(source)
+                        if row.get("message_id") == channel["message_id"]), None)
+            if end is None:
+                return True
+            if end > length:
+                return False                         # written while the app is open
+            try:
+                handed = channels.position(source, channels.load(state / "codex-watch" / "accepted" / (locator.name + ".json")))
+            except FileNotFoundError:
+                handed = 0
+            if end > handed:
+                return True
+            held = state / "codex-watch" / "held" / (locator.name + ".jsonl")
+            try:
+                lines = held.read_text(encoding="utf-8").split("\n")[:-1]
+            except FileNotFoundError:
+                return False
+            return any(json.loads(line)["record"].get("message_id") == channel["message_id"] for line in lines if line)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return True
 
     def channel_repositories(self, endpoint):
         app = stall_watch._load("review_watch_app", os.path.join(self.engine_root, "mega-lander", "app.py"))

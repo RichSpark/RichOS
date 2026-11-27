@@ -541,3 +541,37 @@ fn body_py(text: &str, name: &str) -> String {
     let end = rest[1..].find("\ndef ").map_or(rest.len(), |p| p + 1);
     rest[..end].to_string()
 }
+
+/// **Every press that opens a chat to the one rule is the user's own, and none is a Stop**
+/// (review rv-20261127T020027Z-5e9ff3e9-1d7e, finding 2: the Stop button on one job started a
+/// paused job whose handoff was saved before the app opened). `TurnGate::user_acted` opens a
+/// chat to what was saved before; a Stop never starts work, so the Stop button only stops, and
+/// its notice reaches Stu by itself (richos-core `work_host`
+/// `a_stop_on_another_job_starts_no_handoff_saved_before_the_app_opened`). A new caller fails
+/// here until it is listed, which means until someone has said why that press is the user acting.
+#[test]
+fn every_press_that_opens_a_chat_is_listed_and_none_is_a_stop() {
+    const PRESSES: &[(&str, &str, &str)] = &[
+        ("crates/richos-core/src/spine.rs", "deliver", "his own words, by every road they take"),
+        ("src-tauri/src/question_host.rs", "answer", "his answer to a question card"),
+    ];
+    let root = app();
+    let mut files = Vec::new();
+    rust_files(&root.join("crates/richos-core/src"), &mut files);
+    rust_files(&root.join("src-tauri/src"), &mut files);
+    let mut found = std::collections::BTreeSet::new();
+    for file in files {
+        let relative = file.strip_prefix(&root).unwrap().to_string_lossy().into_owned();
+        let lines = production(&std::fs::read_to_string(&file).unwrap());
+        for (index, (_, line)) in lines.iter().enumerate() {
+            if !line.trim_start().starts_with("//") && line.contains(".user_acted(") {
+                found.insert((relative.clone(), enclosing_fn(&lines, index)));
+            }
+        }
+    }
+    let expected: std::collections::BTreeSet<_> = PRESSES.iter()
+        .map(|(file, function, _)| (file.to_string(), function.to_string())).collect();
+    assert_eq!(found, expected, "the presses that open a chat to the one rule changed; a Stop is never one");
+    let main = read("src-tauri/src/main.rs");
+    assert!(body(&main, "stop_assignment").contains("stop_assignment_and_front_desk("), "the Stop button no longer stops through WorkHost");
+}

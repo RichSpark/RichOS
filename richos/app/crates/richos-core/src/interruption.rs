@@ -149,6 +149,11 @@ pub enum InterruptionCause {
     /// deleted the folder four chats' records lived in, and the sign-in card then blamed his
     /// account). Told once as what it is; his next message starts a new session in the chat.
     HistoryGone,
+    /// **RichOS itself ended while Rich was answering** (a crash, a terminate signal) and the
+    /// answer is paused: his next message in this chat serves the request again, ahead of it
+    /// (`Spine::resume_cut_off`). Written at launch by `Spine::recover_saved_turn`, never by
+    /// [`classify`]. Nothing to press: writing in the chat is the way on.
+    CutOffByAppEnd,
     /// Something RichOS has no story for. Named rather than guessed.
     Unknown,
 }
@@ -166,6 +171,7 @@ impl InterruptionCause {
             InterruptionCause::Transient => "transient",
             InterruptionCause::Repeated => "repeated",
             InterruptionCause::HistoryGone => "history-gone",
+            InterruptionCause::CutOffByAppEnd => "cut-off-by-app-end",
             InterruptionCause::Unknown => "unknown",
         }
     }
@@ -179,6 +185,7 @@ impl InterruptionCause {
             "transient" => InterruptionCause::Transient,
             "repeated" => InterruptionCause::Repeated,
             "history-gone" => InterruptionCause::HistoryGone,
+            "cut-off-by-app-end" => InterruptionCause::CutOffByAppEnd,
             _ => InterruptionCause::Unknown,
         }
     }
@@ -243,6 +250,9 @@ impl InterruptionCause {
             InterruptionCause::HistoryGone => {
                 "Rich's earlier words in this chat are gone from this Mac, so he can't pick up where you left off. Press Restore my message, then send it again and he will start a new conversation in this chat."
             }
+            InterruptionCause::CutOffByAppEnd => {
+                "RichOS closed before Rich finished this, so it is paused. Write anything in this chat and he picks it back up."
+            }
             InterruptionCause::Unknown => {
                 "Rich's answer stopped early and RichOS can't tell you why. Press Restore my message, then send it again."
             }
@@ -263,6 +273,8 @@ impl InterruptionCause {
             // Nothing failed. There is nothing to retry, and his words go back in the box
             // by the ordinary route rather than through a failure card's control.
             InterruptionCause::StoppedByCeo => false,
+            // Nothing to press: his next message in the chat carries it on by itself.
+            InterruptionCause::CutOffByAppEnd => false,
             InterruptionCause::Transient | InterruptionCause::HistoryGone | InterruptionCause::Unknown => true,
         }
     }

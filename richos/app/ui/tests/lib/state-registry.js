@@ -76,6 +76,8 @@ module.exports = [
   { s: "Continues by itself at about", c: "FRAGMENT", why: "Introduces the observed quota resume time in the conversation." },
   { s: "Continues by itself when usage is available. Nothing is lost.", c: "INFORMATIONAL", why: "Work is paused on a real quota hold with no known reset time." },
   { s: "It was running when RichOS restarted.", c: "INFORMATIONAL", why: "Explains that the saved request is resuming automatically." },
+  { s: "It continues when you write in this chat.", c: "INFORMATIONAL", why: "Work the app's end cut off is paused (chat_list.rs cut_off): it carries on with his next message in this chat, not when usage is available. It states when, and asks nothing." },
+  { s: "Continues when you write", c: "INFORMATIONAL", why: "The Technical view detail of a chat whose cut-off work is paused (chat_list.rs CUT_OFF_DETAIL)." },
   { s: "Mark as read", c: "CONTROL", why: "Clears the durable New mark from the chat row." },
   { s: "Mark as unread", c: "CONTROL", why: "Saves a durable unread mark from the chat row menu." },
   { s: "Pick a time…", c: "CONTROL", why: "Discloses the custom date and time choices." },
@@ -483,6 +485,19 @@ module.exports = [
       "this Mac, so the card says the history is gone instead of blaming his sign-in. Asking " +
       "again is honest advice: the next message starts a new session in the same chat, so it " +
       "keeps the card's button like the connection-lost row.",
+  },
+  {
+    s: "RichOS closed before Rich finished this, so it is paused. Write anything in this chat and he picks it back up.",
+    c: "ACTIONABLE",
+    control: "#input",
+    fixture: null,
+    why:
+      "`InterruptionCause::CutOffByAppEnd`: RichOS ended (a " +
+      "crash, a terminate signal) while Rich was answering, and the CEO's standing default is " +
+      "that such work stays paused until he writes in that chat. His next message there serves " +
+      "the request again ahead of it (`Spine::resume_cut_off`), so the control is the message " +
+      "box in the same conversation, and the card draws no Restore my message button, which " +
+      "would ask it twice.",
   },
   {
     s: "RichOS lost its connection to Claude Code while Rich was answering, so his answer is incomplete. Press Restore my message, then send it again.",

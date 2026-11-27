@@ -510,9 +510,36 @@ static CODEX_SINK: std::sync::OnceLock<richos_core::codex_watch::Sink> = std::sy
 /// **Opening the app spends nothing** (CEO 2026-11-26): a report that was written before this
 /// run of the app began, for a conversation with no open job in which the user has asked
 /// nothing since, is not handed to Stu. It waits in its journal
-/// (`codex_bridge::accept_when_asked`).
+/// (`codex_bridge::accept_when_asked`), or set aside once Codex writes a newer one behind it,
+/// and goes to Stu the moment the user acts in that chat (`Asked::release_held`).
 fn codex_sink(app: AppHandle, state_root: &Path, gate: Arc<richos_core::turn_gate::TurnGate>) -> richos_core::codex_watch::Sink {
-    let asked = richos_core::codex_bridge::Asked::at_launch(&richos_core::codex_bridge::root(), state_root, gate);
+    let asked = Arc::new(richos_core::codex_bridge::Asked::at_launch(&richos_core::codex_bridge::root(), state_root, Arc::clone(&gate)));
+    let (opened, opens) = std::sync::mpsc::sync_channel::<()>(1);
+    gate.when_a_chat_opens(Arc::new(move || { opened.try_send(()).unwrap_or(()); }));
+    let (releaser, release_app) = (Arc::clone(&asked), app.clone());
+    let released = std::thread::Builder::new().name("richos-codex-held".into()).spawn(move || {
+        // A release that failed (Stu's inbox busy, say) is tried again at the watcher's pace.
+        let mut again = false;
+        loop {
+            let woke = if again {
+                !matches!(opens.recv_timeout(std::time::Duration::from_secs(15)), Err(std::sync::mpsc::RecvTimeoutError::Disconnected))
+            } else {
+                opens.recv().is_ok()
+            };
+            if !woke { break; }
+            let Some(state) = release_app.try_state::<AppState>() else { again = true; continue };
+            let view = state.reader.snapshot();
+            let binding_for = |thread: &str| view.ledger().thread_binding(thread).ok()
+                .filter(|binding| view.entity_registry().contains(binding.entity_id()));
+            again = match releaser.release_held(&state.data_dir.join("engine-state"), &richos_core::codex_bridge::root(), &binding_for) {
+                Ok(()) => false,
+                Err(error) => { eprintln!("[richos] a Codex report set aside waits: {error}"); true }
+            };
+        }
+    });
+    if let Err(error) = released {
+        eprintln!("[richos] Codex reports set aside go to Stu with the next report on their connection: {error}");
+    }
     Arc::new(move |line:&str| {
         let state=app.try_state::<AppState>().ok_or("the app is still starting")?;
         let event:serde_json::Value=serde_json::from_str(line).map_err(|e|e.to_string())?;
@@ -5414,6 +5441,10 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
     )
     .map_err(|e| e.to_string())?;
     let states = state.work.assignment_activity(&rows);
+    // A job written before the app opened, in a chat he has not acted in since, is held by the
+    // one rule (richos-core `turn_gate`): its handoff goes when he writes there. It waits to
+    // start; the composer's line must not say it is starting.
+    let waits = state.turn_gate.waits(&thread_id);
     Ok(serde_json::json!({
         "assignments": rows.iter().zip(states).map(|(row, activity)| {
             use richos_core::assignment::AssignmentState;
@@ -5451,6 +5482,7 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
                 "repositories": row.repositories,
                 "registeredAtMs": row.registered_at_ms,
                 "canStop": row.reported_state().is_some() && row.accepts_input(),
+                "held": waits && row.updated_at_ms < state.turn_gate.since_ms(),
             })
         }).collect::<Vec<_>>()
     }))
@@ -5487,11 +5519,9 @@ fn dispatch_incoming_messages(app: &AppHandle, _thread_id: &str) -> Result<(), S
 #[richos_command::command]
 fn stop_assignment(state: State<AppState>, thread_id: String, assignment_id: String) -> Result<(), String> {
     let entity = assignment_scope(&state, &thread_id)?;
-    // His own press: the chat is open to the one rule from now on (richos-core `turn_gate`),
-    // so the Stop reaches Stu at once.
-    if let Ok(binding) = state.reader.snapshot().ledger().thread_binding(&thread_id) {
-        state.turn_gate.user_acted(&binding);
-    }
+    // A Stop never starts work, so it opens nothing to the one rule (richos-core `turn_gate`):
+    // what waits in this chat keeps waiting (review rv-20261127T020027Z-5e9ff3e9-1d7e,
+    // finding 2). Its notice is written to Stu now, so it reaches him by itself.
     let front_desk = state.control.for_thread(&thread_id).front_desk();
     state.work.stop_assignment_and_front_desk(entity.as_str(), &thread_id, &assignment_id, front_desk)
 }

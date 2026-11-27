@@ -3,28 +3,29 @@
 //! something major, there should have been absolutely zero usage after me just opening the
 //! app.").
 //!
-//! A turn of Rich's, of Stu's, or a review starts only for one of three reasons:
+//! A turn of Rich's, of Stu's, or a review starts by itself only for one of two reasons:
 //!
 //! - **the user acted** in this run: his own words, or his own press in that chat;
 //! - **the input arrived while the app is open**: a Codex report written now, an order he
 //!   filed whose condition came true now, a report of work running now. These reach the team
-//!   by themselves, as they always did;
-//! - **a turn that was actually running when the app last ended carries on** (an update
-//!   restart, a crash, a quit mid-turn): Rich's turn still in flight in the ledger, Stu's input
-//!   with its delivery attempt still open.
+//!   by themselves, as they always did.
 //!
-//! Everything saved from before the app opened that was not running then (a Codex report or
-//! reply written while it was closed, a review handover, a Stop, an account notice, an input
-//! or answer saved and never started, stopped, finished, ended or paused work) waits until the
-//! user is next active in that chat, and is then delivered in order. A job record from an
-//! earlier run that still says "running", "waiting" or "paused" opens nothing: a quit never
-//! rewrites it.
+//! Everything saved from before the app opened (a Codex report or reply written while it was
+//! closed, a review handover, a Stop, an account notice, an input or answer saved and never
+//! started, stopped, finished, ended or paused work) waits until the user is next active in
+//! that chat, and is then delivered in order. So does **work the app's end cut off** (a crash,
+//! a terminate signal; [`Origin::CarriesOn`]): Rich's answer still in flight in the ledger,
+//! Stu's input with its delivery attempt still open. It stays paused after reopening until the
+//! user writes in that chat, and then it carries on (the CEO's standing default for this case:
+//! a turn carried on by itself had shown "Working" with nothing running). A job record from an earlier run that still says "running", "waiting" or "paused"
+//! opens nothing: a quit never rewrites it.
 //!
 //! What counts as the user acting in a chat: his own words in it since launch (a
 //! `PromptReceived` row in the conversation ledger whose source is `text` or `jam`, by
 //! whichever road: the composer, the phone, voice), or one of his own presses there
-//! ([`TurnGate::user_acted`]: answering a question, stopping a job). An agent's message, an
-//! internal re-prime and Rich speaking unprompted are not his acting. Once a chat is open it
+//! ([`TurnGate::user_acted`]: answering a question). An agent's message, an internal re-prime
+//! and Rich speaking unprompted are not his acting. Nor is a Stop: a Stop never starts work, so
+//! it opens nothing here, and its notice to Stu is input written now. Once a chat is open it
 //! stays open until the app quits.
 //!
 //! "Keep chat alive", the user's own setting, is not asked here: it fires only for a kept chat
@@ -52,7 +53,8 @@ pub const RECORD: &str = "turn-gate.json";
 pub enum Origin {
     /// The user's own words or press in this run, or input that arrived while the app is open.
     Now,
-    /// A turn that was actually running when the app last ended carries on.
+    /// Work that was running, or queued behind running work, when the app last ended: it is
+    /// paused until the user acts in its chat, and then it carries on ([`TurnGate::cut_off`]).
     CarriesOn,
     /// Saved before the app opened and not running then: it waits until the user acts in its
     /// chat.
@@ -82,6 +84,10 @@ struct Inner {
     pressed: HashSet<String>,
     /// Chats a turn has been let through in, with their company, as [`RECORD`] lists them.
     open: BTreeSet<(String, String)>,
+    /// Chats where work the app's end cut off was asked for and held ([`TurnGate::cut_off`]).
+    cut_off: HashSet<String>,
+    /// Chats whose listeners were told of his words ([`TurnGate::user_acted`]).
+    told_words: HashSet<String>,
 }
 
 impl TurnGate {
@@ -127,10 +133,20 @@ impl TurnGate {
         through > self.inboxes.get(inbox).copied().unwrap_or(0)
     }
 
-    /// **The user pressed something of his own in this chat** (answered a question, stopped
-    /// a job): it is open from now on.
+    /// **The user pressed something of his own in this chat** (answered a question; never a
+    /// Stop, which starts no work), or wrote in it (`Spine::deliver`): it is open from now on.
+    /// Work the app's end cut
+    /// off waits for his words alone, so the listeners are told again the first time his words
+    /// are seen there, even after a press.
     pub fn user_acted(&self, binding: &ThreadBinding) {
-        let first = self.inner.lock().unwrap().pressed.insert(binding.thread_id().to_string());
+        let thread = binding.thread_id();
+        let first = {
+            let mut inner = self.inner.lock().unwrap();
+            let pressed = inner.pressed.insert(thread.to_string());
+            self.read_ledger(&mut inner);
+            let wrote = inner.asked.contains(thread) && inner.told_words.insert(thread.to_string());
+            pressed || wrote
+        };
         self.may_start(binding, Origin::Now);
         if first {
             let listeners = self.opened.lock().unwrap().clone();
@@ -146,17 +162,21 @@ impl TurnGate {
         self.opened.lock().unwrap().push(listener);
     }
 
-    /// **THE RULE. May the app start this model turn?** The user's own input, input that
-    /// arrived while the app is open, and a turn that was running when the app last ended:
-    /// yes. Anything saved from before: only once the user has acted in its chat during this
-    /// run. An unreadable ledger answers no: what waits can still be given later, a model turn
-    /// cannot be taken back.
+    /// **THE RULE. May the app start this model turn?** The user's own input and input that
+    /// arrived while the app is open: yes. Anything saved from before: only once the user has
+    /// acted in its chat during this run. Work the app's end cut off: only once he has written
+    /// there (an answer to a question is not his word to carry this one on). An unreadable ledger
+    /// answers no: what waits can still be given later, a model turn cannot be taken back.
     pub fn may_start(&self, binding: &ThreadBinding, origin: Origin) -> bool {
         let thread = binding.thread_id();
         let mut inner = self.inner.lock().unwrap();
-        if origin == Origin::FromBefore && !inner.pressed.contains(thread) && !inner.asked.contains(thread) {
+        let pressed = origin == Origin::FromBefore && inner.pressed.contains(thread);
+        if origin != Origin::Now && !pressed && !inner.asked.contains(thread) {
             self.read_ledger(&mut inner);
             if !inner.asked.contains(thread) {
+                if origin == Origin::CarriesOn {
+                    inner.cut_off.insert(thread.to_string());
+                }
                 return false;
             }
         }
@@ -178,6 +198,26 @@ impl TurnGate {
         }
         self.read_ledger(&mut inner);
         !inner.asked.contains(thread)
+    }
+
+    /// **Has the user written in this chat since the app opened?** What the app's end cut off
+    /// there carries on only then ([`Origin::CarriesOn`]).
+    pub fn written(&self, thread: &str) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        if !inner.asked.contains(thread) {
+            self.read_ledger(&mut inner);
+        }
+        inner.asked.contains(thread)
+    }
+
+    /// **Is work the app's end cut off paused in this chat?** Yes from the moment it was asked
+    /// for and held ([`Origin::CarriesOn`]) until the user writes there: the chat shows it as
+    /// paused, not working, because nothing runs.
+    pub fn cut_off(&self, thread: &str) -> bool {
+        if !self.inner.lock().unwrap().cut_off.contains(thread) {
+            return false;
+        }
+        !self.written(thread)
     }
 
     /// Read what was appended to the ledger since the last look: a look costs one `stat`
@@ -304,14 +344,29 @@ mod tests {
         assert_eq!(record(&root)["open"].as_array().unwrap().len(), 2);
     }
 
-    /// Input that arrived while the app is open, and a turn that was running when it ended,
-    /// start in a chat he has not touched; the chat is then recorded for the review watcher.
+    /// Input that arrived while the app is open starts in a chat he has not touched; the chat
+    /// is then recorded for the review watcher. Work the app's end cut off does not: that chat
+    /// shows it paused until his words there, and then it goes.
     #[test]
-    fn new_input_and_a_turn_that_was_running_start_by_themselves() {
+    fn new_input_starts_by_itself_and_cut_off_work_waits_for_his_words() {
         let (root, one, two) = fixture();
+        // load-bound: this only moves the millisecond clock past what was saved; host load makes the gap larger, never smaller.
+        std::thread::sleep(std::time::Duration::from_millis(3));
         let gate = TurnGate::at_launch(&root.join("engine-state"));
         assert!(gate.may_start(&one, Origin::Now));
-        assert!(gate.may_start(&two, Origin::CarriesOn));
+        assert!(!gate.cut_off(two.thread_id()), "nothing was asked for yet");
+        assert!(!gate.may_start(&two, Origin::CarriesOn), "work cut off by the app's end carried on by itself");
+        assert!(gate.cut_off(two.thread_id()), "the chat does not show its cut-off work as paused");
+        assert!(!gate.cut_off(one.thread_id()));
+        assert_eq!(record(&root)["open"].as_array().unwrap().len(), 1);
+        // His press there (an answer to a question) opens it to what was saved before, not to this.
+        gate.user_acted(&two);
+        assert!(gate.may_start(&two, Origin::FromBefore));
+        assert!(!gate.may_start(&two, Origin::CarriesOn), "a press carried the cut-off work on");
+        assert!(gate.cut_off(two.thread_id()));
+        said(&root, &two, Source::Text);
+        assert!(!gate.cut_off(two.thread_id()), "his words did not end the pause");
+        assert!(gate.may_start(&two, Origin::CarriesOn), "after his words the cut-off work did not carry on");
         assert_eq!(record(&root)["open"].as_array().unwrap().len(), 2);
     }
 

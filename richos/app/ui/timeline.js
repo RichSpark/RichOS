@@ -2988,7 +2988,10 @@
       // prose: `interruption.rs` says of it *"his words go back in the box by the ordinary
       // route rather than through a failure card's control"*, so the words are already there
       // and a second control would put them back twice.
-      const wordsToPutBack = !!(turn.user && turn.user.text) && interruption.cause !== "stopped-by-ceo";
+      // `cut-off-by-app-end` too: that request is served again by itself when he writes in
+      // the chat (`Spine::resume_cut_off`), so restoring and sending it would ask it twice.
+      const wordsToPutBack = !!(turn.user && turn.user.text) && interruption.cause !== "stopped-by-ceo"
+        && interruption.cause !== "cut-off-by-app-end";
       if (wordsToPutBack) {
         card.appendChild(retryControl(turn, opts));
       }

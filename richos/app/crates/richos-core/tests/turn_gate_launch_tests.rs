@@ -1,7 +1,7 @@
 //! **Opening the app starts no turn of Rich's for anything saved from before** (CEO 2026-11-26:
 //! "Everything was either stopped, finished, ended or paused in the RichOS app. So, unless I'm
 //! missing something major, there should have been absolutely zero usage after me just opening
-//! the app."), and a turn that was running when the app ended still carries on.
+//! the app."), and Rich's answer the app's end cut off waits for the user's next words there.
 
 use richos_core::{
     cognition::MockCognition,
@@ -132,10 +132,14 @@ fn a_report_delivered_while_open_never_drops_the_held_one_before_it() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-/// The user's own turn that was running when the app ended (an update restart, a crash, a
-/// quit mid-turn) is a job actually running: it is picked up again at launch, as before.
+/// **Rich's answer the app's end cut off stays paused until the user writes in that chat, and
+/// then it carries on** (the CEO's standing default: after a terminate signal mid-answer, the
+/// reopened app had shown the chat "Working" while nothing ran). At launch
+/// nothing is sent and nothing in the ledger reads as running; the turn says why it stopped.
+/// It stays so across another reopening. His next words there serve the request again first,
+/// then his words.
 #[test]
-fn a_turn_that_was_running_when_the_app_ended_carries_on() {
+fn rich_s_answer_cut_off_by_the_apps_end_waits_for_his_next_words_and_then_carries_on() {
     let (root, path) = opened();
     let mut ledger = Ledger::open(&path).unwrap();
     let thread = ledger.create_thread("fixture", &EntityId::parse("femcboost").unwrap()).unwrap();
@@ -143,21 +147,36 @@ fn a_turn_that_was_running_when_the_app_ended_carries_on() {
     let original = ledger.record_prompt_received(&binding, "Finish the draft", Source::Text).unwrap();
     ledger.mark_turn_started(&original, "original-session").unwrap();
     drop(ledger);
-    // load-bound: this only moves the millisecond clock past what was saved; host load makes the gap larger, never smaller.
-    std::thread::sleep(std::time::Duration::from_millis(3));
+    let cut_off = richos_core::interruption::InterruptionCause::CutOffByAppEnd.tag();
 
-    let mut spine = support::spine(Ledger::open(&path).unwrap());
-    spine.set_turn_gate(Arc::new(TurnGate::at_launch(&root.join("engine-state"))));
-    let mock = MockCognition::new("same-native-session", vec!["Done"]);
-    let prompts = mock.prompts.clone();
-    spine.switch_thread(&thread).unwrap();
-    spine.attach_lease(Box::new(mock));
-    spine.detach_conversation_io();
-    spine.recover_after_restart().unwrap();
-    let shared = std::sync::Mutex::new(spine);
-    richos_core::spine::drive_shared_turns(&shared).unwrap();
-    assert_eq!(prompts.lock().unwrap().len(), 1, "the turn running at the quit was not picked up again");
-    assert!(prompts.lock().unwrap()[0].contains("Finish the draft"));
-    drop(shared);
+    let mut prompts = None;
+    for launch in 0..2 {
+        // load-bound: this only moves the millisecond clock past what was saved; host load makes the gap larger, never smaller.
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        let mut spine = support::spine(Ledger::open(&path).unwrap());
+        spine.set_turn_gate(Arc::new(TurnGate::at_launch(&root.join("engine-state"))));
+        let mock = MockCognition::new("after-launch", vec!["Here is the finished draft", "Yes, it is done"]);
+        prompts = Some(mock.prompts.clone());
+        spine.switch_thread(&thread).unwrap();
+        spine.attach_lease(Box::new(mock));
+        spine.detach_conversation_io();
+        spine.recover_after_restart().unwrap();
+        let shared = std::sync::Mutex::new(spine);
+        richos_core::spine::drive_shared_turns(&shared).unwrap();
+        let spine = shared.into_inner().unwrap();
+        assert!(prompts.as_ref().unwrap().lock().unwrap().is_empty(), "the answer the app's end cut off carried on with nothing from the user");
+        assert!(spine.ledger().pending_turns().is_empty(), "a turn reads as running, so the chat shows Working with nothing running");
+        let turn = spine.ledger().turn(&original).unwrap();
+        assert_eq!(turn.interruption.as_ref().map(|record| record.cause.as_str()), Some(cut_off), "the turn does not say it is paused");
+        if launch == 1 {
+            let shared = std::sync::Mutex::new(spine);
+            shared.lock().unwrap().submit_prompt("Is it done?", Source::Text).unwrap();
+            richos_core::spine::drive_shared_turns(&shared).unwrap();
+        }
+    }
+    let sent = prompts.unwrap().lock().unwrap().clone();
+    assert_eq!(sent.len(), 2, "after his words the cut-off answer did not carry on: {sent:?}");
+    assert!(sent[0].contains("Finish the draft"), "the cut-off request was not served first: {sent:?}");
+    assert!(sent[1].contains("Is it done?"), "{sent:?}");
     std::fs::remove_dir_all(root).unwrap();
 }

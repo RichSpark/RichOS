@@ -2413,18 +2413,20 @@ impl Spine {
         // app ended that were still waiting their turn behind work then running (his request in
         // progress, as a turn replayed because it was running is: `replay_turn` files it now).
         // Input filed while the app is open and an internal turn of a turn already running go.
-        if let Some(gate)=self.turn_gate.get() {
+        if let Some(gate)=self.turn_gate.get().cloned() {
             let origin=match self.ledger.turn(turn_id) {
                 Some(turn) if turn.source==Source::Agent && turn.created_at<gate.since_ms() => crate::turn_gate::Origin::FromBefore,
                 Some(turn) if matches!(turn.source, Source::Text|Source::Jam) && turn.created_at<gate.since_ms() => crate::turn_gate::Origin::CarriesOn,
                 _ => crate::turn_gate::Origin::Now,
             };
             // His own words of this run open the chat, by every road they take (the composer,
-            // voice, the phone), so what waits there for him is given now.
+            // voice, the phone), so what waits there for him is given now: first what the app's
+            // end cut off in it, then his words.
             // A replay of a turn that was running is not him acting again.
             if origin==crate::turn_gate::Origin::Now && self.ledger.turn(turn_id).is_some_and(|turn| matches!(turn.source, Source::Text|Source::Jam))
                 && !self.ledger.turns().iter().any(|turn| turn.superseded_by.as_deref()==Some(turn_id)) {
                 gate.user_acted(binding);
+                self.resume_cut_off(binding)?;
             }
             if !gate.may_start(binding,origin) {
                 if !self.held_turns.iter().any(|(held,_)|held==turn_id) {
@@ -2443,6 +2445,26 @@ impl Spine {
         }
         let delivery=self.prepare_delivery(turn_id,binding,text,allow_recovery)?;
         self.dispatch_delivery(delivery)
+    }
+
+    /// **What the app's end cut off in this chat carries on now**: his words just opened it.
+    /// Each request of his whose answer was paused at launch
+    /// ([`crate::interruption::InterruptionCause::CutOffByAppEnd`], `recover_saved_turn`) is
+    /// served again, in order, ahead of his new words, exactly as a mid-turn recovery serves it
+    /// (continuity §5.3: the paused turn is superseded, never edited).
+    fn resume_cut_off(&mut self,binding:&ThreadBinding)->Result<(),SpineError> {
+        let tag=crate::interruption::InterruptionCause::CutOffByAppEnd.tag();
+        let paused:Vec<(String,String)>=self.ledger.thread_turns(binding.thread_id())?.into_iter()
+            .filter(|turn| turn.state==crate::ledger::TurnState::Interrupted && turn.superseded_by.is_none()
+                && turn.interruption.as_ref().is_some_and(|record| record.cause==tag))
+            .map(|turn| (turn.id.clone(),turn.user_text.clone())).collect();
+        for (id,text) in paused {
+            let replay=self.ledger.replay_turn(binding,&id)?;
+            eprintln!("[richos] work the app's end cut off carries on: the user wrote in its chat");
+            self.emit_live(self.turn_status_event(binding,&replay,TurnStatus::Recovering,Some(id)));
+            self.deliver(&replay,binding,&text,true)?;
+        }
+        Ok(())
     }
 
     fn dispatch_delivery(&mut self,mut delivery:Delivery)->Result<(),SpineError> {
@@ -3426,6 +3448,24 @@ impl Spine {
         let binding = self.fence_binding(&turn.thread_id)?;
         if self.pending_delivery.iter().any(|delivery| delivery.turn_id == id) { return Ok(()) }
         let text = turn.user_text.clone();
+        // HIS REQUEST THE APP'S END CUT OFF IS PAUSED (the CEO's standing default: replayed at
+        // launch, Rich's answer had sat queued with the chat showing "Working" and nothing
+        // running). Rich's answer in flight, or his words queued behind
+        // it, is ended with a cause that says so; his next message in this chat serves it
+        // again (`resume_cut_off`). Only where the one rule is set, which is the app.
+        let before = self.turn_gate.get().is_some_and(|gate| turn.created_at < gate.since_ms());
+        if resume && before && matches!(turn.source, Source::Text | Source::Jam) {
+            let cause = crate::interruption::InterruptionCause::CutOffByAppEnd;
+            self.ledger.interrupt_turn_after_restart(id, "RichOS ended before this turn finished")?;
+            self.ledger.record_interruption_cause(id, &crate::interruption::InterruptionRecord {
+                cause: cause.tag().into(),
+                ceo_message: cause.ceo_message().into(),
+                loss_message: None,
+                offers_retry: cause.offers_retry(),
+            })?;
+            eprintln!("[richos] chat-list recovery=paused until the user writes in the chat");
+            return Ok(());
+        }
         if turn.state == TurnState::Received {
             return self.deliver(id, &binding, &text, true);
         }
