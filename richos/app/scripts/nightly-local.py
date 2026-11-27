@@ -2943,31 +2943,37 @@ class Runner:
             self.announce("The VM phase after the build ends at once unless this Mac is restarted "
                           "before then; the gates go on.")
 
-    @contextmanager
-    def stable_proof_checkout(self, source_commit, nightly):
-        """Reuse a corrected checker only when that nightly passed using only harness changes."""
+    def stable_proof_checker(self, source_commit, nightly):
+        """Select a corrected checker only when it proved the promoted nightly."""
         run = nightly.get("run_id") if isinstance(nightly, dict) else None
         if not isinstance(run, str) or not re.fullmatch(r"\d{8}T\d{6}Z-[0-9a-f]{8}", run):
-            yield self.source
-            return
+            return None
         try:
             proof = self.read_gui_proof(self.gui_proof_path(run))
         except ValueError:
-            yield self.source
-            return
+            return None
         checker = proof.get("gui-boot_commit")
         if (proof.get("suite") != "shipped-bundle-boot" or proof.get("result") != "pass"
                 or proof.get("commit") != nightly.get("build_commit")
                 or proof.get("front-door_exit") != "0" or proof.get("gui-boot_exit") != "0"
                 or checker == source_commit or not self.only_the_checker_changed(checker, [source_commit])):
-            yield self.source
-            return
+            return None
+        return checker
+
+    def candidate_boot_proof(self, run_id, info):
+        """Use the same verified checker for the initial stable proof and its recovery."""
+        checker = info.get("stable_gui_checker_commit") if info.get("channel") == "stable" else None
+        if checker is None:
+            return self.vm_boot_proof(run_id)
+        if not isinstance(checker, str) or not self.only_the_checker_changed(checker, [info["source_commit"]]):
+            raise ValueError(f"recorded stable boot checker {checker!r} is unavailable or changes more "
+                             "than the GUI proof harness")
         self.announce(f"Stable boot proof uses the verified nightly checker {checker}.")
         with tempfile.TemporaryDirectory(prefix="richos-stable-gui-") as tmp:
             checkout = Path(tmp) / "checker"
             self.command("git", "worktree", "add", "--detach", checkout, checker, cwd=self.repo)
             try:
-                yield checkout
+                return self.vm_boot_proof(run_id, checker=checkout)
             finally:
                 self.command("git", "worktree", "remove", "--force", checkout,
                              cwd=self.repo, cleanup=True)
@@ -3286,7 +3292,7 @@ class Runner:
         """Take required proofs in build order, reusing evidence that publish accepts."""
         proofs = (
             (VM_PROOF_PHASE, self.needs_gui_proof(info),
-             lambda: self.require_gui_proof(info, None, run_id), lambda: self.vm_boot_proof(run_id)),
+             lambda: self.require_gui_proof(info, None, run_id), lambda: self.candidate_boot_proof(run_id, info)),
             (NEW_USER_WALK_PHASE, info.get("new_user_walk_required"),
              lambda: self.require_new_user_walk(info, run_id), lambda: self.new_user_walk(run_id, out, info)),
             (LAUNCH_SPEED_PHASE, info.get("launch_speed_required"),
@@ -3698,6 +3704,9 @@ class Runner:
             # The stable bundle is the one a new user downloads first (the dead ends of
             # 2026-10-21 were on stable 1.2.1), so it carries the walk's requirement too.
             info = {**info, "new_user_walk_required": True}
+            checker = self.stable_proof_checker(info["source_commit"], nightly_proof)
+            if checker:
+                info["stable_gui_checker_commit"] = checker
             Path(plan_path).write_text(json.dumps(info, indent=2) + "\n")
             out = self.state / "releases" / info["tag"]
             self.announce(f"Building and publishing {info['tag']} from "
@@ -3712,9 +3721,7 @@ class Runner:
             info = self.completed_build(out)
             self.prepare_changelog(info, out)
             run = info["run_id"]
-            with self.stable_proof_checkout(info["source_commit"], nightly_proof) as checker:
-                proof_error = (self.vm_boot_proof(run) if checker == self.source else
-                               self.vm_boot_proof(run, checker=checker))
+            proof_error = self.candidate_boot_proof(run, info)
             if not proof_error and info.get("new_user_walk_required"):
                 proof_error = self.new_user_walk(run, out, info)
             if proof_error:

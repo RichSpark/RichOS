@@ -1566,7 +1566,8 @@ while True: time.sleep(.02)
         r.gates.assert_not_called()
         self.assertEqual(set(r.skipped), set(m.GATE_NAMES) - {"gates/release-smoke"})
         self.assertEqual(sum(call.args[2] == "release-smoke" for call in r.command.call_args_list), 1)
-        r.only_the_checker_changed.assert_called_once_with(checker_sha, [self.SOURCE])
+        self.assertEqual([c.args for c in r.only_the_checker_changed.call_args_list],
+                         [(checker_sha, [self.SOURCE])] * 2)
         self.assertEqual(r.vm_boot_proof.call_args.args, (r.env["RICHOS_NIGHTLY_RUN_ID"],))
         self.assertEqual(r.vm_boot_proof.call_args.kwargs["checker"].name, "checker")
         self.assertTrue(any(c.args[:4] == ("git", "worktree", "add", "--detach")
@@ -1589,6 +1590,44 @@ while True: time.sleep(.02)
         receipt.with_suffix(".sha256").write_text(m.hashlib.sha256(receipt.read_bytes()).hexdigest() + "\n")
         with self.assertRaisesRegex(ValueError, "does not match its published seal"):
             r.recover_stable_gates(nightly, self.SOURCE)
+
+    def test_stable_resume_reuses_the_checker_selected_at_build(self):
+        self.recorded_run(grade="build")
+        r = self.stable_runner()
+        nightly = {"run_id": self.RESUMED, "build_commit": "a" * 40}
+        checker_sha = "c" * 40
+        proof = r.gui_proof_path(self.RESUMED)
+        proof.parent.mkdir(parents=True)
+        proof.write_text("richos-gui-proof 1\nsuite=shipped-bundle-boot\nresult=pass\n"
+                         f"commit={nightly['build_commit']}\ngui-boot_commit={checker_sha}\n"
+                         "front-door_exit=0\ngui-boot_exit=0\n")
+        r.only_the_checker_changed = Mock(return_value=True)
+        r.stable_plan.return_value[1]["promoted_nightly_proof"] = nightly
+        r.vm_boot_proof.return_value = "first boot failed"
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(RuntimeError, "first boot failed"):
+            r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
+        self.assertEqual(r.vm_boot_proof.call_args.kwargs["checker"].name, "checker")
+
+        run = r.env["RICHOS_NIGHTLY_RUN_ID"]
+        out, info = r.load_candidate(run)
+        (out / f"RichOS-{info['version']}-macos-aarch64.zip").touch()
+        proof.unlink()
+        resumed = self.runner()
+        resumed.source.mkdir(parents=True, exist_ok=True)
+        resumed.require_clean_dedicated_source = Mock()
+        resumed.restore_build_commit = Mock()
+        resumed.only_the_checker_changed = Mock(return_value=True)
+        resumed.require_gui_proof = Mock(side_effect=[ValueError("outstanding"), None])
+        resumed.require_new_user_walk = Mock()
+        resumed.vm_boot_proof = Mock(return_value=None)
+        with contextlib.redirect_stdout(io.StringIO()):
+            resumed.perform("resume-proofs", run_id=run)
+        resumed.restore_build_commit.assert_called_once_with(info)
+        self.assertEqual(resumed.vm_boot_proof.call_args.args, (run,))
+        self.assertEqual(resumed.vm_boot_proof.call_args.kwargs.get("checker", resumed.source).name, "checker")
+        resumed.command.assert_any_call("git", "worktree", "add", "--detach",
+                                        resumed.vm_boot_proof.call_args.kwargs["checker"], checker_sha,
+                                        cwd=resumed.repo)
 
     def test_stable_reuses_the_gates_of_the_run_that_built_the_promoted_nightly(self):
         # CEO, 2026-10-19: "what fucking checks are there needed if ALL OF THE FUCKING CHECKS
