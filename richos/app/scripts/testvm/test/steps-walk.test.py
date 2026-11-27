@@ -271,6 +271,41 @@ with tempfile.TemporaryDirectory(prefix='steps-walk-test-') as tmp:
         got = mod.problems([dict({'op': 'pointer'}, **bad)])
         check('a pointer step %r is refused with a sentence' % (bad,), bool(got), got)
 
+    canvas = {'op': 'pointer', 'within': True, 'find': ['--title', 'Canvas']}
+    bad_pointers = [
+        ({'op': 'pointer', 'points': ['left,2'], 'scroll': 3}, 'finite'),
+        ({'op': 'pointer', 'points': ['1,NaN'], 'double': True}, 'finite'),
+        ({'op': 'pointer', 'points': ['1,2,3', '1,2']}, 'finite'),
+        ({**canvas, 'points': ['7,4']}, 'distinct'),
+        ({**canvas, 'points': ['0,0', '-0,00']}, 'distinct'),
+    ]
+    for i, (step, diagnostic) in enumerate(bad_pointers):
+        plan = Path(tmp) / f'bad-pointer-{i}.json'
+        plan.write_text(json.dumps([step]))
+        target = Path(tmp) / f'bad-pointer-{i}'
+        argv = [str(TOOL), 'no-such-vm', '--steps', str(plan), '--out', str(target)]
+        out = io.StringIO()
+        with (patch.object(mod, 'run', return_value=(1, 'fixture blocked the helper')) as run,
+              patch.object(sys, 'argv', argv), contextlib.redirect_stdout(out), contextlib.redirect_stderr(out)):
+            code = mod.main()
+        check(f'preflight refuses {step} before calling a helper',
+              code == 2 and diagnostic in out.getvalue() and not run.called and not (target / "steps.json").exists(),
+              (code, out.getvalue(), run.mock_calls))
+
+    valid = [
+        {'op': 'pointer', 'points': ['-1.5,2e1'], 'scroll': -3},
+        {'op': 'pointer', 'points': [], 'find': ['--title', 'X'], 'double': True},
+        {**canvas, 'points': ['7,4'], 'hover': True},
+        {**canvas, 'points': ['0,0', '7,4']},
+    ]
+    check('valid scroll, double-click, canvas hover and canvas drag pass preflight',
+          not mod.problems(valid), mod.problems(valid))
+    seen.clear()
+    mod.run = fake_find
+    code, _ = mod.step_run('no-such-vm', valid[-1], Path(tmp))
+    check('the canvas drag dispatches two distinct translated points',
+          code == 0 and seen[1][1:] == ['no-such-vm', '488,998', '495,1002'], seen)
+
     # openlink: the pairing address the Mac draws is opened on the guest's phone page, and an
     # address that never appears fails the step rather than opening nothing and passing.
     seen.clear()

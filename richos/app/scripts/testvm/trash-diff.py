@@ -10,7 +10,7 @@ itself for a symbolic link, never its target). `check` reads them again and answ
 line, what left the Desktop and where it went:
 
   removed   names that were on the Desktop at the mark and whose inode is no longer there
-  moved     those of them whose inode is now in the Trash (a Trash entry's own name may differ:
+  moved     those of them matched to an added Trash entry by inode (the Trash name may differ:
             Finder renames "untitled folder" to "untitled folder 2" when the Trash has one)
   trashed   every entry new in the Trash since the mark, by its name there
   kept      names still on the Desktop under the same inode
@@ -35,6 +35,7 @@ Exit 0 when the expectation holds, 1 when it does not (with a sentence), 2 when 
 the state under ~/qa-trash-diff. Added with the Desktop Forward Delete walk.
 """
 import argparse
+from collections import Counter, defaultdict, deque
 import json
 import os
 from pathlib import Path
@@ -55,15 +56,26 @@ def entries(folder):
 
 def reading(before, desktop, trash):
     d_now, t_now = entries(desktop), entries(trash)
-    d_inodes, t_before = set(d_now.values()), set(before['trash'].values())
-    t_by_inode = {ino: name for name, ino in t_now.items()}
+    d_inodes = set(d_now.values())
+    t_before = before['trash']
+    new_links = Counter(t_now.values()) - Counter(t_before.values())
+    # An unchanged name or a rename alone cannot prove that a link arrived.
+    trashed = sorted(name for name, ino in t_now.items() if new_links[ino] and t_before.get(name) != ino)
+    t_by_inode = defaultdict(deque)
+    for name in trashed:
+        t_by_inode[t_now[name]].append(name)
     removed = sorted(n for n, ino in before['desktop'].items() if ino not in d_inodes)
-    moved = sorted(n for n in removed if before['desktop'][n] in t_by_inode)
+    moved_as = {}
+    for name in removed:
+        ino = before['desktop'][name]
+        if new_links[ino] and t_by_inode[ino]:
+            moved_as[name] = t_by_inode[ino].popleft()
+            new_links[ino] -= 1
     return {
         'removed': removed,
-        'moved': moved,
-        'moved_as': {n: t_by_inode[before['desktop'][n]] for n in moved},
-        'trashed': sorted(name for name, ino in t_now.items() if ino not in t_before),
+        'moved': list(moved_as),
+        'moved_as': moved_as,
+        'trashed': trashed,
         'kept': sorted(n for n, ino in before['desktop'].items() if ino in d_inodes),
     }
 
