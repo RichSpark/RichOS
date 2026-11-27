@@ -1990,6 +1990,12 @@ while True: time.sleep(.02)
         self.assertEqual(publisher.command.call_args.args[2], "finish")
 
     # ---- 2026-10-21: a new user's first run is a gate of its own -------------------------
+    PREDECESSOR_VERSION = "1.1.9-nightly.20260915.1"
+
+    def predecessor_archive(self, state):
+        version = self.PREDECESSOR_VERSION
+        return state / "releases" / f"v{version}" / f"RichOS-{version}-macos-aarch64.zip"
+
     def build_that_walks_as_a_new_user(self, steps, boot_result="pass"):
         """A build whose candidate carries the plan's `new_user_walk_required`, as nightly.py
         copies the plan into it, and whose walk writes `steps` as its report."""
@@ -1997,6 +2003,12 @@ while True: time.sleep(.02)
         proof_and_build = r.command.side_effect
 
         def fake_command(*args, **kwargs):
+            if args[2] == "launch-predecessor":
+                archive = self.predecessor_archive(r.state)
+                archive.parent.mkdir(parents=True, exist_ok=True)
+                archive.touch()
+                return json.dumps({"archive": str(archive), "version": self.PREDECESSOR_VERSION,
+                                   "tag": archive.parent.name, "sha256": "e" * 64})
             if str(args[1]).endswith("run-walk.py") and any(str(a).endswith("launch-speed-walk.py") for a in args):
                 # The launch-speed gate's walk (LAUNCH_SPEED_PHASE): a report, and a refusal when
                 # this fixture is told the launch is slow.
@@ -2010,7 +2022,7 @@ while True: time.sleep(.02)
                                 "p95 %d ms over 43 launches." % p95,
                     "summary": {"p95_ms": p95, "limit_ms": 506, "guest_ratio": 1.013, "refused": slow,
                                 "incomplete": False},
-                    "facts": {"version": self.CANDIDATE_INFO["version"], "older": "1.2.6-nightly.20261102.86"},
+                    "facts": {"version": self.CANDIDATE_INFO["version"], "older": self.PREDECESSOR_VERSION},
                     "checks": [{"id": "install-path", "pass": True}]}))
                 if slow:
                     raise RuntimeError("python3 failed (exit 1); see the run log")
@@ -2131,12 +2143,8 @@ while True: time.sleep(.02)
             first.perform("build", no_host_screen=True)
         out, info = first.load_candidate(run)
         bundle = out / f"RichOS-{info['version']}-macos-aarch64.zip"
-        earlier = first.state / "releases" / "earlier" / "RichOS-earlier-macos-aarch64.zip"
-        later = first.state / "releases" / "later" / "RichOS-later-macos-aarch64.zip"
-        for index, archive in enumerate((earlier, bundle, later), start=1):
-            archive.parent.mkdir(parents=True, exist_ok=True)
-            archive.touch()
-            os.utime(archive, (index, index))
+        bundle.touch()
+        earlier = self.predecessor_archive(first.state)
         first.source.mkdir(parents=True, exist_ok=True)
 
         repair, calls = self.build_that_walks_as_a_new_user(failed)
@@ -2251,6 +2259,46 @@ while True: time.sleep(.02)
                 publisher.perform("publish", run_id="fixture-run-id")
             publisher.command.assert_not_called()
 
+    def test_required_launch_walk_uses_the_published_predecessor_or_never_starts(self):
+        r = self.runner()
+        info = {**self.CANDIDATE_INFO, "version": "1.3.9", "tag": "v1.3.9", "channel": "stable",
+                "install_path_required": True}
+        releases = r.state / "releases"
+        out = releases / info["tag"]
+        archives = {}
+        for stamp, version in enumerate(("1.3.8", "1.3.10", "1.3.9"), start=1):
+            archive = releases / f"v{version}" / f"RichOS-{version}-macos-aarch64.zip"
+            archive.parent.mkdir(parents=True)
+            archive.write_bytes(b"inert archive")
+            os.utime(archive, (stamp, stamp))
+            archives[version] = archive
+        older = archives["1.3.8"]
+        selected = {"archive": str(older), "version": "1.3.8", "tag": "v1.3.8", "sha256": "c" * 64}
+        walk_calls = []
+
+        def run(*args, **kwargs):
+            if args[2] == "launch-predecessor":
+                self.assertEqual(args[args.index("--channel") + 1], "stable")
+                self.assertEqual(args[args.index("--version") + 1], "1.3.9")
+                self.assertTrue(kwargs["capture"])
+                return json.dumps(selected)
+            self.assertEqual(Path(args[1]).name, "run-walk.py")
+            walk_calls.append(args[args.index("--previous-bundle") + 1] if "--previous-bundle" in args else None)
+
+        r.command = run
+        with contextlib.redirect_stdout(io.StringIO()):
+            with self.subTest("one published older bundle"):
+                self.assertIsNone(r.launch_speed_check(info["run_id"], out, info))
+                self.assertEqual(walk_calls, [older])
+            walk_calls.clear()
+            selected = None
+            for version in ("1.3.8", "1.3.10"):
+                archives[version].unlink()
+            with self.subTest("no published older bundle"):
+                problem = r.launch_speed_check(info["run_id"], out, info)
+                self.assertEqual(walk_calls, [], "a required walk without a predecessor reached the guest")
+                self.assertIn("no published earlier stable", problem)
+
     def test_a_build_times_its_launch_after_the_new_user_walk_and_states_the_p95(self):
         passed = [{"step": s, "outcome": "PASS"} for s in m.NEW_USER_WALK_STEPS]
         r, calls = self.build_that_walks_as_a_new_user(passed)
@@ -2316,12 +2364,14 @@ while True: time.sleep(.02)
     def test_publish_requires_a_passing_install_path_check_for_new_candidates(self):
         r = self.runner()
         info = {**self.CANDIDATE_INFO, "launch_speed_required": True, "install_path_required": True}
-        report = r.state / "launch-speed" / "fixture-run-id.2" / "report.json"
-        report.parent.mkdir(parents=True, exist_ok=True)
+        root = r.state / "launch-speed" / info["run_id"]
+        attempt = r.new_proof_attempt(root)
+        report = attempt / "walk" / "report.json"
+        report.parent.mkdir()
         result = {
             "sentence": "p95 300 ms against 506 ms",
             "summary": {"p95_ms": 300, "limit_ms": 506, "guest_ratio": 1.013, "refused": False, "incomplete": False},
-            "facts": {"version": info["version"], "older": "1.2.6-nightly.20261102.86"},
+            "facts": {"version": info["version"], "older": self.PREDECESSOR_VERSION},
         }
         for checks in ([], [{"id": "install-path", "pass": False}]):
             result["checks"] = checks
@@ -2330,7 +2380,15 @@ while True: time.sleep(.02)
                 r.require_launch_speed(info, "fixture-run-id")
         result["checks"] = [{"id": "install-path", "pass": True}]
         report.write_text(json.dumps(result))
+        with self.assertRaisesRegex(ValueError, "verified published predecessor"):
+            r.require_launch_speed(info, "fixture-run-id")
+        (attempt / "predecessor.json").write_text(json.dumps({
+            "version": self.PREDECESSOR_VERSION, "tag": f"v{self.PREDECESSOR_VERSION}", "sha256": "e" * 64}))
         self.assertEqual(r.require_launch_speed(info, "fixture-run-id"), result["sentence"])
+        result["facts"]["older"] = "1.2.1-nightly.20260916.2"
+        report.write_text(json.dumps(result))
+        with self.assertRaisesRegex(ValueError, "verified published predecessor"):
+            r.require_launch_speed(info, "fixture-run-id")
 
     def test_publish_holds_the_cold_route_to_its_own_fixed_limit(self):
         # The cold route is judged against 500 ms scaled by the FIXED ratio on record after a purge

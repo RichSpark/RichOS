@@ -355,6 +355,7 @@ LAUNCH_SPEED_LIMIT_MS = 500
 # 506 ms for warm routes and 3920 ms for the cold route.
 LAUNCH_SPEED_WARM_RATIO = 1.013
 LAUNCH_SPEED_COLD_RATIO = 7.84
+LAUNCH_PREDECESSOR_BUDGET = 720
 LAUNCH_SPEED_WAIT = 3600
 # Launches (testvm/launch-speed-walk.py): with every route passing at 5 starts, 42 (1 + 5 cold + 5
 # ordinary + 2; 3 + 5 for the rule switch, three fresh homes; 2 + 5 for the day change; 2 + 10
@@ -3098,15 +3099,22 @@ class Runner:
         take the measurement again without a rebuild."""
         bundle = Path(out) / f"RichOS-{info['version']}-macos-aarch64.zip"
         testvm = self.source / SCRIPTS / "testvm"
-        # The older copy an updated user still has in /Applications: the newest earlier release
-        # this Mac built, as a download installed it.
-        older = None
-        releases = self.state / "releases"
-        if releases.is_dir() and bundle.is_file():
-            built_at = bundle.stat().st_mtime_ns
-            earlier = (archive for archive in releases.glob("*/RichOS-*-macos-aarch64.zip")
-                       if archive.parent.name != info.get("tag") and archive.stat().st_mtime_ns < built_at)
-            older = max(earlier, key=lambda archive: archive.stat().st_mtime_ns, default=None)
+        predecessor = None
+        if info.get("install_path_required"):
+            channel = info.get("channel", "nightly")
+            try:
+                predecessor = json.loads(self.command(
+                    sys.executable, ROOT / SCRIPTS / "nightly.py", "launch-predecessor",
+                    "--channel", channel, "--version", info["version"], "--state-dir", self.state,
+                    cwd=self.repo, capture=True, timeout=LAUNCH_PREDECESSOR_BUDGET))
+                if predecessor is None:
+                    raise ValueError(f"no published earlier {channel} build for {info['version']}")
+                older = Path(predecessor["archive"])
+                if not older.is_file():
+                    raise ValueError(f"the published archive is missing at {older}")
+            except (OSError, RuntimeError, ValueError, KeyError, TypeError) as error:
+                return f"THE INSTALL PATH WAS NOT PROVEN: {error}. No launch-speed guest was requested."
+            self.announce(f"Install-path predecessor: {predecessor['tag']} ({older}).")
         engine = Path(out) / "richos-engine-1.2.0.tar.gz"
         said, failed = None, None
         root = self.state / "launch-speed" / run_id
@@ -3117,7 +3125,8 @@ class Runner:
             args = [sys.executable, testvm / "run-walk.py", "--no-app", "--wait", str(LAUNCH_SPEED_WAIT),
                     "--home", home, "--engine", engine if engine.exists() else "none",
                     "--report", attempt / "run.json"]
-            if older:
+            if predecessor is not None:
+                (attempt / "predecessor.json").write_text(json.dumps(predecessor, indent=2) + "\n")
                 args += ["--previous-bundle", older]
             args += ["--", testvm / "launch-speed-walk.py", "--candidate", bundle, "--out", walk]
             self.announce("Timing the candidate from the launch request to its splash showing, a p95 against "
@@ -3195,6 +3204,16 @@ class Runner:
                     or summary.get("limit_ms") != limit or p95 > limit or not own_limits_hold:
                 problems.append(f"{report}: {walked.get('sentence') or 'no passing verdict'}")
             else:
+                if info.get("install_path_required"):
+                    try:
+                        previous = json.loads((report.parent.parent / "predecessor.json").read_text())
+                    except (OSError, ValueError):
+                        previous = None
+                    if (not isinstance(previous, dict) or previous.get("version") != facts["older"]
+                            or previous.get("tag") != f"v{facts['older']}"
+                            or not re.fullmatch(r"[0-9a-f]{64}", str(previous.get("sha256", "")))):
+                        problems.append(f"{report}: install-path result does not match a verified published predecessor")
+                        continue
                 return walked.get("sentence")
         raise ValueError("no complete launch-speed measurement of this candidate shows a p95 at or under "
                          f"{LAUNCH_SPEED_LIMIT_MS} ms "
