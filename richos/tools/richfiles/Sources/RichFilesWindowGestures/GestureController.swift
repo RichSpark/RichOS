@@ -37,6 +37,9 @@ final class GestureController {
     private let system = AXUIElementCreateSystemWide()
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
+    private var desktopKeyTap: CFMachPort?
+    private var desktopKeySource: CFRunLoopSource?
+    private var reportedDesktopKeyTapFailure = false
     private var selection: Preferences.Selection = []
     private var reportedStatus: Preferences.Status?
     private let desktopFolder = DesktopFolderClick()
@@ -142,7 +145,13 @@ final class GestureController {
             switch measured {
             case .accessibility: status = .accessibility
             case .inputMonitoring: status = .inputMonitoring
-            case .granted: status = startTap() ? .running : .inputUnavailable
+            case .granted:
+                if startTap() {
+                    if selection.contains(.desktopDelete) { startDesktopKeyTap() }
+                    status = .running
+                } else {
+                    status = .inputUnavailable
+                }
             }
         }
 
@@ -216,7 +225,7 @@ final class GestureController {
         if selection.contains(.desktopDelete) {
             types += [.leftMouseDown, .leftMouseUp, .leftMouseDragged, .rightMouseDown, .rightMouseUp, .otherMouseDown]
         }
-        if !selection.intersection([.desktopDelete, .tiling, .switcher]).isEmpty { types.append(.keyDown) }
+        if !selection.intersection([.tiling, .switcher]).isEmpty { types.append(.keyDown) }
         let mask = types.reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
         // Observe input before Finder and the Dock can act on a desktop gesture.
         guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
@@ -224,14 +233,13 @@ final class GestureController {
             if let context {
                 let controller = Unmanaged<GestureController>.fromOpaque(context).takeUnretainedValue()
                 if type == .keyDown {
-                    controller.desktopMenuOrigin = nil
-                    controller.desktopKeyRevision &+= 1
                     if controller.handleWindowShortcut(event) {
+                        controller.desktopMenuOrigin = nil
+                        controller.desktopKeyRevision &+= 1
                         controller.newDesktopFolder = nil
                         controller.desktopIconClick = nil
                         return nil
                     }
-                    return controller.desktopKeyEvent(event)
                 } else {
                     controller.receive(type, event)
                 }
@@ -246,9 +254,44 @@ final class GestureController {
         return true
     }
 
+    private func startDesktopKeyTap() {
+        guard desktopKeyTap == nil else { return }
+        // The earlier session tap can still name Finder when a floating
+        // panel receives the key. Wait until WindowServer routes the event.
+        guard let keyTap = CGEvent.tapCreate(tap: .cgAnnotatedSessionEventTap, place: .headInsertEventTap,
+                                              options: .defaultTap, eventsOfInterest: 1 << CGEventType.keyDown.rawValue,
+                                              callback: { _, type, event, context in
+            guard let context else { return Unmanaged.passUnretained(event) }
+            let controller = Unmanaged<GestureController>.fromOpaque(context).takeUnretainedValue()
+            controller.desktopKeyRevision &+= 1
+            controller.desktopMenuOrigin = nil
+            if type == .keyDown { return controller.desktopKeyEvent(event) }
+            controller.newDesktopFolder = nil
+            controller.desktopIconClick = nil
+            if let tap = controller.desktopKeyTap, AXIsProcessTrusted() {
+                CGEvent.tapEnable(tap: tap, enable: true)
+            }
+            return Unmanaged.passUnretained(event)
+        }, userInfo: Unmanaged.passUnretained(self).toOpaque()),
+              let keySource = CFMachPortCreateRunLoopSource(nil, keyTap, 0) else {
+            if !reportedDesktopKeyTapFailure { record(.desktopDeleteShortcut, .unavailable) }
+            reportedDesktopKeyTapFailure = true
+            return
+        }
+        reportedDesktopKeyTapFailure = false
+        desktopKeyTap = keyTap
+        desktopKeySource = keySource
+        CFRunLoopAddSource(CFRunLoopGetMain(), keySource, .commonModes)
+        CGEvent.tapEnable(tap: keyTap, enable: true)
+    }
+
     private func stopTap(keepingWindows: Bool = false) {
         if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         if let tap { CFMachPortInvalidate(tap) }
+        if let desktopKeySource { CFRunLoopRemoveSource(CFRunLoopGetMain(), desktopKeySource, .commonModes) }
+        if let desktopKeyTap { CFMachPortInvalidate(desktopKeyTap) }
+        desktopKeySource = nil
+        desktopKeyTap = nil
         desktopMenuOrigin = nil
         newDesktopFolder = nil
         desktopIconClick = nil
@@ -608,33 +651,31 @@ final class GestureController {
         newDesktopFolder = nil
         let key = DesktopFileKey.classify(event)
         guard key != .passThrough, Preferences.selection.contains(.desktopDelete),
-              let app = NSWorkspace.shared.frontmostApplication,
-              let focus = keyboardFocus(in: app.processIdentifier),
-              NSWorkspace.shared.frontmostApplication == app else { return Unmanaged.passUnretained(event) }
+              let pid = pid_t(exactly: event.getIntegerValueField(.eventTargetUnixProcessID)), pid > 0,
+              let app = NSRunningApplication(processIdentifier: pid) else { return Unmanaged.passUnretained(event) }
 
         switch key {
         case .passThrough:
             return Unmanaged.passUnretained(event)
         case .backspace:
             guard app.bundleIdentifier == "com.apple.finder",
-                  desktopFileGroup(finderElement(app.processIdentifier)) == focus else { return Unmanaged.passUnretained(event) }
+                  desktopFileGroup(finderElement(pid)) != nil else { return Unmanaged.passUnretained(event) }
             return nil
         case .forwardDelete:
             let started = ProcessInfo.processInfo.systemUptime
             if let click, event.timestamp >= click.timestamp, event.timestamp - click.timestamp < 350_000_000,
-               app.processIdentifier == click.finder || app == click.foreground {
+               pid == click.finder || app == click.foreground {
                 trashAfterDesktopClick(click, key: desktopKeyRevision, pointer: pointerRevision, started: started)
                 return nil
             }
-            if let newFolder, app.processIdentifier == newFolder.finder || newFolder.foreground == app {
+            if let newFolder, pid == newFolder.finder || newFolder.foreground == app {
                 trashAfterNewFolder(newFolder, key: desktopKeyRevision, pointer: pointerRevision, started: started)
                 return nil
             }
             if app.bundleIdentifier == "com.apple.finder" {
-                let finder = finderElement(app.processIdentifier)
-                if let group = desktopFileGroup(finder), group == focus,
-                   let icons: [AXUIElement] = group.value(kAXSelectedChildrenAttribute),
-                   NSWorkspace.shared.frontmostApplication == app {
+                let finder = finderElement(pid)
+                if let group = desktopFileGroup(finder),
+                   let icons: [AXUIElement] = group.value(kAXSelectedChildrenAttribute), !icons.isEmpty {
                     let key = desktopKeyRevision
                     let pointer = pointerRevision
                     DispatchQueue.main.async { [weak self] in
