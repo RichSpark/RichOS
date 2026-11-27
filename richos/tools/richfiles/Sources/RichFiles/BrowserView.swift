@@ -448,6 +448,7 @@ struct BrowserView: View {
             .padding(.horizontal, 8).padding(.vertical, 3)
         }
         .background(palette.sidebar)
+        .background(BrowserContextMenu.Sidebar())
         .accessibilityLabel("Folder sidebar")
     }
 
@@ -780,7 +781,7 @@ struct BrowserView: View {
         }, secondaryPress: { point in
             // Catalog entry 8: a right-click selects the item before its menu opens, so the menu
             // plainly belongs to it. On empty space it deselects and the folder menu opens.
-            guard model.viewMode != .details else { return nil }
+            guard model.viewMode != .details else { return }
             renaming.cancelArm()
             quickInfo.hide()
             if let url = rowAt(point), let entry = model.entries.first(where: { $0.url == url }) {
@@ -788,13 +789,11 @@ struct BrowserView: View {
                 if !model.selected.contains(url) { select(entry, modifiers: []) }
                 else { model.selection.moveCursor(to: url) }
                 focusItems()
-                return rowFrames[url]
             } else if canSelectFromBlankSpace(at: point) {
                 workspace.select(side)
                 if !model.selected.isEmpty { model.selected = [] }
                 focusItems()
             }
-            return nil
         }, anyPress: { inText in
             renaming.cancelArm()
             if renaming.item != nil && !inText { commitInlineRename(quiet: true) }
