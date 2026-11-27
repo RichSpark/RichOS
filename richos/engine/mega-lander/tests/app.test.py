@@ -224,13 +224,25 @@ class DesktopWork(unittest.TestCase):
         # as superseded, never left dispatchable beside its revision (review
         # rv-20261119T072050Z-df80aa4c-0832). The unrevised retry is the case below.
         replacement = self.call("prepare", {**self.args, "request_id": "revised-brief",
-                                            "brief": "Implement the corrected fictional requirement."})
+                                            "revises": ready["id"], "brief": "Implement the corrected fictional requirement."})
         self.assertEqual(replacement["status"], "prepared")
         self.app.dispatch_intent(self.scope, {"session_id": self.session, "tool_use_id": "revised-call",
                                              "tool_input": replacement["agent_call"]})
         records = self.records()
         self.assertEqual(next(row for row in records if row["id"] == ready["id"])["status"], "blocked")
         self.assertEqual(next(row for row in records if row["id"] == replacement["id"])["status"], "dispatching")
+
+    def test_a_refused_consult_can_be_revised_without_a_repository(self):
+        args = {"request_id": "consult", "obligation_id": "fixture-task", "role": "consult", "teammate": "clark",
+                "title": "Research a fixture", "brief": "Research the fictional format."}
+        draft = self.call("prepare", args)
+        self.app.dispatch_intent(self.scope, {"session_id": self.session, "tool_use_id": "consult-call",
+                                             "tool_input": draft["agent_call"]}, review_refused=True)
+        revised = self.call("prepare", {**args, "request_id": "revised-consult", "revises": draft["id"],
+                                        "brief": "Research the fictional format and cite the fixture."})
+        self.assertEqual(revised["status"], "prepared")
+        self.assertIn("superseded by request revised-consult", self.record_of(draft)["settled"]["reason"])
+        self.assertIsNone(self.record_of(revised)["request"]["repo"])
 
     def test_pierce_dismissal_can_retry_the_exact_prepared_payload(self):
         ready = self.call("prepare", self.args)
@@ -1483,7 +1495,7 @@ class DesktopWork(unittest.TestCase):
         self.app.dispatch_intent(self.scope,{"session_id":self.session,"tool_use_id":"call-draft-1",
                                              "tool_input":draft["agent_call"]},review_refused=True)
         self.assertTrue(self.record_of(draft)["pierce_refused"])
-        args=self.reviewed_pair("revised")
+        args=self.reviewed_pair("revised", revises=draft["id"])
         record=self.receipt_of(draft)
         self.assertEqual(record["status"],"blocked","the refused draft is still dispatchable after its revision")
         self.assertIn("superseded by request prepare-revised",record["settled"]["reason"])
@@ -1507,6 +1519,89 @@ class DesktopWork(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"unresolved execution.*receipt %s \\(request auth, status prepared\\)"
                                     % re.escape(draft["name"])):
             self.call("complete",{"obligation_id":"fixture-task","worker_ids":[args["worker_id"]]})
+
+    def refused_draft(self, brief=None):
+        draft = self.call("prepare", {**self.args, "brief": brief or self.args["brief"]})
+        self.app.dispatch_intent(self.scope, {"session_id": self.session, "tool_use_id": "draft-call",
+                                             "tool_input": draft["agent_call"]}, review_refused=True)
+        self.assertTrue(self.record_of(draft)["pierce_refused"])
+        return draft
+
+    def assert_draft_preserved(self, draft, target, branch):
+        record = self.record_of(draft)
+        self.assertEqual(record["status"], "prepared")
+        self.assertNotIn("settled", record)
+        self.assertTrue(target.is_dir())
+        self.assertTrue(self.branch_exists(branch))
+
+    def test_an_independent_job_with_the_same_title_keeps_the_refused_draft(self):
+        draft = self.refused_draft("Write the required first.txt report.")
+        target, branch = self.target_of(draft), self.registered_branch(draft)
+        self.args["brief"] = "Write the required second.txt report."
+        args = self.reviewed_pair("second-report", file="second.txt")
+        self.assertTrue(self.call("integrate", args)["work_integrated"])
+        self.assertTrue((self.repo / "second.txt").is_file())
+        with self.assertRaisesRegex(ValueError, "unresolved execution.*prepare-one"):
+            self.call("complete", {"obligation_id": "fixture-task", "worker_ids": [args["worker_id"]]})
+        self.assert_draft_preserved(draft, target, branch)
+
+    def test_resubmitting_an_identical_refused_draft_needs_the_existing_receipt(self):
+        draft = self.refused_draft()
+        target, branch = self.target_of(draft), self.registered_branch(draft)
+        with self.assertRaisesRegex(ValueError, "already has unresolved work"):
+            self.call("prepare", {**self.args, "request_id": "duplicate"})
+        with self.assertRaisesRegex(ValueError, "change the brief"):
+            self.call("prepare", {**self.args, "request_id": "duplicate-revision", "revises": draft["id"]})
+        self.assert_draft_preserved(draft, target, branch)
+        self.assertEqual(len(self.records()), 1)
+        self.assertEqual(self.call("prepare", self.args)["agent_call"], draft["agent_call"])
+
+    def test_an_invalid_continuation_keeps_the_refused_draft(self):
+        draft = self.refused_draft()
+        target, branch = self.target_of(draft), self.registered_branch(draft)
+        followup = {**self.args, "request_id": "invalid-followup", "continue_of": draft["id"],
+                    "brief": "Continue the work from its saved commit."}
+        with self.assertRaisesRegex(ValueError, "previous execution must be settled"):
+            self.call("prepare", followup)
+        self.assert_draft_preserved(draft, target, branch)
+        with self.assertRaisesRegex(ValueError, "same duty"):
+            self.call("prepare", {**followup, "revises": draft["id"]})
+        self.assert_draft_preserved(draft, target, branch)
+        self.assertEqual(len(self.records()), 1)
+
+    def test_a_revised_brief_must_prepare_successfully_before_withdrawing_the_draft(self):
+        draft = self.refused_draft()
+        target, branch = self.target_of(draft), self.registered_branch(draft)
+        revised = {**self.args, "request_id": "invalid-revision", "revises": draft["id"],
+                   "brief": "Write result.txt with the corrected value."}
+        with patch.object(self.app, "run", side_effect=TimeoutError("fixture spawn interrupted")):
+            with self.assertRaisesRegex(TimeoutError, "fixture spawn interrupted"):
+                self.call("prepare", revised)
+        self.assert_draft_preserved(draft, target, branch)
+
+    def test_dispatching_the_original_while_a_revision_prepares_preserves_the_original(self):
+        draft = self.refused_draft()
+        target, branch = self.target_of(draft), self.registered_branch(draft)
+        run = self.app.run
+
+        def dispatch_then_prepare(command, **kwargs):
+            self.app.dispatch_intent(self.scope, {"session_id": self.session, "tool_use_id": "retry-original",
+                                                 "tool_input": draft["agent_call"]})
+            return run(command, **kwargs)
+
+        revised = {**self.args, "request_id": "racing-revision", "revises": draft["id"],
+                   "brief": "Write result.txt with the corrected value."}
+        with patch.object(self.app, "run", side_effect=dispatch_then_prepare):
+            with self.assertRaisesRegex(ValueError, "draft.*changed while preparing"):
+                self.call("prepare", revised)
+        record = self.record_of(draft)
+        self.assertEqual(record["status"], "dispatching")
+        self.assertNotIn("settled", record)
+        self.assertTrue(target.is_dir())
+        self.assertTrue(self.branch_exists(branch))
+        replacement = self.call("prepare", revised)
+        self.assertEqual(replacement["status"], "blocked")
+        self.assertNotIn("agent_call", replacement)
 
     def test_completion_never_settles_a_dispatchable_parallel_worker(self):
         """Completion keeps work retryable after a refusal and a turn change."""
@@ -3297,12 +3392,12 @@ class DesktopWork(unittest.TestCase):
             self.call("integrate",{"worker_id":worker["id"]})
         self.assertEqual(self.app.git(self.repo,"rev-parse","HEAD"),before)
 
-    def reviewed_pair(self,tag,repo=None,file="result.txt"):
+    def reviewed_pair(self,tag,repo=None,file="result.txt",revises=None):
         """A worker and a passing reviewer, both run-ended: the exact state
         `integrate` is called from."""
         spec={**self.args,"request_id":"prepare-"+tag}
         if repo: spec["repo"]=str(repo)
-        worker=self.call("prepare",spec)
+        worker=self.call("prepare", {**spec, "revises": revises} if revises else spec)
         target=self.start_fixture_worker(worker,tag+"-worker")
         (target/file).write_text("FICTIONAL "+tag)
         self.app.git(target,"add",file)
@@ -3936,6 +4031,82 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual(landed["cleanup_pending"],[])
         self.assertTrue((self.repo/"notes.md").is_file())
         self.assertEqual(self.land_rows(),[])
+
+    def test_integrate_retry_repairs_partial_output_without_duplicate_rows(self):
+        def edit(target):
+            (target / "first.txt").write_text("First result")
+            (target / "second.txt").write_text("Second result")
+
+        args, worker, worktree = self.reviewed_change("retry-output", edit)
+        load = self.app.load
+
+        def fail_second_row(name, path):
+            module = load(name, path)
+            if name == "richos_app_evidence":
+                append = module.append
+
+                def append_until_failure(path, row):
+                    if row["source"] == "land" and row["path"] == str(self.repo / "second.txt"):
+                        raise OSError("fixture Output journal write interrupted")
+                    append(path, row)
+
+                module.append = append_until_failure
+            return module
+
+        with patch.object(self.app, "load", side_effect=fail_second_row):
+            first = self.call("integrate", args)
+        self.assertTrue(first["work_integrated"])
+        self.assertFalse(first["cleanup_pending"])
+        self.assertFalse(Path(worktree).exists())
+        partial = self.land_rows()
+        self.assertEqual([(row["source"], Path(row["path"]).name) for row in partial],
+                         [("land-marker", self.repo.name), ("land", "first.txt")])
+        landed = self.app.git(self.repo, "rev-parse", "main")
+
+        # The saved move, even after cleanup and after main advanced independently.
+        (self.repo / "unrelated.txt").write_text("Later change")
+        self.app.git(self.repo, "add", "unrelated.txt")
+        self.app.git(self.repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                     "commit", "-qm", "Unrelated")
+        self.assertTrue(self.call("integrate", args)["work_integrated"])
+        rows = self.land_rows()
+        self.assertEqual(rows[:2], partial)
+        self.assertEqual(len(rows), 3)
+        row = rows[-1]
+        self.assertEqual((row["source"], row["path"], row["from"], row["commit"], row["worker"]),
+                         ("land", str(self.repo / "second.txt"), str(Path(worktree) / "second.txt"), landed,
+                          {"name": worker["name"], "agent_id": "retry-output-worker"}))
+        self.assertTrue(self.call("integrate", args)["work_integrated"])
+        self.assertEqual(self.land_rows(), rows)
+
+    def test_integrate_retry_preserves_ignored_files_after_the_archive_returns(self):
+        args = self.reviewed_pair("retry-archive")
+        workspaces = [self.target_of(self.record_of({"id": args[key]})) for key in ("worker_id", "reviewer_id")]
+        exclude_path = self.repo / ".git/info/exclude"
+        exclude_path.parent.mkdir(exist_ok=True)
+        with exclude_path.open("a") as exclude:
+            exclude.write("\n.env\n")
+        notes = ["worker fixture notes", "reviewer fixture notes"]
+        for workspace, content in zip(workspaces, notes):
+            (workspace / ".env").write_text(content)
+
+        archive = Path(self.app.W.state_dir()) / "kept"
+        archive.write_text("Fixture archive path temporarily unavailable")
+        first = self.call("integrate", args)
+        self.assertTrue(first["work_integrated"])
+        self.assertTrue(first["cleanup_pending"])
+        self.assertEqual([(workspace / ".env").read_text() for workspace in workspaces], notes)
+        landed = self.app.git(self.repo, "rev-parse", "main")
+
+        archive.unlink()
+        retry = self.call("integrate", args)
+        self.assertTrue(retry["work_integrated"])
+        self.assertEqual(retry["cleanup_pending"], [])
+        self.assertEqual(self.app.git(self.repo, "rev-parse", "main"), landed)
+        self.assertTrue(all(not workspace.exists() for workspace in workspaces))
+        self.assertCountEqual([path.read_text() for path in archive.rglob(".env")], notes)
+        done = self.call("complete", {"obligation_id": "fixture-task", "worker_ids": [args["worker_id"]]})
+        self.assertTrue(done["obligation_closed"])
 
     def test_land_witness_of_a_job_in_two_repositories_names_each_repositorys_own_paths(self):
         second=self.second_repository()
