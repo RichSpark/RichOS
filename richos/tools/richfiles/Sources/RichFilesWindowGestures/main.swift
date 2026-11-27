@@ -22,7 +22,7 @@ MainActor.assumeIsolated {
     controller.refresh()
     let timer = Timer(timeInterval: 1, repeats: true) { _ in controller.refresh() }
     RunLoop.main.add(timer, forMode: .common)
-    let suiteRestart = SuiteRestart(operation: .gesturesSuiteRestart, restartInPlace: true) {
+    let suiteRestart = SuiteRestart(operation: .gesturesSuiteRestart, restartLoginItem: true) {
         guard controller.canRestartAfterUpdate else { return nil }
         return try? JSONEncoder().encode(true)
     }

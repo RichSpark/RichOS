@@ -14,15 +14,15 @@ public final class SuiteRestart: NSObject {
     private let runningVersion = Bundle.main.object(forInfoDictionaryKey: SuiteRestart.versionKey) as? String
     private let operation: RichFilesDiagnostics.Operation
     private let prepare: () -> Data?
-    private let restartInPlace: Bool
+    private let restartLoginItem: Bool
     private let relaunchArguments: (pid_t) -> [String]
     private var retry: Timer?
     private var releasing = false
 
-    public init(operation: RichFilesDiagnostics.Operation, restartInPlace: Bool = false,
+    public init(operation: RichFilesDiagnostics.Operation, restartLoginItem: Bool = false,
                 prepare: @escaping () -> Data?, relaunchArguments: @escaping (pid_t) -> [String] = { _ in [] }) {
         self.operation = operation
-        self.restartInPlace = restartInPlace
+        self.restartLoginItem = restartLoginItem
         self.prepare = prepare
         self.relaunchArguments = relaunchArguments
         super.init()
@@ -82,13 +82,22 @@ public final class SuiteRestart: NSObject {
             schedule(version: version, owner: owner, id: id, since: since)
             return
         }
-        let nextExecutable = bundle.appendingPathComponent("Contents/MacOS/\(executable)")
-        if restartInPlace {
-            replaceProcess(with: nextExecutable)
-            record(operation, .issues, id: id, since: since)
-            schedule(version: version, owner: owner, id: id, since: since)
+        if restartLoginItem {
+            // macOS can keep its old Accessibility identity after exec in the
+            // same PID. Have launchd start the approved login item in a new process.
+            releasing = true
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                guard !WindowGesturePreferences.restartHelper() else { return }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.releasing = false
+                    self.record(self.operation, .issues, id: id, since: since)
+                    self.schedule(version: version, owner: owner, id: id, since: since)
+                }
+            }
             return
         }
+        let nextExecutable = bundle.appendingPathComponent("Contents/MacOS/\(executable)")
         do {
             let token = UUID()
             try Self.write(snapshot, token: token)
@@ -114,16 +123,6 @@ public final class SuiteRestart: NSObject {
             record(operation, .issues, id: id, since: since)
         }
         schedule(version: version, owner: owner, id: id, since: since)
-    }
-
-    private func replaceProcess(with executable: URL) {
-        // The Window Gestures login item stays in its existing launchd job and
-        // keeps its approval when the executable changes.
-        guard let argument = strdup(executable.path) else { return }
-        RichFilesDiagnostics.flush()
-        var arguments: [UnsafeMutablePointer<CChar>?] = [argument, nil]
-        execv(argument, &arguments)
-        free(argument)
     }
 
     private func schedule(version: String, owner: pid_t, id: UUID, since: TimeInterval) {

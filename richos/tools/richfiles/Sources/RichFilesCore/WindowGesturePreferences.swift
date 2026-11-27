@@ -63,13 +63,26 @@ public enum WindowGesturePreferences {
         defaults.set(Int(ProcessInfo.processInfo.processIdentifier), forKey: processKey)
     }
 
+    public static func restartHelper() -> Bool {
+        let command = Process()
+        command.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        command.arguments = ["kickstart", "-k", "gui/\(getuid())/\(helperID)"]
+        do {
+            try command.run()
+            command.waitUntilExit()
+            return command.terminationStatus == 0
+        } catch {
+            return false
+        }
+    }
+
     public static func markRestartContract() {
-        defaults.set(["pid": Int(ProcessInfo.processInfo.processIdentifier), "ready": Date()],
+        defaults.set(["pid": Int(ProcessInfo.processInfo.processIdentifier), "ready": Date(), "freshProcess": true],
                      forKey: restartContractKey)
     }
 
     public static func runningHelperHandlesOwnRestart() -> Bool {
-        guard let mark = defaults.dictionary(forKey: restartContractKey),
+        guard let mark = defaults.dictionary(forKey: restartContractKey), mark["freshProcess"] as? Bool == true,
               let pid = mark["pid"] as? Int, pid > 1, let process = pid_t(exactly: pid),
               let ready = mark["ready"] as? Date else { return false }
         // A login item can have a running launchd job without an AppKit

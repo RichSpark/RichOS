@@ -24,12 +24,18 @@ public enum WindowGestureService {
         let item = service
         do {
             switch action {
-            case "register", "register-if-desktop-enabled", "refresh-after-update":
+            case "register", "register-if-desktop-enabled", "refresh-after-update", "refresh-after-publication":
                 let status = item.status
                 let selection = WindowGesturePreferences.selection
-                if action == "refresh-after-update", status == .enabled, !selection.isEmpty {
-                    // Keep the existing approval when the old helper survives an app-bundle swap.
-                    refreshInstalledHelper()
+                if status == .enabled, !selection.isEmpty,
+                   action == "refresh-after-update" || action == "refresh-after-publication" {
+                    // After a quit-time publication there may be no successor RichOS to notify the helper.
+                    if action == "refresh-after-publication" || !WindowGesturePreferences.runningHelperHandlesOwnRestart() {
+                        guard WindowGesturePreferences.restartHelper() else {
+                            NSLog("RichFiles Window Gestures could not restart after update")
+                            return "unavailable"
+                        }
+                    }
                 } else if status == .notRegistered || status == .notFound,
                           action == "register" || !selection.intersection(.desktop).isEmpty {
                     try item.register()
@@ -52,34 +58,6 @@ public enum WindowGestureService {
         case .notRegistered: return "off"
         case .notFound: return action == "register" ? "unavailable" : "off"
         default: return "unavailable"
-        }
-    }
-
-    private static func refreshInstalledHelper() {
-        let helper = Bundle.main.bundleURL.appendingPathComponent(WindowGesturePreferences.helperPath)
-        guard let installed = Bundle(url: helper)?.executableURL?.resolvingSymlinksInPath() else { return }
-        // A contract-capable helper replaces its executable once the gesture is idle.
-        // Keep kickstart for older builds that cannot receive a suite restart.
-        guard !WindowGesturePreferences.runningHelperHandlesOwnRestart() else { return }
-        let running = NSRunningApplication.runningApplications(withBundleIdentifier: WindowGesturePreferences.helperID)
-            .first { !$0.isTerminated }
-        if let running {
-            var path = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
-            if proc_pidpath(running.processIdentifier, &path, UInt32(path.count)) > 0,
-               URL(fileURLWithPath: String(cString: path)).resolvingSymlinksInPath() == installed {
-                return
-            }
-        }
-        let command = Process()
-        command.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        command.arguments = ["kickstart"] + (running == nil ? [] : ["-k"])
-            + ["gui/\(getuid())/\(WindowGesturePreferences.helperID)"]
-        do {
-            try command.run()
-            command.waitUntilExit()
-            if command.terminationStatus == 0 { NSLog("RichFiles Window Gestures restarted after update") }
-        } catch {
-            NSLog("RichFiles Window Gestures could not restart after update: %@", error.localizedDescription)
         }
     }
 

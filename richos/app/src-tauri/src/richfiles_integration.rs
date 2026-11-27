@@ -296,7 +296,7 @@ pub fn refresh_gestures_after_publication(home: &std::path::Path) {
     if let Ok(Some(bundle)) = richos_user_update::with_preferred_at(home, |_, bundle| {
         Ok(bundle.join("Contents/Applications/RichFiles.app"))
     }) {
-        run_gesture_service(bundle, "refresh-after-update");
+        run_gesture_service(bundle, "refresh-after-publication");
     }
 }
 
