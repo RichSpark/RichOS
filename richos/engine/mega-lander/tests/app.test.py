@@ -4032,6 +4032,53 @@ class DesktopWork(unittest.TestCase):
         self.assertTrue((self.repo/"notes.md").is_file())
         self.assertEqual(self.land_rows(),[])
 
+    def test_integrate_retry_repairs_partial_output_without_duplicate_rows(self):
+        def edit(target):
+            (target / "first.txt").write_text("First result")
+            (target / "second.txt").write_text("Second result")
+
+        args, worker, worktree = self.reviewed_change("retry-output", edit)
+        load = self.app.load
+
+        def fail_second_row(name, path):
+            module = load(name, path)
+            if name == "richos_app_evidence":
+                append = module.append
+
+                def append_until_failure(path, row):
+                    if row["source"] == "land" and row["path"] == str(self.repo / "second.txt"):
+                        raise OSError("fixture Output journal write interrupted")
+                    append(path, row)
+
+                module.append = append_until_failure
+            return module
+
+        with patch.object(self.app, "load", side_effect=fail_second_row):
+            first = self.call("integrate", args)
+        self.assertTrue(first["work_integrated"])
+        self.assertFalse(first["cleanup_pending"])
+        self.assertFalse(Path(worktree).exists())
+        partial = self.land_rows()
+        self.assertEqual([(row["source"], Path(row["path"]).name) for row in partial],
+                         [("land-marker", self.repo.name), ("land", "first.txt")])
+        landed = self.app.git(self.repo, "rev-parse", "main")
+
+        # The saved move, even after cleanup and after main advanced independently.
+        (self.repo / "unrelated.txt").write_text("Later change")
+        self.app.git(self.repo, "add", "unrelated.txt")
+        self.app.git(self.repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                     "commit", "-qm", "Unrelated")
+        self.assertTrue(self.call("integrate", args)["work_integrated"])
+        rows = self.land_rows()
+        self.assertEqual(rows[:2], partial)
+        self.assertEqual(len(rows), 3)
+        row = rows[-1]
+        self.assertEqual((row["source"], row["path"], row["from"], row["commit"], row["worker"]),
+                         ("land", str(self.repo / "second.txt"), str(Path(worktree) / "second.txt"), landed,
+                          {"name": worker["name"], "agent_id": "retry-output-worker"}))
+        self.assertTrue(self.call("integrate", args)["work_integrated"])
+        self.assertEqual(self.land_rows(), rows)
+
     def test_land_witness_of_a_job_in_two_repositories_names_each_repositorys_own_paths(self):
         second=self.second_repository()
         spec={**self.args,"request_id":"multi-witness","repos":[str(second)]}

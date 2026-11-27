@@ -563,7 +563,7 @@ def witness_git_review(scope, repo, branch, before, after, reviewed):
         print("RichOS output: the Git integration marker could not be recorded.", file=sys.stderr)
 
 
-def witness_land(scope, worker, repo, worktree, before, landed):
+def witness_land(session, worker, repo, worktree, before, landed):
     """WITNESS (d), THE LAND (Output side panel PRD §4.1 (d), slice S2b). A worker writes in its
     own worktree, which cleanup deletes minutes after this; the landed copy in the connected
     repository is written by the merge above and by nothing the hook sees. So the land itself
@@ -572,17 +572,29 @@ def witness_land(scope, worker, repo, worktree, before, landed):
     worker named by its own receipt. Into the BACK-END session's `writes.jsonl`, through the
     hook's own appender, so the app joins it to the thread like every other row of the job.
 
-    Record each move as it happens so a later repository's refusal cannot lose it.
-    A retry skips merges already made. History failures are reported on stderr and
-    never fail the land."""
+    Each move is saved on the receipt before writing the journal. This witness
+    can replay the same move even after the workspace has been cleaned up."""
     try:
         evidence = load("richos_app_evidence", ENGINE / "scripts/lib/app-evidence.py")
         who = {"name": worker["name"], "agent_id": worker.get("agent_id") or None}
         rows = [{"path": os.path.join(repo, name), "from": os.path.join(worktree, name),
                  "commit": landed, "worker": who} for name in landed_files(repo, before, landed)]
-        evidence.append_land_rows(state() / "evidence", scope["binding"]["session_id"], rows)
+        evidence.append_land_rows(state() / "evidence", session, rows)
+        return True
     except Exception as error:  # noqa: BLE001 -- a history never fails a land
         print("RichOS output: the landed files were not recorded: %s" % str(error)[-500:], file=sys.stderr)
+        return False
+
+
+def write_pending_land_rows(path, worker, repo):
+    integration = worker["integration"]
+    pending = integration["output_pending"]
+    move = pending[repo]
+    if witness_land(move["session"], worker, repo, move["worktree"], move["before"], move["after"]):
+        del pending[repo]
+        if not pending:
+            del integration["output_pending"]
+        save(path, worker)
 
 
 def admitted(record):
@@ -2639,6 +2651,8 @@ def integrate(scope_path,scope,args):
             if reviewer: require_current_assignment(scope,reviewer)
             if existing and existing.get("reviewer_id") != reviewer_id:
                 raise ValueError("integration already has a different reviewer; reconcile its receipt")
+            for repo in list((existing or {}).get("output_pending", {})):
+                write_pending_land_rows(path, worker, repo)
             if existing and existing.get("verified"):
                 verification_evidence(scope,worker["id"])
             else:
@@ -2740,8 +2754,13 @@ def integrate(scope_path,scope,args):
                 worktree_paths={r:os.path.realpath(t["path"]) for r,t in targets.items()}
 
                 def record_merge(repo, branch, before, after, reviewed):
+                    worker["integration"].setdefault("output_pending", {})[repo] = {
+                        "session": scope["binding"]["session_id"], "worktree": worktree_paths[repo],
+                        "before": before, "after": after,
+                    }
+                    save(path, worker)
                     witness_git_review(scope, repo, branch, before, after, reviewed)
-                    witness_land(scope, worker, repo, worktree_paths[repo], before, after)
+                    write_pending_land_rows(path, worker, repo)
 
                 pending=[r for r in repositories_to_land if not plan[r]["already"]]
                 refused=None
