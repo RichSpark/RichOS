@@ -485,6 +485,19 @@ module.exports = [
       "keeps the card's button like the connection-lost row.",
   },
   {
+    s: "RichOS closed before Rich finished this, so it is paused. Write anything in this chat and he picks it back up.",
+    c: "ACTIONABLE",
+    control: "#input",
+    fixture: null,
+    why:
+      "`InterruptionCause::CutOffByAppEnd`: RichOS ended (a " +
+      "crash, a terminate signal) while Rich was answering, and the CEO's standing default is " +
+      "that such work stays paused until he writes in that chat. His next message there serves " +
+      "the request again ahead of it (`Spine::resume_cut_off`), so the control is the message " +
+      "box in the same conversation, and the card draws no Restore my message button, which " +
+      "would ask it twice.",
+  },
+  {
     s: "RichOS lost its connection to Claude Code while Rich was answering, so his answer is incomplete. Press Restore my message, then send it again.",
     c: "ACTIONABLE",
     control: ".tl-intervention button.tl-intervention-action",

@@ -67,10 +67,16 @@ fn earliest(slot: &mut Option<u64>, at: u64) {
     *slot = Some(slot.map_or(at, |before| before.min(at)));
 }
 
+/// What the chat row says while work the app's end cut off is paused (`turn_gate` `cut_off`,
+/// the `cut-off-by-app-end` interruption): nothing runs until he writes there.
+const CUT_OFF_DETAIL: &str = "Continues when you write";
+
+#[allow(clippy::too_many_arguments)]
 fn facts(
     view: &dyn SpineView,
     state_root: &std::path::Path,
     work: &richos_core::work_host::WorkHost,
+    gate: &richos_core::turn_gate::TurnGate,
     row: &ThreadRow,
     questions: &[Question],
     holds: &[Hold],
@@ -84,6 +90,9 @@ fn facts(
     let mut stop_detail = None;
     let mut stopped_independently = false;
     let mut work_detail = None;
+    // The team's input the app's end cut off, held by the one rule until he acts here.
+    let mut cut_off = gate.cut_off(&row.id);
+    let cut_off_tag = richos_core::interruption::InterruptionCause::CutOffByAppEnd.tag();
     if let Ok(turns) = view.ledger().thread_turns(&row.id) {
         let restart_successors: std::collections::HashSet<_> = turns
             .iter()
@@ -121,6 +130,11 @@ fn facts(
                             latest(&mut result.long_finish_at, at);
                         }
                     }
+                }
+                // Rich's answer the app's end cut off is paused, not stopped: his next message
+                // here carries it on, and that newer turn then reads as progress.
+                TurnState::Interrupted if turn.interruption.as_ref().is_some_and(|record| record.cause == cut_off_tag) => {
+                    cut_off = true;
                 }
                 TurnState::Interrupted | TurnState::Stopped => {
                     let at = turn
@@ -202,7 +216,17 @@ fn facts(
     let hold = holds.iter().find(|hold| &hold.entity_id == entity);
     result.paused |= hold.is_some();
     result.resume_at = reset.filter(|_| result.paused).map(|(at, _)| at);
-    result.detail = if result.waiting_since.is_some() {
+    // Work the app's end cut off, paused until he writes here: nothing runs, so the chat says
+    // "Paused", never "Working".
+    let cut_off = cut_off && !result.paused && result.waiting_since.is_none() && result.stopped_at.is_none();
+    if cut_off {
+        result.paused = true;
+        result.working_since = None;
+        result.team_working = false;
+    }
+    result.detail = if cut_off {
+        Some(CUT_OFF_DETAIL.to_owned())
+    } else if result.waiting_since.is_some() {
         questions
             .iter()
             .find(|q| q.state == State::Open && &q.entity_id == entity)
@@ -290,6 +314,7 @@ pub(crate) fn snapshot(state: &AppState, view: &dyn SpineView, tree: &mut Naviga
                 view,
                 &state_root,
                 &state.work,
+                &state.turn_gate,
                 row,
                 questions.get(&row.id).map_or(&[], Vec::as_slice),
                 holds.get(&row.id).map_or(&[], Vec::as_slice),
