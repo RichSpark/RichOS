@@ -257,11 +257,13 @@ impl Asked {
     /// **Was this report written before the app opened?**
     ///
     /// A report that ends within its journal's length at launch was written while the app was
-    /// closed. So was, in effect, a notice the app's own review watcher writes about one at
-    /// startup (`review_result`): neither starts a turn. A journal that did not exist at launch
-    /// holds nothing from before. A reply on an old Markdown channel (`legacy_live`) names the
-    /// lines it came from, and it is from before when it starts within the file's length at
-    /// launch.
+    /// closed. So was, in effect, a notice the app's own review watcher writes (`review_result`)
+    /// about one of those: it waits with the report it answers. A verdict on a report Codex
+    /// wrote while the app is open reaches Stu by itself, as that report did (review
+    /// rv-20261127T025408Z-0159fa0b-818a, finding 3); one whose report is not among those
+    /// waits. A journal that did not exist at launch holds nothing from before. A reply on an
+    /// old Markdown channel (`legacy_live`) names the lines it came from, and it is from before
+    /// when it starts within the file's length at launch.
     fn written_before_launch(&self, event: &Value) -> bool {
         let kind = event["record"]["kind"].as_str();
         match kind {
@@ -272,6 +274,7 @@ impl Asked {
         let Some(journal) = Self::journal(event) else { return false };
         let (Some(length), Some(through)) = (self.journals.get(&journal), event["through"].as_u64()) else { return false };
         through <= *length || kind == Some("review_result")
+            && !event["record"]["reply_to"].as_str().is_some_and(|report| codex_wrote_after(&journal, *length, Some(report)))
     }
 
     /// **Has Codex written behind this report since the app opened?** The watcher offers a
@@ -284,7 +287,7 @@ impl Asked {
             return self.markdown.iter().any(|(file, length)| std::fs::metadata(file).is_ok_and(|now| now.len() > *length));
         }
         let Some(journal) = Self::journal(event) else { return false };
-        self.journals.get(&journal).is_some_and(|length| codex_wrote_after(&journal, *length))
+        self.journals.get(&journal).is_some_and(|length| codex_wrote_after(&journal, *length, None))
     }
 
     fn journal(event: &Value) -> Option<PathBuf> {
@@ -362,16 +365,17 @@ impl Asked {
 /// The file in a connection's folder Codex and the review watcher write to Rich's team in.
 const JOURNAL: &str = "to-rich.jsonl";
 
-/// Has Codex written a report in this journal past `length`? A review watcher's notice
-/// (`review_result`) is the app's own writing, not Codex's.
-fn codex_wrote_after(journal: &Path, length: u64) -> bool {
+/// Has Codex written a report in this journal past `length`, or, given `report`, that report?
+/// A review watcher's notice (`review_result`) is the app's own writing, not Codex's.
+fn codex_wrote_after(journal: &Path, length: u64, report: Option<&str>) -> bool {
     use std::io::{BufRead, Seek, SeekFrom};
     let Ok(mut file) = std::fs::File::open(journal) else { return false };
     if file.seek(SeekFrom::Start(length)).is_err() {
         return false;
     }
     std::io::BufReader::new(file).lines().map_while(Result::ok).any(|line| {
-        serde_json::from_str::<Value>(&line).is_ok_and(|record| record.is_object() && record["kind"] != "review_result")
+        serde_json::from_str::<Value>(&line).is_ok_and(|record| record.is_object() && record["kind"] != "review_result"
+            && report.is_none_or(|report| record["message_id"] == report))
     })
 }
 
@@ -906,6 +910,40 @@ mod tests {
         prompt(&f, "What did Codex say?", crate::ledger::Source::Text);
         f.release(&asked);
         assert_eq!(f.delivered(), ["message-2", "message-1", "review-1"]);
+    }
+
+    /// **The verdict on a report that reached Stu during this run reaches Stu by itself** (review
+    /// rv-20261127T025408Z-0159fa0b-818a, finding 3: "Stu inbox = [\"fresh\"], held = [\"old\",
+    /// \"verdict\"]"), as it did before the one rule. Only a verdict on the held report waits
+    /// with it, and goes behind it once the user acts in that chat.
+    #[test]
+    fn a_verdict_on_a_fresh_report_reaches_stu_by_itself_and_one_on_the_held_report_waits_with_it() {
+        let f = Fixture::new();
+        let asked = opened(&f);
+        let offered = |record: Value, through: u64| {
+            written(&f, record.clone());
+            let mut event = f.event.clone();
+            event["record"] = record;
+            event["through"] = json!(through);
+            event
+        };
+        assert_eq!(accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap_err(), WAITS_FOR_THE_USER);
+        let fresh = offered(json!({"version":1,"message_id":"message-2","text":"READY TO LAND: codex/fresh"}), 200);
+        accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap();
+        accept_when_asked(&f.state, &f.binding, &fresh, &f.coord, &asked).unwrap();
+        let verdict = offered(json!({"version":1,"kind":"review_result","message_id":"review-2","reply_to":"message-2",
+            "text":"SECOND REVIEW VERDICT\npassed"}), 300);
+        accept_when_asked(&f.state, &f.binding, &verdict, &f.coord, &asked).unwrap();
+        assert_eq!(f.delivered(), ["message-2", "review-2"], "the verdict on a report Stu got during this run did not reach him by itself");
+
+        let held_verdict = offered(json!({"version":1,"kind":"review_result","message_id":"review-1","reply_to":"message-1",
+            "text":"SECOND REVIEW VERDICT\npassed"}), 400);
+        accept_when_asked(&f.state, &f.binding, &held_verdict, &f.coord, &asked).unwrap();
+        f.release(&asked);
+        assert_eq!(f.delivered(), ["message-2", "review-2"], "the verdict on the held report went with no message from the user");
+        prompt(&f, "What did Codex say?", crate::ledger::Source::Text);
+        f.release(&asked);
+        assert_eq!(f.delivered(), ["message-2", "review-2", "message-1", "review-1"]);
     }
 
     /// **The old Markdown channel.** A reply written while the app was closed starts no turn at
