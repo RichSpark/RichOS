@@ -1681,7 +1681,8 @@ def _append(path, text, rotate=False):
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(text)
     except OSError:
-        pass
+        return False
+    return True
 
 
 def _write_json(path, data):
@@ -1695,6 +1696,8 @@ def _write_json(path, data):
             os.unlink(tmp)
         except OSError:
             pass
+        return False
+    return True
 
 
 def _read_json(path):
@@ -1779,6 +1782,7 @@ def terminal_worker_refusals(engine_root, session, seen, now):
 
 def terminal_fable(a, reading, week_point, out, now, session):
     """Pass the terminal's existing quota reading to the same rule the app uses."""
+    out.flush_fable_notices()
     if app_state():
         return None
     previous = out.fable
@@ -1819,20 +1823,24 @@ def terminal_fable(a, reading, week_point, out, now, session):
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         print("Fable quota switch: could not read the core decision (%s)." % type(error).__name__, flush=True)
         return previous.get("onOpusUntil")
-    if state != previous:
-        out.fable = state
-        if out.sd:
-            _write_json(os.path.join(out.sd, "fable.json"), state)
+    notices = []
     if answer.get("change") == "opus":
-        out.wake("FABLE-OPUS",
-                 "The Fable week is nearly used up. For new work, take each job's pair from the fallback column in stu.md.",
-                 now)
+        notices.append(("FABLE-OPUS",
+                        "The Fable week is nearly used up. For new work, take each job's pair from the fallback column in stu.md.",
+                        now))
     elif answer.get("change") == "fable":
-        out.wake("FABLE-READY", "Fable quota is available again. New workers can use their Fable pairs.", now)
+        notices.append(("FABLE-READY", "Fable quota is available again. New workers can use their Fable pairs.", now))
     for agent in named:
-        out.wake("FABLE-WORKER",
-                 "%s hit the Fable limit. Resume the job from its saved work using its fallback pair in stu.md."
-                 % refused[agent]["name"], now)
+        notices.append(("FABLE-WORKER",
+                        "%s hit the Fable limit. Resume the job from its saved work using its fallback pair in stu.md."
+                        % refused[agent]["name"], now))
+    pending = previous.get("pendingNotices", [])
+    if pending or notices:
+        # Commit the decision and its notices together. The core only reports
+        # transitions, so a later tick may be unable to recreate the notice.
+        state["pendingNotices"] = [*pending, *notices]
+    if state != previous and out.save_fable(state) and not pending:
+        out.flush_fable_notices()
     return state["onOpusUntil"]
 
 
@@ -1913,12 +1921,37 @@ class Out:
         the block arrive together."""
         if not text.endswith("\n"):
             text += "\n"
+        saved = True
         if self.sd:
-            _append(os.path.join(self.sd, "events.jsonl"),
-                    json.dumps({"at": now, "kind": kind, "text": text}) + "\n")
+            saved = _append(os.path.join(self.sd, "events.jsonl"),
+                            json.dumps({"at": now, "kind": kind, "text": text}) + "\n")
         if self.events is not None:
             self.events.write(text)
             self.events.flush()
+        return saved
+
+    def save_fable(self, state):
+        if self.sd and not _write_json(os.path.join(self.sd, "fable.json"), state):
+            self.line("Fable quota switch: could not save state and pending notices.")
+            return False
+        self.fable = state
+        return True
+
+    def flush_fable_notices(self):
+        pending = self.fable.get("pendingNotices", [])
+        delivered = 0
+        for kind, text, at in pending:
+            if not self.wake(kind, text, at):
+                self.line("Fable quota switch: could not append %s to events.jsonl. It will retry." % kind)
+                break
+            delivered += 1
+        if delivered:
+            state = dict(self.fable)
+            if delivered < len(pending):
+                state["pendingNotices"] = pending[delivered:]
+            else:
+                del state["pendingNotices"]
+            self.save_fable(state)
 
     def beat(self, now, a, extra=None):
         if self.sd:
