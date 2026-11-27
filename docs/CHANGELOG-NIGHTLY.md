@@ -2,6 +2,17 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.3.9-nightly.20261127.122
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.9-nightly.20261127.122)
+
+- Fixed Forward Delete on your Mac desktop sometimes leaving the selected item where it was instead of moving it to the Trash, for example a folder you had just made and named
+- Fixed Forward Delete not moving a folder you just made on your Mac desktop with Shift-Command-N or File, New Folder to the Trash before you named it; it erased the name instead
+- Fixed Delete and Forward Delete not working normally in Spotlight or a similar search box opened while an item on your Mac desktop was selected
+- Fixed Delete doing nothing in the name box of a new folder you made with your Mac desktop's right-click menu
+- Fixed double-clicking a folder on your Mac desktop sometimes opening an older folder of the same name from the Trash in RichFiles
+- [technical] Fixed RichDoctor recording Forward Delete on the desktop as done while the item stayed; it now counts the items that really left the desktop
+
 ## 1.3.8-nightly.20261127.120
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.8-nightly.20261127.120)
