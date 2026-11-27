@@ -281,15 +281,26 @@ impl WorkHost {
         crate::turn_gate::allows(&self.turn_gate, binding, self.origin_of(binding, input, through))
     }
 
+    fn app_run_id(&self) -> Option<&str> {
+        self.turn_gate.get().map(|gate| gate.run_id())
+    }
+
+    fn begin_attempt(
+        &self, scope: &crate::status_tools::StatusToolScope, input: &str, session: &str,
+    ) -> Result<(), String> {
+        crate::session_tools::begin_attempt_in_run(scope, "stu", input, session, self.app_run_id())
+    }
+
     /// What [`Self::may_send`] knows about the input: [`crate::turn_gate::Origin`].
     fn origin_of(&self, binding: &ThreadBinding, input: &str, through: Option<u64>) -> crate::turn_gate::Origin {
         use crate::turn_gate::Origin;
         let scope = self.message_scope(binding);
-        // Carrying on is a delivery begun for a session (`begin_attempt` names it) and never
-        // finished: the turn given it ended (`acknowledge`) marks it delivered, and an entry kept
+        // Carrying on is a delivery begun for a session in an earlier app run and never
+        // finished. The turn given it ended (`acknowledge`) marks it delivered, and an entry kept
         // for a handoff whose job is still open (paused, waiting) then waits like the rest. An
         // older build's entry that names no session is not one either.
-        let begun = crate::session_tools::previous_attempt(&scope, "stu", input).ok().flatten()
+        let begun = crate::session_tools::previous_run_attempt(&scope, "stu", input, self.app_run_id())
+            .ok().flatten()
             .is_some_and(|attempt| attempt["session_id"].is_string() && attempt["delivered"] != true
                 // He chose "Quit and stop the work": what was under way then was stopped.
                 && attempt["stopped"] != true
@@ -635,7 +646,7 @@ impl WorkHost {
                         text = payload.to_string();
                         backend.inner.lock().unwrap().note_given(&session, *through);
                     }
-                    crate::session_tools::begin_attempt(&scope, "stu", &input_id, &session)?;
+                    host.begin_attempt(&scope, &input_id, &session)?;
                     let completed = host.live_completion_with(&backend, &binding, message.clone(),
                         (input.clone(), Some(session.clone())), text.clone(), false);
                     live.send_input(&uuid::Uuid::new_v4().to_string(), &text, completed)
@@ -1148,7 +1159,7 @@ impl WorkHost {
         let scope = self.message_scope(binding);
         // WORK THE APP'S END CUT OFF (the CEO's standing default: paused until he writes in this
         // chat, then it carries on). An input given to a session by an earlier run, read at this
-        // back end's first selection, before this process begins any attempt: one whose turn
+        // back end's first selection: one whose turn
         // never ended, or a handoff whose turn ended while its job still read as starting or
         // running (a teammate still at work when the app ended). That session's record usually
         // holds it already, so it reads as given; but a resumed session does not carry on by
@@ -1157,8 +1168,8 @@ impl WorkHost {
         // which is the app.
         let cut_off: Vec<u64> = match self.turn_gate.get() {
             None => Vec::new(),
-            Some(_) => backend.cut_off.lock().unwrap()
-                .get_or_insert_with(|| crate::session_tools::open_inputs(&scope, "stu").unwrap_or_default().into_iter()
+            Some(gate) => backend.cut_off.lock().unwrap()
+                .get_or_insert_with(|| crate::session_tools::open_inputs(&scope, "stu", gate.run_id()).unwrap_or_default().into_iter()
                     .filter(|(through, delivered)| !delivered || self.handoff_job_was_running(&scope, *through))
                     .map(|(through, _)| through).collect())
                 .iter().copied().collect(),
@@ -1297,7 +1308,7 @@ impl WorkHost {
                     use sha2::Digest;
                     let digest=sha2::Sha256::digest(format!("{}\0{}\0{input_id}",scope.entity_id,scope.thread_id));
                     let id=uuid::Uuid::from_slice(&digest[..16]).unwrap().to_string();
-                    crate::session_tools::begin_attempt(&scope,"stu",&input_id,session)?;
+                    self.begin_attempt(&scope, &input_id, session)?;
                     let completed=self.live_completion(&backend,binding,message.clone(),
                         (InputReceipt::Answer(answer.id.clone()),Some(session.to_string())),text.clone());
                     match self.send_live_input(binding, input.as_ref(), &id, &text, assignment.map(|id| (session, id)), completed) {
@@ -1352,7 +1363,7 @@ impl WorkHost {
             .map_err(|e| e.to_string())?;
             let text = payload.to_string();
             if let Some(session) = &session {
-                crate::session_tools::begin_attempt(&scope,"stu",&input_id,session)?;
+                self.begin_attempt(&scope, &input_id, session)?;
             }
             let completed = self.live_completion_with(&backend, binding, message.clone(),
                 (InputReceipt::Peer(through), session.clone()), text.clone(), !Self::usage_limit_retry_spent(&message));
@@ -1608,12 +1619,7 @@ impl WorkHost {
                     inner.peer_active_through=Some(inner.peer_active_through.unwrap_or(0).max(through));
                 }
             }
-            crate::session_tools::begin_attempt(
-                &self.message_scope(binding),
-                "stu",
-                turn,
-                &session,
-            )?;
+            self.begin_attempt(&self.message_scope(binding), turn, &session)?;
             // Stop may have arrived during connection/scope preparation, before a
             // native stop handle existed. Never deliver that saved handoff afterward.
             if stopped()? {
@@ -5694,6 +5700,47 @@ mod tests {
         h.host.wake_messages(&h.binding);assert!(h.host.wait_for_completed(1,std::time::Duration::from_secs(30)));
         h.host.shutdown();assert_eq!(h.work_prompts.lock().unwrap().len(),1);
         assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none());
+        std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    #[test]
+    fn a_fresh_team_report_retries_after_a_disconnect_in_the_same_run() {
+        use crate::{session_tools, turn_gate::{Origin, TurnGate}};
+
+        let h = harness(0);
+        let gate = Arc::new(TurnGate::at_launch(&h.state));
+        h.host.set_turn_gate(Arc::clone(&gate));
+        let scope = h.host.message_scope(&h.binding);
+        let path = h.root.join("peer-status.json");
+        session_tools::bind(&path, &scope, "front-session", "rich", None).unwrap();
+        h.team.lock().unwrap().turn_results.push_back("io_error");
+        session_tools::send(&path, &scope, serde_json::json!({"text":"A completed task's report"})).unwrap();
+        let (_, through) = session_tools::pending(&scope, "stu").unwrap().unwrap();
+        let input = format!("peer:{through}");
+        h.host.wake_messages(&h.binding);
+        // Hang guard: the recorded attempt and cleared inbox are the verdict.
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(10)));
+        let attempt = session_tools::previous_attempt(&scope, "stu", &input).unwrap().unwrap();
+        assert_eq!(attempt, serde_json::json!({"input": input, "session_id": "work-session-one"}));
+        assert_eq!(h.host.origin_of(&h.binding, &input, Some(through)), Origin::Now);
+        assert!(session_tools::open_inputs(&scope, "stu", gate.run_id()).unwrap().is_empty());
+        assert_eq!(
+            session_tools::open_inputs(&scope, "stu", "later-launch").unwrap(),
+            std::collections::BTreeMap::from([(through, false)]),
+        );
+        assert!(!gate.written(h.binding.thread_id()));
+
+        h.host.wake_messages(&h.binding);
+        // Hang guard: the replacement session must accept the original report.
+        assert!(h.host.wait_for_completed(2, std::time::Duration::from_secs(10)));
+        h.host.shutdown();
+        assert_eq!(h.spawns.load(Ordering::SeqCst), 2);
+        assert!(session_tools::pending(&scope, "stu").unwrap().is_none());
+        assert!(!gate.cut_off(h.binding.thread_id()));
+        let prompts = h.work_prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 2);
+        assert!(prompts[1].contains("A completed task's report"));
+        assert!(prompts[1].contains("work-session-one"));
         std::fs::remove_dir_all(h.root).unwrap();
     }
 

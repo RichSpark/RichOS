@@ -206,6 +206,31 @@ case_quiet "A24b. indented text is not an exact heredoc terminator" Write "$SAND
     $'cat <<END\n END\n# colour\nEND\n'
 case_quiet "A24c. an unquoted heredoc joins escaped newlines before testing its delimiter" \
     Write "$SANDBOX/heredoc.sh" $'cat <<END\nprefix\\\nEND\n# colour\nEND\n'
+CASE_ROOT="$SANDBOX/case-repo"
+git init -q "$CASE_ROOT"
+mkdir "$CASE_ROOT/src"
+printf 'DIALECT_TARGET="en-US"\nPROTECTED_PATHS="src"\n' > "$CASE_ROOT/orchestration.config"
+read -r -d '' CASE_SCRIPT <<'CASE_ZSH' || true
+mode=sample
+result="$(case "$mode" in
+sample)
+cat <<'END'
+# colour
+END
+;;
+esac)"
+[ "$result" = "$(cat expected.txt)" ]
+CASE_ZSH
+RICHOS_ENTITY_ROOT="$CASE_ROOT" case_quiet "A24d. case arm heredoc inside a quoted substitution stays literal" \
+    Write "$CASE_ROOT/src/fixture.sh" "$CASE_SCRIPT"
+CASE_LITERAL="${CASE_SCRIPT/colour/color}"
+RICHOS_ENTITY_ROOT="$CASE_ROOT" case_refused "A24e. text after the case substitution is still a string" \
+    "string literal" Write "$CASE_ROOT/src/fixture.sh" \
+    "${CASE_LITERAL/esac)\"/esac) colour\"}"
+RICHOS_ENTITY_ROOT="$CASE_ROOT" case_quiet "A24f. nested cases and parenthesized patterns keep the heredoc protected" \
+    Write "$CASE_ROOT/src/fixture.sh" \
+    $'result="$(case sample in\n(sample|other) case inner in\ninner) cat <<END\n# colour\nEND\n;; esac\n;; esac)"'
+
 case_fixed "A25. a quoted redirect and a here-string leave shell comments fixable" "$C" \
     $'printf "<< EOF"\ncat <<<input\n# the color of it' \
     Write "$SANDBOX/heredoc.sh" $'printf "<< EOF"\ncat <<<input\n# the colour of it'

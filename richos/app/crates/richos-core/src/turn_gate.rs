@@ -63,6 +63,7 @@ pub enum Origin {
 
 pub struct TurnGate {
     since_ms: u64,
+    run_id: String,
     ledger: PathBuf,
     record: PathBuf,
     /// How long each chat's inbox (`<state>/messages/<company>/<chat>/<role>.jsonl`) was when
@@ -112,6 +113,7 @@ impl TurnGate {
         }
         let gate = Self {
             since_ms: crate::util::now_millis(),
+            run_id: uuid::Uuid::new_v4().to_string(),
             ledger: state.parent().unwrap_or(state).join("conversation-ledger.jsonl"),
             record: state.join(RECORD),
             inboxes,
@@ -125,6 +127,11 @@ impl TurnGate {
     /// When the app opened, in the ledger's clock.
     pub fn since_ms(&self) -> u64 {
         self.since_ms
+    }
+
+    /// Identifies delivery attempts made during this launch, even if the wall clock changes.
+    pub(crate) fn run_id(&self) -> &str {
+        &self.run_id
     }
 
     /// **Was the inbox row ending at `through` written while the app is open?** A row within
@@ -181,9 +188,9 @@ impl TurnGate {
             }
         }
         if inner.open.insert((binding.entity_id().as_str().to_string(), thread.to_string())) {
-            let open = inner.open.clone();
-            drop(inner);
-            self.write(&open);
+            // Publish under the same lock as insertion so an earlier snapshot cannot
+            // overwrite a later one or write to its temporary file.
+            self.write(&inner.open);
         }
         true
     }
@@ -234,18 +241,20 @@ impl TurnGate {
             return;
         }
         let mut reader = std::io::BufReader::new(file);
-        let mut line = String::new();
+        let mut raw = Vec::new();
         loop {
-            line.clear();
-            // A concurrent append may not have completed its last record yet.
-            match reader.read_line(&mut line) {
-                Ok(count) if count > 0 && line.ends_with('\n') => inner.read += count as u64,
+            raw.clear();
+            // Advance past every complete row, even corrupt UTF-8. A concurrent append
+            // may not have completed its last row yet, so leave its offset alone.
+            match reader.read_until(b'\n', &mut raw) {
+                Ok(count) if raw.ends_with(b"\n") => inner.read += count as u64,
                 _ => break,
             }
+            let Ok(line) = std::str::from_utf8(&raw) else { continue };
             if !line.contains("PromptReceived") {
                 continue;
             }
-            let Ok(row) = serde_json::from_str::<Value>(&line) else { continue };
+            let Ok(row) = serde_json::from_str::<Value>(line) else { continue };
             if row["event"] == "PromptReceived"
                 && matches!(row["source"].as_str(), Some("text" | "jam"))
                 && row["at"].as_u64().is_some_and(|at| at >= self.since_ms)
