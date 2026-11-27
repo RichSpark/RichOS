@@ -2,6 +2,14 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.3.8-nightly.20261127.120
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.8-nightly.20261127.120)
+
+- Fixed work cut off when RichOS closed unexpectedly, for example in a crash, showing as Working after reopening while nothing ran; the conversation now says it is paused and writing anything there carries on Rich's answer or the team's job
+- Fixed a new Codex report or a press of Stop setting off work left from while RichOS was closed, which used your usage; it now waits until you next write, talk or answer a question in that conversation
+- Fixed RichFiles Window Gestures, such as double-clicking a desktop folder, Forward Delete on the desktop, Dock gestures or title-bar gestures, stopping working after a RichOS update, including the update to this build; they keep the permission you already gave
+
 ## 1.3.8-nightly.20261126.119
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.8-nightly.20261126.119)
