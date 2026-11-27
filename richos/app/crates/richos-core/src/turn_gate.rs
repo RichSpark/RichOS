@@ -63,6 +63,7 @@ pub enum Origin {
 
 pub struct TurnGate {
     since_ms: u64,
+    run_id: String,
     ledger: PathBuf,
     record: PathBuf,
     /// How long each chat's inbox (`<state>/messages/<company>/<chat>/<role>.jsonl`) was when
@@ -112,6 +113,7 @@ impl TurnGate {
         }
         let gate = Self {
             since_ms: crate::util::now_millis(),
+            run_id: uuid::Uuid::new_v4().to_string(),
             ledger: state.parent().unwrap_or(state).join("conversation-ledger.jsonl"),
             record: state.join(RECORD),
             inboxes,
@@ -125,6 +127,11 @@ impl TurnGate {
     /// When the app opened, in the ledger's clock.
     pub fn since_ms(&self) -> u64 {
         self.since_ms
+    }
+
+    /// Identifies delivery attempts made during this launch, even if the wall clock changes.
+    pub(crate) fn run_id(&self) -> &str {
+        &self.run_id
     }
 
     /// **Was the inbox row ending at `through` written while the app is open?** A row within
