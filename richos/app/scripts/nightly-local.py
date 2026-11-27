@@ -2776,7 +2776,13 @@ class Runner:
         if not candidate.exists():
             raise ValueError(f"{out} has no candidate.json; the build for run {run_id} "
                              "did not finish")
-        return out, json.loads(candidate.read_text())["info"]
+        info = json.loads(candidate.read_text())["info"]
+        recorded_run = info.get("run_id")
+        if recorded_run != run_id:
+            if not recorded_run:
+                raise ValueError(f"{candidate} does not record a run ID for the requested run {run_id}")
+            raise ValueError(f"run {run_id} was superseded at {out} by run {recorded_run}")
+        return out, info
 
     def print_candidate(self, info, out, proofs_ready=True):
         # This Mac is Apple Silicon only (see main()'s own precondition), so the

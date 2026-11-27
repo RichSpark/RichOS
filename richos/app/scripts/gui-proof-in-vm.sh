@@ -92,6 +92,7 @@ die() { echo "gui-proof-in-vm.sh: $*" >&2; exit 2; }
 # ---------------------------------------------------------------------------------------
 if [ -n "$RUN_ID" ]; then
   [ -z "$BUNDLE" ] || die "--run and --bundle name the same thing two ways; give one."
+  case "$RUN_ID" in */*|.|..) die "a valid --run <run-id> is required" ;; esac
   POINTER="$STATE_DIR/runs/$RUN_ID.json"
   [ -f "$POINTER" ] || die "no recorded build for run $RUN_ID at $POINTER; run \`nightly-local.py build\` first."
   CAND_DIR="$(/usr/bin/python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["out"])' "$POINTER")" \
@@ -101,15 +102,21 @@ if [ -n "$RUN_ID" ]; then
   # THE COMMIT IS READ OUT OF THE CANDIDATE, never passed in beside it. A sha a caller
   # types is a sha a caller can mistype, and the one thing `publish` checks is that this
   # proof is about THAT tree.
-  eval "$(/usr/bin/python3 - "$CANDIDATE" <<'PY'
+  FIELDS="$(/usr/bin/python3 - "$CANDIDATE" "$RUN_ID" <<'PY'
 import json, shlex, sys
 info = json.load(open(sys.argv[1]))["info"]
+run = info.get("run_id")
+if not run:
+    raise SystemExit(f"{sys.argv[1]} does not record a run ID for the requested run {sys.argv[2]}")
+if run != sys.argv[2]:
+    raise SystemExit(f"run {sys.argv[2]} was superseded at {sys.argv[1]} by run {run}")
 commit = info.get("build_commit") or info["source_commit"]
 print(f"COMMIT={shlex.quote(commit)}")
 print(f"VERSION={shlex.quote(info['version'])}")
 print(f"TAG={shlex.quote(info['tag'])}")
 PY
-)" || die "could not read $CANDIDATE"
+)" || die "could not use $CANDIDATE for run $RUN_ID"
+  eval "$FIELDS"
   # make-release.sh's own ARCH mapping; this Mac is Apple Silicon only.
   BUNDLE="$CAND_DIR/RichOS-$VERSION-macos-aarch64.zip"
   [ -f "$BUNDLE" ] || die "the candidate has no first-install archive at $BUNDLE"

@@ -2658,6 +2658,36 @@ while True: time.sleep(.02)
         self.assertIn("RICHOS_ACTIVATION=regular", buf.getvalue())
         self.assertIn(f"publish --run {self.CANDIDATE_INFO['run_id']}", buf.getvalue())
 
+    def test_a_superseded_stable_run_cannot_open_its_replacement(self):
+        spec = importlib.util.spec_from_file_location("stable_release", Path(m.__file__).with_name("nightly.py"))
+        release = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(release)
+
+        r = self.runner()
+        out = r.state / "releases" / "v1.2.0"
+        out.mkdir(parents=True)
+        old = {**self.CANDIDATE_INFO, "run_id": "older-attempt", "channel": "stable",
+               "tag": "v1.2.0", "reservation_ref": "refs/candidates/stable/v1.2.0"}
+        new = {**old, "run_id": "replacement-attempt", "build_commit": "c" * 40}
+        (out / "build-info.json").write_text(json.dumps(old))
+        (out / "candidate.json").write_text(json.dumps({"info": old}))
+        r.record_run(old["run_id"], out)
+        self.assertEqual(r.load_candidate(old["run_id"]), (out, old))
+
+        release.clear_superseded_stable_attempt(new, out)
+        self.assertFalse(out.exists())
+        out.mkdir()
+        (out / "candidate.json").write_text(json.dumps({"info": new}))
+        r.record_run(new["run_id"], out)
+
+        r.command.reset_mock()
+        for command in ("candidate", "resume-proofs", "publish"):
+            with self.subTest(command=command), self.assertRaisesRegex(
+                    ValueError, "older-attempt.*superseded.*replacement-attempt"):
+                r.perform(command, run_id=old["run_id"])
+        r.command.assert_not_called()
+        self.assertEqual(r.load_candidate(new["run_id"]), (out, new))
+
     def test_publish_and_candidate_require_a_recorded_run(self):
         r = self.runner()
         for command in ("publish", "candidate"):
