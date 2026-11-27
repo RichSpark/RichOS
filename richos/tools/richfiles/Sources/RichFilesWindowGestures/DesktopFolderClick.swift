@@ -6,13 +6,13 @@ import RichFilesCore
 final class DesktopFolderClick {
     private final class Candidate {
         let icon: AXUIElement
-        let reference: URL
+        let name: String
         let point: CGPoint
         var folder: URL?
 
-        init(icon: AXUIElement, reference: URL, point: CGPoint) {
+        init(icon: AXUIElement, name: String, point: CGPoint) {
             self.icon = icon
-            self.reference = reference
+            self.name = name
             self.point = point
         }
     }
@@ -56,8 +56,7 @@ final class DesktopFolderClick {
             guard let previous, let folder = previous.folder, element == previous.icon,
                   let pid = element.processID, NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
                   let selection: [AXUIElement] = element.element(kAXParentAttribute)?.value(kAXSelectedChildrenAttribute),
-                  selection == [element], let current: URL = element.value(kAXURLAttribute),
-                  current == previous.reference else { return }
+                  selection == [element], element.value(kAXTitleAttribute) as String? == previous.name else { return }
             // Finder still receives a normal press, so dragging this icon works.
             event.setIntegerValueField(.mouseEventClickState, value: 1)
             second = (folder, event.location)
@@ -69,12 +68,14 @@ final class DesktopFolderClick {
               element.role == kAXImageRole, let group = element.element(kAXParentAttribute),
               group.role == kAXGroupRole, let desktop = group.element(kAXParentAttribute),
               desktop.role == kAXScrollAreaRole, desktop.element(kAXParentAttribute)?.role == kAXApplicationRole,
-              let reference: URL = element.value(kAXURLAttribute), reference.isFileURL else { return }
-        let candidate = Candidate(icon: element, reference: reference, point: event.location)
+              let name: String = element.value(kAXTitleAttribute),
+              let reference: NSURL = element.value(kAXURLAttribute), reference.isFileURL else { return }
+        let candidate = Candidate(icon: element, name: name, point: event.location)
         first = candidate
         DispatchQueue.global(qos: .userInitiated).async {
-            // Validate the destination but match the second click against the original icon.
-            let folder = reference.resolvingSymlinksInPath()
+            guard let entry = Self.desktopEntry(named: name, reference: reference) else { return }
+            // A Desktop link may intentionally point outside the Desktop.
+            let folder = entry.resolvingSymlinksInPath()
             guard let values = try? folder.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey, .isVolumeKey, .isSymbolicLinkKey]),
                   values.isDirectory == true, values.isPackage == false, values.isVolume == false,
                   values.isSymbolicLink == false else { return }
@@ -82,6 +83,23 @@ final class DesktopFolderClick {
                 if let candidate, self?.first === candidate { candidate.folder = folder }
             }
         }
+    }
+
+    private static func desktopEntry(named name: String, reference: NSURL) -> URL? {
+        let files = FileManager.default
+        guard let desktop = files.urls(for: .desktopDirectory, in: .userDomainMask).first?.resolvingSymlinksInPath(),
+              let path = reference.filePathURL else { return nil }
+        let parent = path.deletingLastPathComponent().resolvingSymlinksInPath()
+        if parent.path == desktop.path, files.displayName(atPath: path.path) == name || path.lastPathComponent == name {
+            return path
+        }
+        // Finder sometimes retains a reference to the Trash copy after a
+        // Desktop name is reused. Use the current matching entry only if unique.
+        guard let trash = try? files.url(for: .trashDirectory, in: .userDomainMask, appropriateFor: desktop, create: false),
+              parent.path == trash.resolvingSymlinksInPath().path,
+              let entries = try? files.contentsOfDirectory(at: desktop, includingPropertiesForKeys: nil) else { return nil }
+        let matches = entries.filter { files.displayName(atPath: $0.path) == name || $0.lastPathComponent == name }
+        return matches.count == 1 ? matches.first : nil
     }
 
     func dragged(_ event: CGEvent) {
