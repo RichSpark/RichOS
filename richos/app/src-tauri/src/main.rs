@@ -510,9 +510,36 @@ static CODEX_SINK: std::sync::OnceLock<richos_core::codex_watch::Sink> = std::sy
 /// **Opening the app spends nothing** (CEO 2026-11-26): a report that was written before this
 /// run of the app began, for a conversation with no open job in which the user has asked
 /// nothing since, is not handed to Stu. It waits in its journal
-/// (`codex_bridge::accept_when_asked`).
+/// (`codex_bridge::accept_when_asked`), or set aside once Codex writes a newer one behind it,
+/// and goes to Stu the moment the user acts in that chat (`Asked::release_held`).
 fn codex_sink(app: AppHandle, state_root: &Path, gate: Arc<richos_core::turn_gate::TurnGate>) -> richos_core::codex_watch::Sink {
-    let asked = richos_core::codex_bridge::Asked::at_launch(&richos_core::codex_bridge::root(), state_root, gate);
+    let asked = Arc::new(richos_core::codex_bridge::Asked::at_launch(&richos_core::codex_bridge::root(), state_root, Arc::clone(&gate)));
+    let (opened, opens) = std::sync::mpsc::sync_channel::<()>(1);
+    gate.when_a_chat_opens(Arc::new(move || { opened.try_send(()).unwrap_or(()); }));
+    let (releaser, release_app) = (Arc::clone(&asked), app.clone());
+    let released = std::thread::Builder::new().name("richos-codex-held".into()).spawn(move || {
+        // A release that failed (Stu's inbox busy, say) is tried again at the watcher's pace.
+        let mut again = false;
+        loop {
+            let woke = if again {
+                !matches!(opens.recv_timeout(std::time::Duration::from_secs(15)), Err(std::sync::mpsc::RecvTimeoutError::Disconnected))
+            } else {
+                opens.recv().is_ok()
+            };
+            if !woke { break; }
+            let Some(state) = release_app.try_state::<AppState>() else { again = true; continue };
+            let view = state.reader.snapshot();
+            let binding_for = |thread: &str| view.ledger().thread_binding(thread).ok()
+                .filter(|binding| view.entity_registry().contains(binding.entity_id()));
+            again = match releaser.release_held(&state.data_dir.join("engine-state"), &richos_core::codex_bridge::root(), &binding_for) {
+                Ok(()) => false,
+                Err(error) => { eprintln!("[richos] a Codex report set aside waits: {error}"); true }
+            };
+        }
+    });
+    if let Err(error) = released {
+        eprintln!("[richos] Codex reports set aside go to Stu with the next report on their connection: {error}");
+    }
     Arc::new(move |line:&str| {
         let state=app.try_state::<AppState>().ok_or("the app is still starting")?;
         let event:serde_json::Value=serde_json::from_str(line).map_err(|e|e.to_string())?;

@@ -45,6 +45,28 @@ pub fn accept(
     event: &Value,
     coordination: &Path,
 ) -> Result<(), String> {
+    take(state, binding, event, coordination, Take::Accept)
+}
+
+/// What [`take`] does with a report it has checked.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Take {
+    /// Into Stu's inbox, and the watcher's place moved past it: [`accept`].
+    Accept,
+    /// Set aside in [`HELD`] for when the user acts in its chat, and the watcher's place moved
+    /// past it, so what Codex wrote behind it on the connection is offered next.
+    SetAside,
+    /// Into Stu's inbox from [`HELD`]: the watcher's place is already past it.
+    Release,
+}
+
+fn take(
+    state: &Path,
+    binding: &crate::entity::ThreadBinding,
+    event: &Value,
+    coordination: &Path,
+    how: Take,
+) -> Result<(), String> {
     let c = &event["connection"];
     let entity = c["entity_id"].as_str().ok_or("Missing channel company")?;
     let thread = c["thread_id"]
@@ -102,7 +124,7 @@ pub fn accept(
         entity_id: entity.into(),
         thread_id: thread.into(),
     };
-    if kind != Some("task_context") {
+    if kind != Some("task_context") && how != Take::SetAside {
         let text = record["text"]
             .as_str()
             .ok_or("Channel record has no text")?;
@@ -135,7 +157,14 @@ pub fn accept(
             if kind == Some("review_result") { "review-watch" } else { "codex-watch" },
         )?;
     }
-    // Only reached after the exact inbox row was synced (or non-actionable context).
+    match how {
+        Take::Accept => {}
+        // Saved before the place moves past it: it is never dropped.
+        Take::SetAside => set_aside(state, id, event)?,
+        Take::Release => return Ok(()),
+    }
+    // Only reached after the exact inbox row was synced (or non-actionable context), or the
+    // report was set aside.
     let suffix = if kind == Some("legacy_live") { ".live.json" } else { ".json" };
     let path = state
         .join("codex-watch/accepted")
@@ -182,6 +211,10 @@ pub struct Asked {
     /// many lines that length holds.
     markdown: std::collections::HashMap<PathBuf, u64>,
     markdown_lines: std::sync::Mutex<std::collections::HashMap<PathBuf, u64>>,
+    /// Held while a report is set aside, released or accepted ([`accept_when_asked`],
+    /// [`Self::release_held`]): the watcher's thread and the one that releases what was set
+    /// aside when the user acts never hand Stu one connection's reports out of order.
+    aside: std::sync::Mutex<()>,
 }
 
 /// Where the app's watcher keeps its place in each old Markdown channel file
@@ -218,33 +251,85 @@ impl Asked {
             }
         }
         Self { gate, journals,
-            markdown, markdown_lines: Default::default() }
+            markdown, markdown_lines: Default::default(), aside: Default::default() }
     }
 
-    /// **Is this a report nobody has followed up since the app opened?**
+    /// **Was this report written before the app opened?**
     ///
     /// A report that ends within its journal's length at launch was written while the app was
     /// closed. So was, in effect, a notice the app's own review watcher writes about one at
-    /// startup (`review_result`): neither starts a turn. Both wait only while Codex has written
-    /// nothing on that connection since launch: the watcher offers a connection's reports one
-    /// at a time, in order, so a report that stayed held would hold back every report Codex
-    /// writes there while the app is open. Once Codex writes one, what was held is handed over
-    /// ahead of it. A journal that did not exist at launch holds nothing from before.
-    ///
-    /// A reply on an old Markdown channel (`legacy_live`) names the lines it came from, and it
-    /// is from before when it starts within the file's length at launch. It waits only while
-    /// none of those files has grown, for the same reason: they share one spool.
-    fn nobody_wrote_since(&self, event: &Value) -> bool {
+    /// startup (`review_result`): neither starts a turn. A journal that did not exist at launch
+    /// holds nothing from before. A reply on an old Markdown channel (`legacy_live`) names the
+    /// lines it came from, and it is from before when it starts within the file's length at
+    /// launch.
+    fn written_before_launch(&self, event: &Value) -> bool {
         let kind = event["record"]["kind"].as_str();
         match kind {
             Some("legacy_live") => return self.markdown_reply_from_before(event["record"]["text"].as_str().unwrap_or_default()),
             Some(kind) if kind.starts_with("legacy_") => return false,
             _ => {}
         }
-        let Some(journal) = event["locator"].as_str().and_then(|locator| Path::new(locator).join(JOURNAL).canonicalize().ok())
-        else { return false };
+        let Some(journal) = Self::journal(event) else { return false };
         let (Some(length), Some(through)) = (self.journals.get(&journal), event["through"].as_u64()) else { return false };
-        (through <= *length || kind == Some("review_result")) && !codex_wrote_after(&journal, *length)
+        through <= *length || kind == Some("review_result")
+    }
+
+    /// **Has Codex written behind this report since the app opened?** The watcher offers a
+    /// connection's reports one at a time, in order, so a report left in its journal holds back
+    /// every one Codex writes there while the app is open: it is set aside instead
+    /// ([`accept_when_asked`]). The old Markdown channels share one spool, so a reply written on
+    /// ANY of them is behind this one.
+    fn written_behind(&self, event: &Value) -> bool {
+        if event["record"]["kind"] == "legacy_live" {
+            return self.markdown.iter().any(|(file, length)| std::fs::metadata(file).is_ok_and(|now| now.len() > *length));
+        }
+        let Some(journal) = Self::journal(event) else { return false };
+        self.journals.get(&journal).is_some_and(|length| codex_wrote_after(&journal, *length))
+    }
+
+    fn journal(event: &Value) -> Option<PathBuf> {
+        event["locator"].as_str().and_then(|locator| Path::new(locator).join(JOURNAL).canonicalize().ok())
+    }
+
+    /// **What was set aside on this report's connection goes to Stu first**, oldest first,
+    /// once the user has been active in its chat since launch; until then it stays set aside.
+    /// The caller holds [`Self::aside`].
+    fn release_connection(&self, state: &Path, binding: &crate::entity::ThreadBinding, event: &Value, coordination: &Path) -> Result<(), String> {
+        let Some(id) = event["connection"]["connection_id"].as_str() else { return Ok(()) };
+        component(id)?;
+        let path = state.join(HELD).join(format!("{id}.jsonl"));
+        if !path.exists() || !self.gate.may_start(binding, crate::turn_gate::Origin::FromBefore) {
+            return Ok(());
+        }
+        for held in held_events(&path)? {
+            take(state, binding, &held, coordination, Take::Release)?;
+        }
+        // Each is in Stu's inbox now; one given again after a crash here is already there.
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+        std::fs::File::open(state.join(HELD)).and_then(|folder| folder.sync_all()).map_err(|e| e.to_string())
+    }
+
+    /// **The user has just acted in a chat** ([`crate::turn_gate::TurnGate::when_a_chat_opens`]):
+    /// every report set aside for a chat he has been active in since launch goes to Stu now,
+    /// oldest first; the rest stay set aside. `binding_for` resolves a conversation the ledger
+    /// and the company registry still hold. Every connection is tried; the first failure is
+    /// returned, and what failed stays set aside.
+    pub fn release_held(&self, state: &Path, coordination: &Path,
+        binding_for: &dyn Fn(&str) -> Option<crate::entity::ThreadBinding>) -> Result<(), String> {
+        let _one = self.aside.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Ok(entries) = std::fs::read_dir(state.join(HELD)) else { return Ok(()) };
+        let mut failure = None;
+        for path in entries.flatten().map(|entry| entry.path()).filter(|path| path.extension().is_some_and(|e| e == "jsonl")) {
+            let result = held_events(&path).and_then(|held| {
+                let Some(first) = held.first() else { return Ok(()) };
+                let Some(binding) = first["connection"]["thread_id"].as_str().and_then(binding_for) else { return Ok(()) };
+                self.release_connection(state, &binding, first, coordination)
+            });
+            if let Err(error) = result {
+                failure.get_or_insert(error);
+            }
+        }
+        failure.map_or(Ok(()), Err)
     }
 
     /// The watcher's block for a Markdown entry opens with where it came from:
@@ -257,11 +342,6 @@ impl Asked {
         else { return true };
         let file = PathBuf::from(file);
         let Some(length) = self.markdown.get(&file) else { return false };
-        // Every Markdown channel shares one spool, offered one reply at a time: a reply
-        // written on ANY of them while the app is open is behind this one.
-        if self.markdown.iter().any(|(file, length)| std::fs::metadata(file).is_ok_and(|now| now.len() > *length)) {
-            return false;
-        }
         let mut lines = self.markdown_lines.lock().unwrap();
         let before = *lines.entry(file.clone()).or_insert_with(|| {
             use std::io::Read;
@@ -295,9 +375,46 @@ fn codex_wrote_after(journal: &Path, length: u64) -> bool {
     })
 }
 
+/// Where a report from before waits once Codex has written behind it on its connection
+/// ([`accept_when_asked`]): `<state>/codex-watch/held/<connection>.jsonl`, each report as the
+/// watcher offered it, one per line, oldest first.
+const HELD: &str = "codex-watch/held";
+
+/// **Set this report aside**, on disk before the watcher's place moves past it. Offered again
+/// after a crash between the two, it is not saved twice.
+fn set_aside(state: &Path, id: &str, event: &Value) -> Result<(), String> {
+    use std::io::Write;
+    let folder = state.join(HELD);
+    std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+    let path = folder.join(format!("{id}.jsonl"));
+    if held_events(&path)?.iter().any(|held| held["record"] == event["record"] && held["through"] == event["through"]) {
+        return Ok(());
+    }
+    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&path).map_err(|e| e.to_string())?;
+    file.write_all(format!("{event}\n").as_bytes()).and_then(|()| file.sync_all()).map_err(|e| e.to_string())?;
+    std::fs::File::open(&folder).and_then(|folder| folder.sync_all()).map_err(|e| e.to_string())
+}
+
+/// The reports set aside in `path`, oldest first; none when there is no such file. A last line
+/// with no newline was never completely written, and its report is still in its journal.
+fn held_events(path: &Path) -> Result<Vec<Value>, String> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.to_string()),
+    };
+    let complete = text.rfind('\n').map_or("", |end| &text[..end]);
+    complete.lines().filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_str(line).map_err(|e| format!("{}: {e}", path.display()))).collect()
+}
+
 /// What the watcher's log says once for a report that waits ([`accept_when_asked`]).
 pub const WAITS_FOR_THE_USER: &str =
     "written before RichOS opened, for a conversation the user has not been active in since; the report stays in its journal";
+
+/// What the app's log says when a report from before is set aside so the one behind it can go.
+pub const SET_ASIDE: &str =
+    "[richos] a Codex report written before RichOS opened is set aside until the user is active in its conversation; the newer one behind it goes ahead";
 
 /// **[`accept`], unless the report is from before the app opened and the one rule holds it**
 /// (CEO 2026-11-26: "Everything was either stopped, finished, ended or paused in the RichOS
@@ -311,9 +428,14 @@ pub const WAITS_FOR_THE_USER: &str =
 /// until the user is active in that conversation, and it stays in the journal, where it
 /// already waited while the app was closed. The watcher offers it again at every scan, and the
 /// first offer after that accepts it, in order. A job record that still says it is open opens
-/// nothing (a quit never rewrites it). A report written while the app is open reaches Stu by
-/// itself, with the held ones before it ([`Asked::nobody_wrote_since`]). `coordination` is the
-/// folder `asked` was made from.
+/// nothing (a quit never rewrites it).
+///
+/// A report written while the app is open reaches Stu by itself. The watcher offers a
+/// connection's reports one at a time, so once Codex writes behind a held report, the held one
+/// is set aside ([`HELD`]) and the newer one is offered and goes; the one set aside still waits
+/// for the user (review rv-20261127T005026Z-12b7c7e4-015b, finding 1). When he acts in that
+/// chat it goes to Stu ([`Asked::release_held`]), and anything that connection offers after
+/// that goes only behind it. `coordination` is the folder `asked` was made from.
 pub fn accept_when_asked(
     state: &Path,
     binding: &crate::entity::ThreadBinding,
@@ -321,9 +443,16 @@ pub fn accept_when_asked(
     coordination: &Path,
     asked: &Asked,
 ) -> Result<(), String> {
-    if asked.nobody_wrote_since(event) && !asked.gate.may_start(binding, crate::turn_gate::Origin::FromBefore) {
-        return Err(WAITS_FOR_THE_USER.into());
+    let _one = asked.aside.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if asked.written_before_launch(event) && !asked.gate.may_start(binding, crate::turn_gate::Origin::FromBefore) {
+        if !asked.written_behind(event) {
+            return Err(WAITS_FOR_THE_USER.into());
+        }
+        take(state, binding, event, coordination, Take::SetAside)?;
+        eprintln!("{SET_ASIDE}");
+        return Ok(());
     }
+    asked.release_connection(state, binding, event, coordination)?;
     accept(state, binding, event, coordination)
 }
 
@@ -498,6 +627,18 @@ mod tests {
                 .map(|line| serde_json::from_str(line).unwrap())
                 .collect()
         }
+        /// The message IDs in Stu's inbox, in order; none before it exists.
+        fn delivered(&self) -> Vec<String> {
+            if !session_tools::inbox(&self.scope(), "stu").unwrap().exists() {
+                return Vec::new();
+            }
+            self.rows().into_iter().map(|row| row.bridge.unwrap().message_id).collect()
+        }
+        /// The app's own release once the user acts in a chat (`main.rs` `codex_sink`).
+        fn release(&self, asked: &Asked) {
+            let binding = self.binding.clone();
+            asked.release_held(&self.state, &self.coord, &|thread| (thread == binding.thread_id()).then(|| binding.clone())).unwrap();
+        }
     }
     impl Drop for Fixture {
         fn drop(&mut self) {
@@ -620,14 +761,14 @@ mod tests {
         );
         // Codex writes a second report on the same connection while the app is open. The
         // watcher offers a connection's reports one at a time, in order: the one from before is
-        // handed over now, and the new one after it.
+        // set aside, still held, and the new one goes.
         written(&f, json!({"version":1,"message_id":"message-2","text":"A second report"}));
         accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap();
         let mut later = f.event.clone();
         later["record"]["message_id"] = json!("message-2");
         later["through"] = json!(200);
         accept_when_asked(&f.state, &f.binding, &later, &f.coord, &asked).unwrap();
-        assert_eq!(f.rows().len(), 2, "a report written after the app opened, or the one before it, was held");
+        assert_eq!(f.delivered(), ["message-2"], "a report written after the app opened was held, or the one before it went");
 
         let new = f.coord.join("connections/company-a").join(f.binding.thread_id()).join("new");
         std::fs::create_dir_all(&new).unwrap();
@@ -637,12 +778,80 @@ mod tests {
         fresh["connection"]["connection_id"] = json!("new");
         fresh["record"]["message_id"] = json!("message-3");
         accept_when_asked(&f.state, &f.binding, &fresh, &f.coord, &asked).unwrap();
-        assert_eq!(f.rows().len(), 3, "a report on a connection made after the app opened was held");
+        assert_eq!(f.delivered(), ["message-2", "message-3"], "a report on a connection made after the app opened was held");
+    }
+
+    /// **A fresh Codex report never releases the held one** (review
+    /// rv-20261127T005026Z-12b7c7e4-015b, finding 1: "Fresh Codex report: held report delivered
+    /// first; user messages: 0"). Once Codex writes behind the report from before, the newer
+    /// report reaches Stu by itself and the one from before stays held: through a restart, and
+    /// through more reports, until the user acts in that chat. It is then delivered, never
+    /// dropped, and before anything the connection offers after that.
+    #[test]
+    fn a_fresh_codex_report_goes_alone_and_the_one_from_before_waits_for_the_user() {
+        let f = Fixture::new();
+        let asked = opened(&f);
+        assert_eq!(accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap_err(), WAITS_FOR_THE_USER);
+        let report = |id: &str, through: u64| {
+            written(&f, json!({"version":1,"message_id":id,"text":format!("Report {id}")}));
+            let mut event = f.event.clone();
+            event["record"] = json!({"version":1,"message_id":id,"text":format!("Report {id}")});
+            event["through"] = json!(through);
+            event
+        };
+        let second = report("message-2", 200);
+        // The watcher offers the held report again, now with one behind it, then the new one.
+        accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap();
+        assert!(f.delivered().is_empty(), "the report from before went to Stu with no message from the user");
+        accept_when_asked(&f.state, &f.binding, &second, &f.coord, &asked).unwrap();
+        assert_eq!(f.delivered(), ["message-2"], "the fresh report did not reach Stu by itself");
+        f.release(&asked);
+        assert_eq!(f.delivered(), ["message-2"], "the report from before went with no message from the user");
+
+        // RichOS opens again: what was set aside is still from before.
+        // load-bound: this only moves the millisecond clock past what was saved; host load makes the gap larger, never smaller.
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        let asked = Asked::at_launch(&f.coord, &f.state, std::sync::Arc::new(crate::turn_gate::TurnGate::at_launch(&f.state)));
+        f.release(&asked);
+        let third = report("message-3", 10_000);
+        accept_when_asked(&f.state, &f.binding, &third, &f.coord, &asked).unwrap();
+        assert_eq!(f.delivered(), ["message-2", "message-3"], "a reopening released the report from before, or held a fresh one");
+
+        // He writes in that chat. The next report Codex writes waits behind the one from before,
+        // even when it is offered before the app's release has run.
+        prompt(&f, "What did Codex say?", crate::ledger::Source::Text);
+        let fourth = report("message-4", 20_000);
+        accept_when_asked(&f.state, &f.binding, &fourth, &f.coord, &asked).unwrap();
+        f.release(&asked);
+        assert_eq!(f.delivered(), ["message-2", "message-3", "message-1", "message-4"]);
+        assert!(!f.state.join(HELD).join("pair.jsonl").exists(), "a delivered report is still set aside");
+    }
+
+    /// **Set aside the moment he acts**: the app's release hands it to Stu with nothing more
+    /// from Codex, once, and only for the chat he acted in.
+    #[test]
+    fn the_report_set_aside_goes_once_when_the_user_acts_in_its_chat_and_not_another() {
+        let f = Fixture::new();
+        let asked = opened(&f);
+        written(&f, json!({"version":1,"message_id":"message-2","text":"A second report"}));
+        accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap();
+        let mut ledger = crate::ledger::Ledger::open(f.root.join("conversation-ledger.jsonl")).unwrap();
+        let other = ledger.create_thread("Another chat", &crate::EntityId::parse("company-a").unwrap()).unwrap();
+        let other = ledger.thread_binding(&other).unwrap();
+        ledger.record_prompt_received(&other, "Hello", crate::ledger::Source::Text).unwrap();
+        drop(ledger);
+        f.release(&asked);
+        assert!(f.delivered().is_empty(), "his words in another chat released this one's report");
+        prompt(&f, "Hello", crate::ledger::Source::Jam);
+        f.release(&asked);
+        f.release(&asked);
+        assert_eq!(f.delivered(), ["message-1"]);
     }
 
     /// **The app's own review watcher writes a notice at startup** about a report from while
     /// the app was closed. That notice is not Codex writing: the report stays held, and the
-    /// notice starts no turn either. A report Codex then writes hands all three over, in order.
+    /// notice starts no turn either. A report Codex then writes goes alone; the two from before
+    /// go once the user acts in that chat, in their order.
     #[test]
     fn a_review_notice_written_at_startup_releases_nothing_and_starts_no_turn() {
         let f = Fixture::new();
@@ -662,12 +871,20 @@ mod tests {
         written(&f, json!({"version":1,"message_id":"message-2","text":"A second report"}));
         accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap();
         accept_when_asked(&f.state, &f.binding, &notice, &f.coord, &asked).unwrap();
-        assert_eq!(f.rows().len(), 2);
+        let mut later = f.event.clone();
+        later["record"]["message_id"] = json!("message-2");
+        later["through"] = json!(300);
+        accept_when_asked(&f.state, &f.binding, &later, &f.coord, &asked).unwrap();
+        assert_eq!(f.delivered(), ["message-2"]);
+        prompt(&f, "What did Codex say?", crate::ledger::Source::Text);
+        f.release(&asked);
+        assert_eq!(f.delivered(), ["message-2", "message-1", "review-1"]);
     }
 
     /// **The old Markdown channel.** A reply written while the app was closed starts no turn at
-    /// launch; one written while it is open reaches Stu by itself, and the held one goes ahead
-    /// of it. Each block names the lines it came from, as the engine's watcher writes it.
+    /// launch; one written while it is open reaches Stu by itself, and the held one is set
+    /// aside until the user acts in that chat. Each block names the lines it came from, as the
+    /// engine's watcher writes it.
     #[test]
     fn a_markdown_reply_from_before_waits_and_one_written_while_open_arrives_by_itself() {
         let f = Fixture::new();
@@ -698,7 +915,10 @@ mod tests {
         let live = block("5-6", "## written while open\nlive", "legacy-live-b", 6000);
         accept_when_asked(&f.state, &f.binding, &backlog, &f.coord, &asked).unwrap();
         accept_when_asked(&f.state, &f.binding, &live, &f.coord, &asked).unwrap();
-        assert_eq!(f.rows().len(), 2, "a reply written while the app is open, or the one before it, was held");
+        assert_eq!(f.delivered(), ["legacy-live-b"], "a reply written while the app is open was held, or the one before it went");
+        prompt(&f, "Anything from Codex?", crate::ledger::Source::Text);
+        f.release(&asked);
+        assert_eq!(f.delivered(), ["legacy-live-b", "legacy-live-a"]);
     }
 
     /// The two default Markdown channels share one spool: a reply held on one never holds back
@@ -728,7 +948,8 @@ mod tests {
         use std::io::Write;
         std::fs::OpenOptions::new().append(true).open(&second).unwrap().write_all(b"## a question, written while open\nlive\n").unwrap();
         accept_when_asked(&f.state, &f.binding, &backlog, &f.coord, &asked).unwrap();
-        assert_eq!(f.rows().len(), 1, "the held reply still blocks the other channel's live reply");
+        assert!(f.delivered().is_empty(), "the reply from before went to Stu with nothing asked");
+        assert!(f.state.join("codex-watch/accepted/pair.live.json").exists(), "the held reply still blocks the other channel's live reply");
     }
 
     /// **A reply written while the app was closed whose last line has no newline is from

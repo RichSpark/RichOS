@@ -49,8 +49,12 @@ WHAT IT DOES, in the guest, on fixture data, never on the host's screen (CEO rul
              that conversation's inbox with nothing more typed (Codex's entries still reach the
              team by themselves), and still no answer from any model but Opus
   behind     the app closed, a report written, the app opened and left alone (the report waits),
-             then one more report written while it is open. PASS needs BOTH in the inbox with
-             nothing typed, the one from before first: a held report never holds back a new one
+             then one more report written while it is open. PASS needs the new one in the inbox
+             with nothing typed and the one from before NOT (a held report never holds back a new
+             one, and a new one never releases a held one: review
+             rv-20261127T005026Z-12b7c7e4-015b, finding 1), no model answer beyond the new
+             report's, and then, once a question is typed in that conversation, the one from
+             before in the inbox too, once, after the new one
 
 Both sessions are switched to Opus before either is started, so the walk itself uses no Fable.
 
@@ -351,17 +355,33 @@ class OpenIdleWalk(codex.CodexWatchWalk):
         if self.reached(before):
             raise StepFailed('the report written while the app was closed was handed over with nothing asked')
         self.report(new)
-        rows = self.wait_fact('both reports reaching the team once a new one was written',
-                              lambda: [r['bridge']['message_id'] for r in self.inboxes()
-                                       if r['bridge']['message_id'] in (before, new)], lambda ids: len(ids) == 2)
-        if rows != [before, new]:
-            raise StepFailed('the two reports did not arrive once each, the one from before first: ' + str(rows))
+
+        def ids():
+            return [r['bridge']['message_id'] for r in self.inboxes() if r['bridge']['message_id'] in (before, new)]
+        self.wait_fact('the new report reaching the team by itself', ids, lambda found: new in found)
         after = self.quiet()
+        alone = ids()
+        log = guest(self.vm, 'cat %s 2>/dev/null || true' % shlex.quote(launch['log']), 60)
+        set_aside = [line for line in log.splitlines() if 'is set aside until the user is active' in line]
+        evidence = {'held_report': before, 'new_report': new, 'log_said_it_waits': said[:1], 'log_said_set_aside': set_aside[:1],
+                    'inbox_before_typing': alone, 'typed_by_the_user': 0, 'answers_once_quiet': after}
+        if alone != [new]:
+            raise StepFailed('a new report released the one from before with nothing typed, or did not go alone: ' + str(alone))
         other = [model for model in after['answers'] if 'opus' not in model]
         if other:
             raise StepFailed('a model that is not Opus answered: ' + json.dumps(after))
-        return {'held_until_a_new_report': before, 'new_report': new, 'log_said_it_waits': said[:1],
-                'inbox_order': rows, 'typed_by_the_user': 0, 'answers_once_quiet': after}
+        # He writes in that conversation: the report from before goes now, once, after the new one.
+        if self.present('Show the sidebar'):
+            self.press('Show the sidebar')
+        self.ax('click', '--title', self.title(self.facts['thread']), '--role', 'AXButton', '--in', 'sidebar', '--first', '--contains')
+        self.wait_for('Send', seconds=120)
+        self.send('This is a transport test. One sentence is enough; do nothing else.')
+        rows = self.wait_fact('the report from before reaching the team after his message', ids, lambda found: before in found,
+                              self.a.answer_within)
+        evidence.update(inbox_after_typing=rows, typed_by_the_user=1)
+        if rows != [new, before]:
+            raise StepFailed('after his message the two reports are not there once each, the new one first: ' + str(rows))
+        return evidence
 
     def reviews(self):
         return self.run_python(REVIEWS, self.data + '/engine-state')
