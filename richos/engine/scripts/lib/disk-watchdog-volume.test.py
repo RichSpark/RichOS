@@ -176,7 +176,7 @@ class Notifications(unittest.TestCase):
             "read_state": lambda path: (previous or {}) if path.endswith("disk-watchdog.json") else {},
             "cleanup_health": lambda *a: [],
             "reclaim_under_floor": reclaim,
-            "volume_consumers": lambda mount, *a: [(16 * wd.GB, self.FOLDERS[mount])],
+            "volume_consumers": lambda mount, *a, **kw: [(16 * wd.GB, self.FOLDERS[mount])],
             "on_volume": lambda path, mount: path.startswith(self.EXTERNAL + "/") and mount == self.EXTERNAL,
             "du_kb": lambda path: 16 * wd.GB // 1024,
             "is_ours": lambda path: source == "consumer" and path in owned,
@@ -225,6 +225,58 @@ class Notifications(unittest.TestCase):
         self.assertEqual(len(sent), 1, sent)
         self.assertTrue(sent[0].endswith("other"), sent)
         self.assertIn("CLASSIFICATION: other", output)
+
+    def test_marked_cache_nested_in_scratch_counts_once(self):
+        self.assert_owned_overlap(mark_parent=False, expected=6, classification="other")
+
+    def test_marked_ancestor_includes_its_scratch_once(self):
+        self.assert_owned_overlap(mark_parent=True, expected=12, classification="RichOS garbage (DEFECT)")
+
+    def assert_owned_overlap(self, *, mark_parent, expected, classification):
+        with tempfile.TemporaryDirectory() as sandbox:
+            mount = Path(sandbox)
+            tmp = mount / "tmp"
+            scratch = tmp / "richos-scratch"
+            cache = scratch / "cache"
+            cache.mkdir(parents=True)
+            (tmp if mark_parent else cache).joinpath("CACHEDIR.TAG").write_text("fixture cache marker\n")
+            sizes = {scratch: 6, cache: 6}
+            if mark_parent:
+                # The walk has both a 6 GiB residual in tmp and a 6 GiB child.
+                sizes[tmp] = 12
+            sent, saved = [], []
+            env = {"MODE": "check", "HOME": sandbox, "TMPDIR": str(tmp),
+                   "DISK_PRIMARY_VOLUME": sandbox, "DISK_VOLUME_WALK_ROOT": str(mount if mark_parent else tmp),
+                   "DISK_RICH_ALERT_GB": "60", "DISK_RECLAIM_ENABLE": "0"}
+
+            def size_kb(path, **kwargs):
+                size = sizes.get(Path(path))
+                return size * wd.GB // 1024 if size is not None else None
+
+            patches = {
+                "collect_devices_for_scheduled_check": lambda: None,
+                "storage_candidates": lambda: ([], []),
+                "read_volume": lambda mount: (200 * wd.GB, 20 * wd.GB),
+                "read_state": lambda path: {},
+                "cleanup_health": lambda *args: [],
+                "du_kb": size_kb,
+                "notify_ceo": lambda title, message: sent.append(message) or True,
+                "write_state": lambda path, payload: saved.append(payload),
+                "log": lambda *args: None,
+            }
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(patch.dict(os.environ, env, clear=True))
+                for name, value in patches.items():
+                    stack.enter_context(patch.object(wd, name, value))
+                stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+                self.assertEqual(wd.main(), 1)
+
+            volume = next(v for v in saved[0]["volumes"] if v["mount"] == sandbox)
+            self.assertEqual(volume["shortfall_bytes"], 40 * wd.GB)
+            self.assertEqual(volume["richos_garbage_bytes"], expected * wd.GB)
+            self.assertEqual(volume["classification"], classification)
+            self.assertIn("6.0 GB cache", sent[0])
+            self.assertTrue(sent[0].endswith(classification), sent)
 
     def test_cached_causes_stay_with_their_volumes(self):
         free = {self.PRIMARY: 18, self.EXTERNAL: 45}
@@ -328,7 +380,6 @@ class ScanBoundary(unittest.TestCase):
             "read_volume": lambda mount: (460 * wd.GB, (20 if mount == low_volume else 200) * wd.GB),
             "read_state": lambda path: {},
             "cleanup_health": lambda *args: [],
-            "richos_garbage_bytes": lambda mount: 0,
             "notify_ceo": lambda *args: True,
             "write_state": lambda path, payload: saved.append(payload),
             "log": lambda *args: None,

@@ -147,7 +147,7 @@ def on_volume(path, mount):
         return False
 
 
-def volume_consumers(mount, roots, min_bytes, limit=8, max_depth=6, budget_s=480):
+def volume_consumers(mount, roots, min_bytes, limit=8, max_depth=6, budget_s=480, *, whole_sizes=None):
     """The biggest folders ON THIS VOLUME, found by walking the disk from `roots`, not from a
     declared list of places (2026-11-10, the CEO: a cleanup that works from a fixed list lets
     every new pile grow until he notices).
@@ -162,6 +162,7 @@ def volume_consumers(mount, roots, min_bytes, limit=8, max_depth=6, budget_s=480
     walked earlier is skipped by a later one under any spelling (the home folder, walked first,
     inside the data volume's walk, where it is /System/Volumes/Data/Users/<name>).
     Only called when a volume is under its floor, and bounded by `budget_s`.
+    For a residual row, whole_sizes can retain the full measurement for ownership accounting.
     """
     deadline = time.monotonic() + budget_s
     found = []
@@ -205,6 +206,8 @@ def volume_consumers(mount, roots, min_bytes, limit=8, max_depth=6, budget_s=480
                 covered = sum(b for b, _p in sub)
                 out.extend(sub)
                 if size - covered >= min_bytes:
+                    if whole_sizes is not None:
+                        whole_sizes[child] = size
                     out.append((size - covered, child + "  (files directly in it)"))
         return out
 
@@ -348,37 +351,42 @@ def du_kb(path, *, deadline=None):
     return int(first[0].strip())
 
 
-def richos_garbage_bytes(mount):
-    """How much of the shortfall on this volume is OUR OWN scratch.
+def richos_garbage_bytes(mount, consumers):
+    """Total the union of owned scratch and measured owned consumer trees.
 
     CEO addendum 2: the watchdog should never bark because RichOS failed to clean
     up after itself, so an alert has to say whether that is what happened. This
     is the number that decides between "RichOS garbage (DEFECT)" and "other".
 
-    Counted from the allocator root and the claude scratch roots only — the two
-    places whose entire contents are, by construction, ours. The legacy $TMPDIR
-    families are deliberately NOT counted: their names are shared with fixtures
-    this program does not own, and a classification that overstated our share
-    would send somebody hunting a defect in RichOS for a disk filled by Xcode.
+    The allocator root and the Claude scratch roots are owned in full. The
+    legacy TMPDIR families have names shared with fixtures we do not own.
     """
-    total = 0
-    roots = []
     tmp = os.environ.get("TMPDIR") or "/tmp"
-    roots.append(os.path.join(os.path.realpath(tmp),
-                              env("SCRATCH_ROOT_NAME", "richos-scratch")))
+    roots = [os.path.join(os.path.realpath(tmp), env("SCRATCH_ROOT_NAME", "richos-scratch"))]
     uid = str(os.getuid())
-    for r in env("SCRATCH_CLAUDE_ROOTS", "").split():
-        roots.append(r.replace("%u", uid))
-    seen = set()
+    roots.extend(root.replace("%u", uid) for root in env("SCRATCH_CLAUDE_ROOTS", "").split())
+    scratch = {}
     for root in roots:
         real = os.path.realpath(root)
-        if real in seen or not os.path.isdir(real) or not on_volume(real, mount):
+        if os.path.isdir(real) and on_volume(real, mount):
+            scratch[foreign_app_data.normalized(real)] = real
+    measured = {}
+    for size, path in consumers:
+        path = foreign_app_data.normalized(path)
+        measured[path] = max(size, measured.get(path, 0))
+    counted = {}
+    # A parent sorts before its children. Only a successful measurement
+    # covers them, so an unreadable scratch root cannot hide a known cache.
+    for path in sorted(measured.keys() | scratch.keys()):
+        if any(path.startswith(parent.rstrip(os.sep) + os.sep) for parent in counted):
             continue
-        seen.add(real)
-        kb = du_kb(real)
-        if kb is not None:
-            total += kb * 1024
-    return total
+        if path in measured:
+            counted[path] = measured[path]
+        else:
+            kb = du_kb(scratch[path])
+            if kb is not None:
+                counted[path] = kb * 1024
+    return sum(counted.values())
 
 
 # ---------------------------------------------------------------------------
@@ -1256,7 +1264,8 @@ def main():
         for v in alerting or volumes:
             mount = v["mount"]
             roots = consumer_roots(candidates, mount)
-            found = volume_consumers(mount, walk_roots(mount, primary), min_b)
+            whole_sizes = {}
+            found = volume_consumers(mount, walk_roots(mount, primary), min_b, whole_sizes=whole_sizes)
             mine = [{"path": p, "bytes": b, "human": human(b), "mount": mount,
                      "ours": is_ours(p.split("  (")[0])} for b, p in found]
             # The same folders' totals too, except one whose subfolder the walk already named.
@@ -1267,8 +1276,12 @@ def main():
                                  "ours": is_ours(p)})
             consumers.extend(mine)
             if v["below_rich"]:
-                garbage = (richos_garbage_bytes(mount) + v.get("reclaimed_bytes", 0)
-                           + sum(c["bytes"] for c in mine if c["ours"]))
+                owned = []
+                for consumer in mine:
+                    if consumer["ours"]:
+                        path = consumer["path"].split("  (")[0]
+                        owned.append((whole_sizes.get(path, consumer["bytes"]), path))
+                garbage = richos_garbage_bytes(mount, owned) + v.get("reclaimed_bytes", 0)
                 v["richos_garbage_bytes"] = garbage
                 v["classification"] = ("RichOS garbage (DEFECT)"
                                        if garbage >= 0.25 * v["shortfall_bytes"] else "other")
