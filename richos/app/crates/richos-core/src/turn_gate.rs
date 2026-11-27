@@ -181,9 +181,9 @@ impl TurnGate {
             }
         }
         if inner.open.insert((binding.entity_id().as_str().to_string(), thread.to_string())) {
-            let open = inner.open.clone();
-            drop(inner);
-            self.write(&open);
+            // Publish under the same lock as insertion so an earlier snapshot cannot
+            // overwrite a later one or write to its temporary file.
+            self.write(&inner.open);
         }
         true
     }

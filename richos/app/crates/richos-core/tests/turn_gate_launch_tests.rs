@@ -210,3 +210,55 @@ fn fresh_words_after_a_damaged_history_row_resume_cut_off_work() {
     std::fs::remove_dir_all(root).unwrap();
     assert!(written && resumed && !paused, "the damaged row hid the user's new words");
 }
+
+#[test]
+fn concurrent_chat_openings_publish_every_chat_to_the_review_watcher() {
+    use richos_core::turn_gate::{Origin, RECORD};
+    use serde_json::{json, Value};
+    use std::collections::BTreeSet;
+    use std::sync::Barrier;
+
+    const CHATS: usize = 24;
+    let (root, path) = opened();
+    let mut ledger = Ledger::open(&path).unwrap();
+    let entity = EntityId::parse("femcboost").unwrap();
+    let bindings = (0..CHATS).map(|_| {
+        let thread = ledger.create_thread("fixture", &entity).unwrap();
+        ledger.thread_binding(&thread).unwrap()
+    }).collect::<Vec<_>>();
+    drop(ledger);
+    let expected = bindings.iter().map(|binding| binding.thread_id()).collect::<BTreeSet<_>>();
+
+    let state = root.join("engine-state");
+    let mut failed = Vec::new();
+    for round in 0..32 {
+        let gate = TurnGate::at_launch(&state);
+        let barrier = Barrier::new(CHATS);
+        std::thread::scope(|workers| {
+            for binding in &bindings {
+                let gate = &gate;
+                let barrier = &barrier;
+                workers.spawn(move || {
+                    barrier.wait();
+                    assert!(gate.may_start(binding, Origin::Now));
+                });
+            }
+        });
+        let bytes = std::fs::read(state.join(RECORD)).unwrap();
+        let valid = serde_json::from_slice::<Value>(&bytes).is_ok_and(|record| {
+            record["version"] == json!(1)
+                && record["since_ms"] == json!(gate.since_ms())
+                && record["open"].as_array().is_some_and(|rows| {
+                    rows.len() == CHATS
+                        && rows.iter().all(|row| row["entity_id"] == entity.as_str())
+                        && rows.iter().filter_map(|row| row["thread_id"].as_str())
+                            .collect::<BTreeSet<_>>() == expected
+                })
+        });
+        if !valid {
+            failed.push(round);
+        }
+    }
+    std::fs::remove_dir_all(root).unwrap();
+    assert!(failed.is_empty(), "the watcher record was incomplete or unreadable in rounds {failed:?}");
+}
