@@ -48,13 +48,8 @@ fn waiting_bridge(state: &AppState) -> Result<richos_core::ecs::EcsBridge, Strin
         .map_err(|error| error.to_string())
 }
 
-/// Whether the first look at waiting work since the app opened has run: what that look finds
-/// ready came true while the app was closed.
-static WAITING_LOOKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-fn reconcile_waiting(app: &AppHandle) -> Result<(), String> {
+fn reconcile_waiting(app: &AppHandle, at_launch: bool) -> Result<(), String> {
     let state = app.state::<AppState>();
-    let at_launch = !WAITING_LOOKED.swap(true, std::sync::atomic::Ordering::SeqCst);
     let ecs = state.data_dir.join("ecs");
     if !ecs.join("ecs.sqlite3").try_exists().map_err(|error| error.to_string())? { return Ok(()); }
     let bridge = waiting_bridge(&state)?;
@@ -295,7 +290,7 @@ pub fn start(app:AppHandle)->Result<(),Box<dyn std::error::Error>> {
     let watcher = watch(&root, vec![tx, waiting_tx])?;
     let waiting_app = app.clone();
     std::thread::Builder::new().name("richos-waiting-work".into()).spawn(move || {
-        reconcile_until_closed(&root, waiting_rx, || reconcile_waiting(&waiting_app));
+        reconcile_until_closed(&root, waiting_rx, |at_launch| reconcile_waiting(&waiting_app, at_launch));
     })?;
     // Keep the kernel watch alive with the application, not a detached polling process.
     app.manage(Watch {_watcher:Mutex::new(watcher)});
@@ -314,7 +309,7 @@ fn waiting_revision(path: &std::path::Path) -> Result<Option<SystemTime>, String
 }
 
 fn reconcile_until_closed(root: &std::path::Path, rx: mpsc::Receiver<()>,
-    mut reconcile: impl FnMut() -> Result<(), String>,
+    mut reconcile: impl FnMut(bool) -> Result<(), String>,
 ) {
     // Reconcile on startup and after owner signals. Keep a failed revision pending even
     // when there are no more filesystem events. This worker never holds the peer drain.
@@ -324,7 +319,8 @@ fn reconcile_until_closed(root: &std::path::Path, rx: mpsc::Receiver<()>,
     loop {
         let result = waiting_revision(&signal).and_then(|revision| {
             if settled != Some(revision) {
-                reconcile()?;
+                // Until a revision settles, even a retry is still the first look at launch.
+                reconcile(settled.is_none())?;
                 settled = Some(revision);
             }
             Ok(())
@@ -374,26 +370,27 @@ mod tests {
         let watcher = watch(&root, vec![wake]).unwrap();
         let (proof, seen) = mpsc::channel();
         let result = std::thread::scope(|threads| {
-            threads.spawn(|| reconcile_until_closed(&root, receiver, || {
-                proof.send(()).unwrap();
+            threads.spawn(|| reconcile_until_closed(&root, receiver, |at_launch| {
+                proof.send(at_launch).unwrap();
                 Ok(())
             }));
             // load-bound: the message is the proof. This only limits a dead kernel watch.
             let observed = || seen.recv_timeout(Duration::from_secs(30));
             let result = (|| {
-                observed()?;
+                let startup = observed()?;
                 std::fs::write(root.join("messages/reconcile-waiting.json"), b"from publisher").unwrap();
-                observed()?;
+                let publisher = observed()?;
                 wake_waiting(&root).unwrap();
-                observed()?;
+                let first_app_wake = observed()?;
                 wake_waiting(&root).unwrap();
-                observed()
+                Ok::<_, mpsc::RecvTimeoutError>([startup, publisher, first_app_wake, observed()?])
             })();
             drop(watcher);
             result
         });
         std::fs::remove_dir_all(&root).unwrap();
-        result.expect("startup, the publisher and the app must each wake the same running receiver");
+        assert_eq!(result.expect("startup, the publisher and the app must each wake the same running receiver"),
+            [true, false, false, false]);
     }
 
     #[test]
@@ -422,18 +419,28 @@ print(json.dumps({"protocol": 1, "ok": True, "result": {"items": []}}))
         wake.send(()).unwrap();
         wake.send(()).unwrap();
         drop(wake);
-        let mut attempts = 0;
-        reconcile_until_closed(&root, receiver, || {
-            attempts += 1;
+        let mut attempts = Vec::new();
+        reconcile_until_closed(&root, receiver, |at_launch| {
+            attempts.push(at_launch);
             // An item saved before a later read fails must be safe to process again.
             session_tools::observe_waiting(&scope, json!({
                 "event": "waiting_condition", "input_id": "existing:ready", "status": "ready",
+                "found_at_launch": at_launch,
             }), None)?;
-            bridge.request("waiting-work", json!({})).map(|_| ()).map_err(|error| error.to_string())
+            bridge.request("waiting-work", json!({})).map_err(|error| error.to_string())?;
+            session_tools::observe_waiting(&scope, json!({
+                "event": "waiting_condition", "input_id": "first-read:ready", "status": "ready",
+                "found_at_launch": at_launch,
+            }), None)?;
+            Ok(())
         });
-        assert_eq!(attempts, 2, "success settles this revision after the failed read");
+        assert_eq!(attempts, [true, true], "the first successful read is still at launch");
         let (_, through) = session_tools::pending(&scope, "rich").unwrap().unwrap();
-        assert!(session_tools::pending_after(&scope, "rich", through).unwrap().is_none(), "the retry filed a duplicate");
+        let (notice, through) = session_tools::pending_after(&scope, "rich", through).unwrap().unwrap();
+        let facts: Value = serde_json::from_str(&notice.text).unwrap();
+        assert_eq!(facts["input_id"], "first-read:ready", "the retry filed a duplicate");
+        assert_eq!(facts["found_at_launch"], true);
+        assert!(session_tools::pending_after(&scope, "rich", through).unwrap().is_none());
         std::fs::remove_dir_all(root).unwrap();
     }
 
