@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Walk Finder New Folder and Forward Delete with each menu bar setting and Dvorak.
+"""Walk Finder New Folder and Forward Delete across menu bar modes and keyboard layouts.
 
 Run with run-walk.py --no-app and pass a signed RichOS.app.tar.gz via --archive.
 Use --mode Always to isolate the auto-hide regression.
 Compile guest-input-source.swift with swiftc and pass --input-source-tool to
-exercise Dvorak, or add --keyboard-only to run just that check.
+exercise the layout matrix, or add --keyboard-only to run only the keyboard checks.
 """
 import argparse
 import json
@@ -22,6 +22,8 @@ FILES = APP + '/Contents/Applications/RichFiles.app'
 HELPER = FILES + '/Contents/Library/LoginItems/RichFiles Window Gestures.app'
 CLIENT = 'app.richos.richfiles.window-gestures'
 MODES = ('Always', 'On Desktop Only', 'In Full Screen Only', 'Never')
+# Physical key codes for N in each layout's Command map.
+LAYOUTS = {'Russian': 45, 'Ukrainian': 45, 'Greek': 45, 'DVORAK-QWERTYCMD': 45, 'Dvorak': 37}
 
 
 class Walk:
@@ -155,21 +157,30 @@ class Walk:
                   and row['trashed'] == [row['moved_as'][name]])
         return {'pass': passed, 'trash_diff': row}
 
-    def dvorak(self, source_tool):
+    def keyboard(self, source_tool, layouts):
         tool = self.remote + '/guest-input-source'
-        source = 'com.apple.keylayout.Dvorak'
         self.tool('guest.sh', '--push', str(source_tool), tool)
         self.g('chmod', '755', tool)
-        self.g(tool, source)
-        self.wait('Dvorak to be selected', lambda: self.g(tool) == source)
-        before = self.focus_desktop()
-        if self.g(tool) != source:
-            raise RuntimeError('Dvorak was not retained when Finder took focus')
-        # The physical L position types N in Dvorak. Leave the Unicode string
-        # unspecified so the selected input source translates the HID event.
         hid = ['python3', self.remote + '/hid-key.py']
-        self.g(*hid, '37', '--cmd', '--shift')
-        folder = self.delete_new_folder('dvorak-n', before)
+        results = {}
+        for layout in layouts:
+            source = 'com.apple.keylayout.' + layout
+            self.g(tool, source)
+            self.wait(f'{layout} to be selected', lambda: self.g(tool) == source)
+            before = self.focus_desktop()
+            if self.g(tool) != source:
+                raise RuntimeError(f'{layout} was not retained when Finder took focus')
+            # Let the selected input source translate the HID event.
+            self.g(*hid, str(LAYOUTS[layout]), '--cmd', '--shift')
+            folder = self.delete_new_folder(f'{layout}-n', before)
+            row = {'input_source': source, 'new_folder': folder}
+            if layout == 'Dvorak':
+                row['physical_qwerty_n'] = self.dvorak_control(hid)
+            results[layout] = row
+            print(layout, row, flush=True)
+        return results
+
+    def dvorak_control(self, hid):
         before = self.focus_desktop()
         name = 'Keep this file.txt'
         row = next(row for row in self.ax('find', 'Finder', '--title', name,
@@ -178,10 +189,9 @@ class Walk:
         self.pointer(point, point)
         self.wait('the existing file selection', lambda: self.selected() == name)
         self.g(*hid, '45', '--cmd', '--shift')
-        if self.selected() != name or self.g('ls', '-1', self.desktop).splitlines() != before:
+        if self.selected() != name or sorted(self.g('ls', '-1', self.desktop).splitlines()) != before:
             raise RuntimeError('The Dvorak B shortcut changed the existing Desktop selection')
-        ordinary = self.delete_selection('dvorak-b', name, [item for item in before if item != name])
-        return {'input_source': source, 'new_folder': folder, 'physical_qwerty_n': ordinary}
+        return self.delete_selection('dvorak-b', name, [item for item in before if item != name])
 
 
 def main():
@@ -191,10 +201,11 @@ def main():
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--mode', choices=MODES, action='append')
     parser.add_argument('--input-source-tool', type=Path)
+    parser.add_argument('--layout', choices=tuple(LAYOUTS), action='append')
     parser.add_argument('--keyboard-only', action='store_true')
     args = parser.parse_args()
-    if args.keyboard_only and not args.input_source_tool:
-        parser.error('--keyboard-only needs --input-source-tool')
+    if (args.keyboard_only or args.layout) and not args.input_source_tool:
+        parser.error('--keyboard-only and --layout need --input-source-tool')
     args.out.mkdir(parents=True, exist_ok=True)
     walk = Walk(args.vm)
     report = {'helper_source': walk.install(args.archive), 'modes': {}}
@@ -211,10 +222,10 @@ def main():
                 walk.tool('shot.sh', str(args.out / 'folder-remains.png'))
                 return 1
         if args.input_source_tool:
-            keyboard = walk.dvorak(args.input_source_tool)
+            keyboard = walk.keyboard(args.input_source_tool, args.layout or LAYOUTS)
             report['keyboard'] = keyboard
-            print('Dvorak', keyboard, flush=True)
-            if not keyboard['new_folder']['pass'] or not keyboard['physical_qwerty_n']['pass']:
+            if any(not result['pass'] for row in keyboard.values() for key, result in row.items()
+                   if key != 'input_source'):
                 walk.tool('shot.sh', str(args.out / 'keyboard-failure.png'))
                 return 1
     finally:
