@@ -19,9 +19,11 @@ Told by inode because a name proves nothing here: several New Folders in a row a
 "untitled folder", one after another, and only the inode says which one moved.
 
 The expectation decides the exit:
-  --moved NAME...   exactly these Desktop items went to the Trash, and nothing else left the Desktop
-  --moved-count N   exactly N Desktop items went to the Trash, and nothing else left the Desktop
-                    (a New Folder whose name the walk does not choose)
+  --moved NAME...   exactly these Desktop items went to the Trash, nothing else left the Desktop
+                    and nothing else is new in the Trash
+  --moved-count N   exactly N Desktop items went to the Trash, nothing else left the Desktop
+                    and nothing else is new in the Trash (a New Folder whose name the walk
+                    does not choose)
   --none            nothing left the Desktop and nothing new is in the Trash
 --wait SECONDS asks again until the expectation holds or the time is up (Finder moves an item a
 moment after the key), and reports the last reading either way. With --none the wait is a window
@@ -74,6 +76,9 @@ def verdict(r, args):
         return None
     if r['removed'] != r['moved']:
         return 'left the Desktop without reaching the Trash: %s' % sorted(set(r['removed']) - set(r['moved']))
+    extra = sorted(set(r['trashed']) - set(r['moved_as'].values()))
+    if extra:
+        return 'also new in the Trash, not one of the moved Desktop items: %s' % extra
     if args.moved is not None and sorted(args.moved) != r['moved']:
         return 'expected exactly %s in the Trash, moved %s' % (sorted(args.moved), r['moved'])
     if args.moved_count is not None and len(r['moved']) != args.moved_count:
