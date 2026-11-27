@@ -76,6 +76,8 @@ module.exports = [
   { s: "Continues by itself at about", c: "FRAGMENT", why: "Introduces the observed quota resume time in the conversation." },
   { s: "Continues by itself when usage is available. Nothing is lost.", c: "INFORMATIONAL", why: "Work is paused on a real quota hold with no known reset time." },
   { s: "It was running when RichOS restarted.", c: "INFORMATIONAL", why: "Explains that the saved request is resuming automatically." },
+  { s: "It continues when you write in this chat.", c: "INFORMATIONAL", why: "Work the app's end cut off is paused (chat_list.rs cut_off): it carries on with his next message in this chat, not when usage is available. It states when, and asks nothing." },
+  { s: "Continues when you write", c: "INFORMATIONAL", why: "The Technical view detail of a chat whose cut-off work is paused (chat_list.rs CUT_OFF_DETAIL)." },
   { s: "Mark as read", c: "CONTROL", why: "Clears the durable New mark from the chat row." },
   { s: "Mark as unread", c: "CONTROL", why: "Saves a durable unread mark from the chat row menu." },
   { s: "Pick a time…", c: "CONTROL", why: "Discloses the custom date and time choices." },

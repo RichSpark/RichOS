@@ -385,7 +385,9 @@ window.RichChatList = (() => {
     const paused = chat?.paused;
     band.hidden = !(paused || chat?.recovering || (chat?.team_working && chat.working_since));
     if (band.hidden) return;
-    const elapsedText = paused ? (chat.resume_at ? " Continues by itself at about " + when(chat.resume_at, true) + ". Nothing is lost."
+    // Work the app's end cut off waits for him, not for usage (`chat_list.rs` `cut_off`).
+    const elapsedText = paused ? (chat.cut_off ? " It continues when you write in this chat."
+      : chat.resume_at ? " Continues by itself at about " + when(chat.resume_at, true) + ". Nothing is lost."
       : " Continues by itself when usage is available. Nothing is lost.") : " · " + elapsed(Date.now() - chat.working_since);
     const copy = node("span", "chat-band-text");
     if (!paused && chat.recovering) {

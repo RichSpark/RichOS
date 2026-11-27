@@ -37,6 +37,9 @@ pub(crate) struct Facts {
     pub failure_at: Option<u64>,
     pub working_since: Option<u64>,
     pub paused: bool,
+    /// Paused because the app's end cut its work off: it continues when he writes here, not
+    /// when usage is available.
+    pub cut_off: bool,
     pub team_working: bool,
     pub recovering: bool,
     #[serde(skip)]
@@ -230,6 +233,7 @@ fn facts(
         && result.waiting_since.is_none() && result.stopped_at.is_none();
     if cut_off {
         result.paused = true;
+        result.cut_off = true;
         result.working_since = None;
         result.team_working = false;
     }
