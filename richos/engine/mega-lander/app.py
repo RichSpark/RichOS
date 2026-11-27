@@ -563,7 +563,7 @@ def witness_git_review(scope, repo, branch, before, after, reviewed):
         print("RichOS output: the Git integration marker could not be recorded.", file=sys.stderr)
 
 
-def witness_land(scope, worker, repo, worktree, before, landed):
+def witness_land(session, worker, repo, worktree, before, landed):
     """WITNESS (d), THE LAND (Output side panel PRD §4.1 (d), slice S2b). A worker writes in its
     own worktree, which cleanup deletes minutes after this; the landed copy in the connected
     repository is written by the merge above and by nothing the hook sees. So the land itself
@@ -572,17 +572,29 @@ def witness_land(scope, worker, repo, worktree, before, landed):
     worker named by its own receipt. Into the BACK-END session's `writes.jsonl`, through the
     hook's own appender, so the app joins it to the thread like every other row of the job.
 
-    Record each move as it happens so a later repository's refusal cannot lose it.
-    A retry skips merges already made. History failures are reported on stderr and
-    never fail the land."""
+    Each move is saved on the receipt before writing the journal. This witness
+    can replay the same move even after the workspace has been cleaned up."""
     try:
         evidence = load("richos_app_evidence", ENGINE / "scripts/lib/app-evidence.py")
         who = {"name": worker["name"], "agent_id": worker.get("agent_id") or None}
         rows = [{"path": os.path.join(repo, name), "from": os.path.join(worktree, name),
                  "commit": landed, "worker": who} for name in landed_files(repo, before, landed)]
-        evidence.append_land_rows(state() / "evidence", scope["binding"]["session_id"], rows)
+        evidence.append_land_rows(state() / "evidence", session, rows)
+        return True
     except Exception as error:  # noqa: BLE001 -- a history never fails a land
         print("RichOS output: the landed files were not recorded: %s" % str(error)[-500:], file=sys.stderr)
+        return False
+
+
+def write_pending_land_rows(path, worker, repo):
+    integration = worker["integration"]
+    pending = integration["output_pending"]
+    move = pending[repo]
+    if witness_land(move["session"], worker, repo, move["worktree"], move["before"], move["after"]):
+        del pending[repo]
+        if not pending:
+            del integration["output_pending"]
+        save(path, worker)
 
 
 def admitted(record):
@@ -997,6 +1009,8 @@ def abandoned(record, binding):
     if record.get("status") != "prepared" or any(
             record["binding"].get(key) != binding.get(key) for key in ("entity_id", "thread_id", "session_id")):
         return True
+    if record.get("pierce_refused"):
+        return False
     canonical = canonical_of(record)
     return bool(canonical and any(canonical.get(field) for field in ("tool_use_id", "spawned_at")))
 
@@ -1366,8 +1380,27 @@ def handover_proof_incomplete(worker, commits):
     return None
 
 
+def revisable_draft(record):
+    return (record.get("pierce_refused") and record["status"] == "prepared"
+            and not record.get("settled") and not record.get("revision_pending") and never_started(record))
+
+
+def finish_draft_revision(scope, root, path, record):
+    """Finish a revision only after its prepared receipt and workspace are durable."""
+    draft = refresh(read_record(root, record["request"]["revises"]))
+    if not draft.get("settled"):
+        reason = "superseded by request %s: %s" % (record["request_id"], NEVER_DISPATCHED)
+        if not revisable_draft(draft) or not settle_undispatched(scope, root / (draft["id"] + ".json"), draft, reason):
+            reason = "the refused draft changed while preparing its revision; inspect both receipts"
+            settle_undispatched(scope, path, record, reason)
+            raise ValueError(reason)
+    # Also covers a retry after the original settlement was saved but this update was not.
+    del record["revision_pending"]
+    save(path, record)
+
+
 def prepare(scope_path, scope, args):
-    if set(args) - {"request_id","obligation_id","repo","repos","title","brief","role","teammate","model","effort","integration","base","review_of","continue_of"}:
+    if set(args) - {"request_id","obligation_id","repo","repos","title","brief","role","teammate","model","effort","integration","base","review_of","continue_of","revises"}:
         raise ValueError("unsupported preparation fields")
     request_id = text(args,"request_id",128)
     # **THE SCOPE WINS, AND IT WINS SILENTLY** -- see `carried_obligation`. A work
@@ -1405,6 +1438,8 @@ def prepare(scope_path, scope, args):
     title, brief = text(args,"title",256), sent_text(args,"brief",BRIEF_LIMIT)
     normalized = {"obligation_id":obligation,"repo":str(repo) if repo else None,"repos":[str(r) for r in repos_all],"title":title,"brief":brief,"role":role,"teammate":teammate,
         "integration":args.get("integration"),"base":args.get("base"),"review_of":args.get("review_of"),"continue_of":args.get("continue_of")}
+    if args.get("revises") is not None:
+        normalized["revises"] = args["revises"]
     if chosen is not None:
         # Only when named, so a receipt written before this field compares equal on a retry.
         normalized["model"] = chosen
@@ -1446,6 +1481,8 @@ def prepare(scope_path, scope, args):
                     settle_undispatched(scope, path, old, "prepared in an earlier provider session, which no dispatch "
                                                           "can reach; prepare it again under a new request_id")
             save(path, old); project(scope,path,old)
+            if old["status"] == "prepared" and old.get("revision_pending"):
+                finish_draft_revision(scope, root, path, old)
             # The Agent call is not handed out again once provider dispatch became uncertain.
             return receipt(old, include_call=old["status"] == "prepared" and old["binding"] == scope["binding"])
         if effort is None:
@@ -1455,26 +1492,33 @@ def prepare(scope_path, scope, args):
             # receipt prepared before this rule is still answered above, by its request_id.
             raise ValueError(f"name the effort level this job runs at: effort is one of "
                              f"{', '.join(EFFORT_LEVELS)}. Prepare it again with one")
+        revises = normalized.get("revises")
+        if revises is not None:
+            draft = refresh(read_record(root, revises))
+            if not revisable_draft(draft):
+                raise ValueError("revises must name a prepared draft that Pierce refused and that never ran")
+            duty_keys = ("obligation_id", "role", "title", "repo", "integration", "base", "review_of", "continue_of")
+            if (any(draft["request"].get(key) != normalized.get(key) for key in duty_keys)
+                    or (repo is not None and not same_repos(request_repos(draft), normalized["repos"]))):
+                raise ValueError("a revised brief must be for the same duty as the refused draft")
+            if draft["request"]["brief"].strip() == brief.strip():
+                raise ValueError("change the brief to revise a refused draft, or retry its existing receipt")
+
+        unresolved = ("preparing", "prepared", "dispatching", "running", "unknown")
+        request = {key: value for key, value in normalized.items() if key != "revises"}
+        abandoned_paths = []
         for old_path, old in receipts(root):
-            if old["request"]["obligation_id"] == obligation and old["request"]["role"] == role:
-                refresh(old)
-                # Reuse completion's dispatchability check: a new request or turn
-                # does not prove that an independent preparation was replaced. A draft Pierce
-                # refused is the exception when this request revises it: his refusal says to
-                # revise the assignment and retry, so the same job (title and repositories) with
-                # a changed brief replaces the draft here. An independent job of the same
-                # assignment is never taken for its revision (review
-                # rv-20261119T083123Z-9738b7dd-dddf), and completion still keeps a draft no
-                # revision replaced.
-                revises = (old.get("pierce_refused") and old["status"] == "prepared" and never_started(old)
-                           and all(old["request"].get(key) == normalized.get(key) for key in ("title", "repos")))
-                if not old.get("settled") and (abandoned(old, scope["binding"]) or revises):
-                    settle_undispatched(scope, old_path, old, "superseded by request %s: %s" % (request_id, NEVER_DISPATCHED))
-                # An assignment may have several independent workers, reviewers or consults.
-                # Reject an exact duplicate under another id, not every request sharing a duty.
-                if old["request"] == normalized and old["status"] in ("preparing","prepared","dispatching","running","unknown"):
-                    # Which receipt it collides with (2026-10-28: two prepares under fresh ids were
-                    # refused with no name, and cleared only when the title was changed).
+            old_request = old["request"]
+            if old_request["obligation_id"] != obligation or old_request["role"] != role or old.get("settled"):
+                continue
+            refresh(old)
+            if old["id"] != revises and abandoned(old, scope["binding"]):
+                abandoned_paths.append(old_path)
+                continue
+            if old["status"] in unresolved:
+                if revises is not None and old_request.get("revises") == revises:
+                    raise ValueError("this draft already has a revision in progress: receipt %s" % old["name"])
+                if {key: value for key, value in old_request.items() if key != "revises"} == request:
                     raise ValueError("this request already has unresolved work: receipt %s (request %s, status %s, "
                                      "prepared in turn %s) has the same assignment, role and brief. Dispatch or "
                                      "inspect that receipt, or settle it, before preparing it again"
@@ -1495,6 +1539,8 @@ def prepare(scope_path, scope, args):
             "recovery_acceptance": hashlib.sha256(json.dumps({k:item.get(k) for k in
                 ("item_id", "title", "details", "beneficiary")}, sort_keys=True).encode()).hexdigest(),
             "instruction_ref":instruction["ledger_ref"],"original_user_instruction":instruction,"request":normalized,"name":name,"status":"preparing"}
+        if revises is not None:
+            record["revision_pending"] = True
         if args.get("continue_of") is not None:
             if role != "worker" or args.get("review_of") is not None:
                 raise ValueError("only an implementation worker can continue prior work")
@@ -1614,6 +1660,7 @@ def prepare(scope_path, scope, args):
         save(path,record)
         lock_stack.close()
         preparation_refused = False
+        published = False
         try:
             try:
                 ready = json.loads(run(command,cwd=os.environ["RICHOS_ENTITY_ROOT"]))
@@ -1683,8 +1730,18 @@ def prepare(scope_path, scope, args):
                 record.update(status="prepared",payload={**ready["payload"],"run_in_background":True},
                     workspace_ref=W.named_key(scope["binding"]["session_id"],name))
                 save(path,record);project(scope,path,record)
+                published = True
+                if revises is not None:
+                    finish_draft_revision(scope, root, path, record)
+                for old_path in abandoned_paths:
+                    old = refresh(read_receipt(old_path))
+                    if not old.get("settled") and abandoned(old, scope["binding"]):
+                        settle_undispatched(scope, old_path, old, "superseded by request %s: %s" %
+                                            (request_id, NEVER_DISPATCHED))
                 return receipt(record, include_call=True)
         except Exception as error:
+            if published:
+                raise  # Preserve the published receipt so a retry can finish the revision.
             # Workspace creation may already have happened. Never claim rollback here.
             with locked(scope):
                 record = bounded(path)
@@ -1776,6 +1833,8 @@ def dispatch_intent(scope, payload, inspect_only=False, review_refused=False):
                        {k:v for k,v in r["payload"].items() if k != "name"} == ti)]
         if len(matches) != 1: raise ValueError("Agent input is absent from or differs from its prepared scoped receipt; prepare this assignment with the app work tool and submit its agent_call to Agent unchanged")
         path,record = matches[0]
+        if record["status"] == "prepared" and record.get("revision_pending"):
+            raise ValueError("this draft revision is still being finalized; retry prepare with its request_id")
         require_not_stopped(scope, record["request"]["obligation_id"])
         # A PREPARE FROM AN EARLIER TURN OF THIS SESSION DISPATCHES AS IT STANDS (P1-A, 2026-10-29).
         # Stu is woken by his own job's notification, which writes no new scope; the receipt he
@@ -2592,6 +2651,8 @@ def integrate(scope_path,scope,args):
             if reviewer: require_current_assignment(scope,reviewer)
             if existing and existing.get("reviewer_id") != reviewer_id:
                 raise ValueError("integration already has a different reviewer; reconcile its receipt")
+            for repo in list((existing or {}).get("output_pending", {})):
+                write_pending_land_rows(path, worker, repo)
             if existing and existing.get("verified"):
                 verification_evidence(scope,worker["id"])
             else:
@@ -2693,8 +2754,13 @@ def integrate(scope_path,scope,args):
                 worktree_paths={r:os.path.realpath(t["path"]) for r,t in targets.items()}
 
                 def record_merge(repo, branch, before, after, reviewed):
+                    worker["integration"].setdefault("output_pending", {})[repo] = {
+                        "session": scope["binding"]["session_id"], "worktree": worktree_paths[repo],
+                        "before": before, "after": after,
+                    }
+                    save(path, worker)
                     witness_git_review(scope, repo, branch, before, after, reviewed)
-                    witness_land(scope, worker, repo, worktree_paths[repo], before, after)
+                    write_pending_land_rows(path, worker, repo)
 
                 pending=[r for r in repositories_to_land if not plan[r]["already"]]
                 refused=None
@@ -2773,7 +2839,7 @@ def integrate(scope_path,scope,args):
             for record in [worker,*reviews]:
                 try:
                     read_scope(scope_path)
-                    result = W.land(record["workspace_ref"],me=scope["binding"]["session_id"])
+                    result = W.land(record["workspace_ref"], me=scope["binding"]["session_id"], keep_ignored=True)
                     if not result.get("landed") or result.get("cleanup_pending"):
                         raise ValueError(f"Workspace cleanup for {record['name']} remains pending; its reviewed commit is still integrated.")
                 except Exception as error: failures.append(str(error)[-4000:])
@@ -3279,7 +3345,7 @@ TOOLS = [
     {"name":"complete","description":"Close a code assignment in ECS only after every requirement is satisfied and every final worker has a passing independent review, verified local integration and completed cleanup. For independent Stu sessions, supply the obligation_id returned by the operational record or background_work. A legacy assignment-bound connection derives it from its host scope. Never invent one. Supply all final worker receipts, across every repository. Unresolved execution or omitted work is refused. Do not use this to claim unrelated or unverified business outcomes. For an assignment without implementation work, supply answer with your verified outcome instead of worker_ids. Unresolved execution and code work refuse this answer-only path. Completion updates the operational record but never sends Rich a message. Local completion never means publication.","inputSchema":{"type":"object","properties":{"obligation_id":{"type":"string"},"answer":{"type":"string","minLength":1,"maxLength":262144},"worker_ids":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":50}},"required":[],"additionalProperties":False}},
     {"name":"report","description":"Keep the selected operational assignment current: running when you begin handling it, or failed when you cannot complete it. Supply the real obligation_id from the record. This never dispatches work or sends Rich a message. Completion uses complete and its evidence checks.","inputSchema":{"type":"object","properties":{"obligation_id":{"type":"string"},"state":{"type":"string","enum":["running","failed"]},"detail":{"type":"string","maxLength":4096}},"required":["obligation_id","state","detail"],"additionalProperties":False}},
     {"name":"repositories","description":"List repositories explicitly connected to this company. A company folder alone grants no execution access.","inputSchema":{"type":"object","properties":{},"additionalProperties":False}},
-    {"name":"prepare","description":"Prepare a named teammate as the worker (role worker: implements), the reviewer (role reviewer: reviews) or a consultant (role consult: answers, changing no repository) for the selected obligation. A consult takes no repo, repos, integration, base, review_of or continue_of, gets no workspace and may not edit files; its final message is its deliverable, which inspect returns as consult_answer once its run has ended. Set teammate to the name of the active teammate whose role fits the job best, as your Agent tool lists them; a name that is not active is refused with the names that are. The teammate runs with its own definition, on its definition's model unless you set model for this one job and at the effort level you name in effort, which every new job needs, and the duty's app instructions are put at the top of your brief for you. For independent Stu sessions, supply the obligation_id returned by the operational record or background_work. A legacy assignment-bound connection derives it from its host scope. Never invent one. Persists intent before workspace creation. Returns a short receipt, with agent_call only while no dispatch has been attempted: submit that exact JSON to Agent once. Its prompt names the brief this tool stored, which the teammate receives in full, so never write the brief again in the Agent call. Preparation is not dispatch or completion. Reuse request_id for retries; uncertain work must be inspected first. A preparation that never ran is settled when a new request_id prepares a replacement for the same duty, if it failed, its dispatch was refused (a draft Pierce refused: when the replacement keeps its title and repositories and revises the brief), or it belongs to an earlier provider session; what it created is withdrawn only when it holds no commit and no uncommitted file, and anything else is kept and reported. A preparation from an earlier turn in the same provider session can still dispatch unchanged. To continue settled work, set continue_of to its worker receipt: the new worker starts at its actual saved commit. Dirty work is preserved and refused until its uncommitted files are reconciled. Never reset or discard those files to bypass the refusal. If this same worker also needs a workspace in other connected repositories, name them in repos; each gets its own isolated workspace, all under the one worker. Its reviewer and any continuation name the same repos, and review, integration and cleanup then cover every one of those repositories.","inputSchema":{"type":"object","properties":{**{key:{"type":"string"} for key in ("request_id","obligation_id","repo","title","brief","role","teammate","integration","base","review_of","continue_of")},"repos":{"type":"array","items":{"type":"string"},"maxItems":8},"model":{"type":"string","description":"Optional: the model this one job runs on instead of the teammate's own, one of the user's allowed models. A model above the user's cost ceiling is refused unless the brief has a line `model-ceiling-ack: <why this one job needs it>`; a model below the teammate's own needs a line `model-downgrade-ack: <why this job needs less>`."},"effort":{"type":"string","enum":list(EFFORT_LEVELS),"description":"The effort level this one job runs at. Every new job names one; the teammate's name carries it. A request without it is refused."}},"required":["request_id","title","brief","teammate"],"additionalProperties":False}},
+    {"name":"prepare","description":"Prepare a named teammate as the worker (role worker: implements), the reviewer (role reviewer: reviews) or a consultant (role consult: answers, changing no repository) for the selected obligation. A consult takes no repo, repos, integration, base, review_of or continue_of, gets no workspace and may not edit files; its final message is its deliverable, which inspect returns as consult_answer once its run has ended. Set teammate to the name of the active teammate whose role fits the job best, as your Agent tool lists them; a name that is not active is refused with the names that are. The teammate runs with its own definition, on its definition's model unless you set model for this one job and at the effort level you name in effort, which every new job needs, and the duty's app instructions are put at the top of your brief for you. For independent Stu sessions, supply the obligation_id returned by the operational record or background_work. A legacy assignment-bound connection derives it from its host scope. Never invent one. Persists intent before workspace creation. Returns a short receipt, with agent_call only while no dispatch has been attempted: submit that exact JSON to Agent once. Its prompt names the brief this tool stored, which the teammate receives in full, so never write the brief again in the Agent call. Preparation is not dispatch or completion. Reuse request_id for retries; uncertain work must be inspected first. A preparation that never ran is settled when a new request_id prepares a replacement for the same duty, if it failed, its dispatch was refused after registration, or it belongs to an earlier provider session. To replace a draft Pierce refused, set revises to that receipt's id, keep the same duty and change the brief. The draft is settled only after the revision is prepared. A settled draft's workspace is withdrawn only when it holds no commit and no uncommitted file. Anything else is kept and reported. A preparation from an earlier turn in the same provider session can still dispatch unchanged. To continue settled work, set continue_of to its worker receipt: the new worker starts at its actual saved commit. Dirty work is preserved and refused until its uncommitted files are reconciled. Never reset or discard those files to bypass the refusal. If this same worker also needs a workspace in other connected repositories, name them in repos; each gets its own isolated workspace, all under the one worker. Its reviewer and any continuation name the same repos, and review, integration and cleanup then cover every one of those repositories.","inputSchema":{"type":"object","properties":{**{key:{"type":"string"} for key in ("request_id","obligation_id","repo","title","brief","role","teammate","integration","base","review_of","continue_of","revises")},"repos":{"type":"array","items":{"type":"string"},"maxItems":8},"model":{"type":"string","description":"Optional: the model this one job runs on instead of the teammate's own, one of the user's allowed models. A model above the user's cost ceiling is refused unless the brief has a line `model-ceiling-ack: <why this one job needs it>`; a model below the teammate's own needs a line `model-downgrade-ack: <why this job needs less>`."},"effort":{"type":"string","enum":list(EFFORT_LEVELS),"description":"The effort level this one job runs at. Every new job names one; the teammate's name carries it. A request without it is refused."}},"required":["request_id","title","brief","teammate"],"additionalProperties":False}},
     {"name":"integrate","description":"When the automatic independent handover review passes, integrate with worker_id alone. Do not prepare a routine reviewer agent: the watcher uses Codex when enabled and available, otherwise Claude automatically. reviewer_id is accepted for an existing explicit reviewer. Merge the exact reviewed commit into the recorded clean integration branch with git merge, so the repository's own merge checks run and its land fence, where on, sees a land that holds its lease; then clean up through Mega Lander. If the branch moved since the work started, it is merged only when Git merges the two without a conflict. A refusal by the repository's checks lands nothing and is returned in their own words. No push, rebase or conflict resolution. Dirty targets and conflicting changes are preserved and refused. This verifies one work result; it does not close the entire obligation.","inputSchema":{"type":"object","properties":{"worker_id":{"type":"string"},"reviewer_id":{"type":"string"}},"required":["worker_id"],"additionalProperties":False}},
     {"name":"team","description":"Read the shelf and the user's saved team, or save a teammate definition. list returns names, descriptions, models and activated copies. show returns the full definition by name. save writes team/<name>.md from name and text. The definition requires YAML front matter with matching name, description and model. Names contain lowercase ASCII letters and digits, at most 16 characters: Anne-Marie is annemarie, Renée is renee, Bjørn is bjorn. Saving an existing copy requires replace=true. New teammates become available to Agent after this turn through the native plugin reload, without replacing Stu or stopping running workers; RichOS then sends a team_reloaded message: carry on there with the work that waited for them. Changes to an existing definition take effect in a new Stu session.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","show","save"]},"name":{"type":"string"},"text":{"type":"string"},"replace":{"type":"boolean"}},"required":["action"],"additionalProperties":False}},
     {"name":"inspect","description":"Reconcile scoped dispatch receipts against actual provider and workspace observations. A run ending is not task completion. Inspect unresolved work before retrying after a restart. Without id it returns jobs: one line per job of this conversation, its name, its state (WORKING, PENDING, LANDABLE, PAUSED, FINISHED...) and why, exactly the lines the terminal's workspaces.sh status shows for them; a landed job has no line. Pass id (the job name a line shows, a receipt id or a request id) to read its record in full, brief and consult_answer included.","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"additionalProperties":False}},
