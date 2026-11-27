@@ -9391,12 +9391,13 @@ def _monitor_health(sid):
         return False, "stall-watch could not be read (%s: %s)" % (e.__class__.__name__, str(e)[:160])
 
 
-def fallback_notice(sid, items=None):
+def fallback_notice(sid, items=None, *, emit=None):
     """THE STOP/STARTUP FALLBACK (orchestration reliability R5): while no healthy
     watcher evaluates this session, the lead hears the watcher's failure and the due
     work (due_set) here, once per material change: the watcher's state and each due
     item's work, state and end. '' while a watcher is healthy, or when nothing changed.
-    It refuses nothing and asks for no acknowledgement."""
+    It refuses nothing and asks for no acknowledgement. If given an emit callback,
+    record the notice only after the callback successfully writes and flushes it."""
     if not sid:
         return ""
     healthy, line = _monitor_health(sid)
@@ -9432,14 +9433,15 @@ def fallback_notice(sid, items=None):
         rec = load_session(sid) or {}
         if rec.get("fallback_notice") == key:
             return ""
-        prev_kind = rec.get("fallback_kind")
+        # Silence an empty set, except to report recovery from an unread list.
+        if kind == "empty" and rec.get("fallback_kind") != "unread":
+            text = ""
+        if text and emit is not None:
+            # Keep selection, delivery and receipt under one lock so concurrent
+            # callbacks cannot both deliver the same change.
+            emit(text)
         rec.update(fallback_notice=key, fallback_kind=kind)
         write_json(session_path(sid), rec)
-    # Nothing due is nothing to act on, so nothing is said (a message here costs the lead a model
-    # turn that does nothing; in a chat-only app conversation it was every first turn end). The
-    # one exception: right after a read that failed, the recovered read is told once.
-    if kind == "empty" and prev_kind != "unread":
-        return ""
     return text
 
 
