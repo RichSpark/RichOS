@@ -504,6 +504,14 @@ final class GestureController {
         return focused
     }
 
+    // A floating search panel can own the keyboard while Finder still owns
+    // the menu bar and reports its Desktop group as focused.
+    private func keyboardFocus(in pid: pid_t) -> AXUIElement? {
+        guard system.element(kAXFocusedApplicationAttribute)?.processID == pid,
+              let focused = system.element(kAXFocusedUIElementAttribute), focused.processID == pid else { return nil }
+        return focused
+    }
+
     // Finder can select the new Desktop item while another app still owns
     // the keyboard. This path must only act on the folder just created.
     private func newFolderReference(_ command: NewDesktopFolder) -> FileReference? {
@@ -564,10 +572,11 @@ final class GestureController {
     private func moveFinderSelectionToTrash(_ finder: AXUIElement, group: AXUIElement, icons: [AXUIElement],
                                             started: TimeInterval) {
         guard !icons.isEmpty else { return }
-        guard let item = finderTrashCommand(finder), item.value(kAXEnabledAttribute) as Bool? == true,
-              NSWorkspace.shared.frontmostApplication?.processIdentifier == finder.processID,
+        guard let pid = finder.processID, let item = finderTrashCommand(finder), item.value(kAXEnabledAttribute) as Bool? == true,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
               desktopFileGroup(finder) == group,
               group.value(kAXSelectedChildrenAttribute) as [AXUIElement]? == icons,
+              keyboardFocus(in: pid) == group,
               item.perform(kAXPressAction) else {
             record(.desktopDeleteShortcut, .unavailable, started: started)
             return
@@ -599,15 +608,16 @@ final class GestureController {
         newDesktopFolder = nil
         let key = DesktopFileKey.classify(event)
         guard key != .passThrough, Preferences.selection.contains(.desktopDelete),
-              let app = NSWorkspace.shared.frontmostApplication else { return Unmanaged.passUnretained(event) }
+              let app = NSWorkspace.shared.frontmostApplication,
+              let focus = keyboardFocus(in: app.processIdentifier),
+              NSWorkspace.shared.frontmostApplication == app else { return Unmanaged.passUnretained(event) }
 
         switch key {
         case .passThrough:
             return Unmanaged.passUnretained(event)
         case .backspace:
             guard app.bundleIdentifier == "com.apple.finder",
-                  desktopFileGroup(finderElement(app.processIdentifier)) != nil,
-                  NSWorkspace.shared.frontmostApplication == app else { return Unmanaged.passUnretained(event) }
+                  desktopFileGroup(finderElement(app.processIdentifier)) == focus else { return Unmanaged.passUnretained(event) }
             return nil
         case .forwardDelete:
             let started = ProcessInfo.processInfo.systemUptime
@@ -622,7 +632,7 @@ final class GestureController {
             }
             if app.bundleIdentifier == "com.apple.finder" {
                 let finder = finderElement(app.processIdentifier)
-                if let group = desktopFileGroup(finder),
+                if let group = desktopFileGroup(finder), group == focus,
                    let icons: [AXUIElement] = group.value(kAXSelectedChildrenAttribute),
                    NSWorkspace.shared.frontmostApplication == app {
                     let key = desktopKeyRevision
@@ -648,6 +658,7 @@ final class GestureController {
                   let app = NSWorkspace.shared.frontmostApplication,
                   app.processIdentifier == folder.finder || app == folder.foreground else { return }
             if let reference = self.newFolderReference(folder), NSWorkspace.shared.frontmostApplication == app,
+               self.keyboardFocus(in: app.processIdentifier) != nil,
                (try? FileReference(url: reference.url)) == reference {
                 self.recycleNewFolder(reference, started: started)
             } else if ProcessInfo.processInfo.systemUptime - started < 0.5 {
@@ -675,7 +686,7 @@ final class GestureController {
             if app?.processIdentifier == click.finder,
                let group = self.desktopFileGroup(finder),
                let icons: [AXUIElement] = group.value(kAXSelectedChildrenAttribute), icons == [click.icon],
-               NSWorkspace.shared.frontmostApplication == app {
+               self.keyboardFocus(in: click.finder) == group {
                 self.moveFinderSelectionToTrash(finder, group: group, icons: icons, started: started)
             } else if ProcessInfo.processInfo.systemUptime - started < 0.25,
                       app?.processIdentifier == click.finder || app == click.foreground {
