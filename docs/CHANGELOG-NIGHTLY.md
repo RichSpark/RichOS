@@ -16,7 +16,7 @@ What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, new
 - Changed arrows and Steps in the RichGlance editor to come in Small, Medium and Large, with a much bigger Large; a new arrow starts at Medium and a size you pick after placing a step is used for the next one
 - Changed RichGlance's menu bar icon to show the RichGlance eye instead of a viewfinder
 - Improved the main buttons in RichFiles dialogs and Disk Cleanup's Move to Trash to be easier to read in light and dark mode, for example Create, Rename, Search and Connect
-- Fixed RichOS using your Claude usage as soon as it opened: messages, Codex reports and reviews of Codex work left from while it was closed now wait until you next write or talk in that conversation, while work that was still running when RichOS closed carries on
+- Fixed RichOS using your Claude usage as soon as it opened: messages, Codex reports and reviews of Codex work left from while it was closed now wait until you next write or talk in that conversation
 - Fixed pasting a copied file or folder into its own folder in RichFiles doing nothing; it now makes "name - Copy", then "name - Copy (2)"
 - Fixed the effort steps in Settings jittering when the pointer was over "Recommended"
 - Fixed the model and effort you picked in Settings being lost when you closed the window or quit RichOS with Settings still open
