@@ -3114,6 +3114,138 @@ for scenario in ("immediate", "delayed", "during-retry"):
 PY
 check "W41 delayed instructions queue the latest READY revision and retain the separate job" $? "see above"
 
+# W42: the desktop also watches dedicated Codex handovers. Their losses and
+# holds belong to the job, while app-native handovers still retry at cooldown.
+python3 - "$LIB" "$SB/w42" "$REPO" "$CTIP" "$BASE" <<'PY'
+import os, sys
+
+lib, directory, repo, tip, base = sys.argv[1:]
+sys.path.insert(0, lib)
+import review_watch as rw
+
+os.environ["REVIEW_WATCH_STATE_DIR"] = directory
+os.environ["CODEX_COORDINATION_ROOT"] = os.path.join(directory, "coord")
+os.environ["SECOND_REVIEW_STATE_DIR"] = os.path.join(directory, "ledger")
+now = 1800000000
+cooldown = rw.REPEAT_MINUTES * 60
+item = rw.Item(f"branch:{repo}:codex/new", "codex", repo, tip, base, "ended",
+               branch="codex/new", source="codex")
+scope = {"entity_id": "fixture-company", "thread_id": "fixture-chat"}
+locator = rw.channels.connect("Review this work", "fixture", scope=scope)["locator"]
+item.channel = {"locator": locator, "message_id": "new"}
+other = dict(repo=repo, tip=tip, work=f"branch:{repo}:codex/old",
+             outcome="lost", trigger="handover", ended_at=now - cooldown)
+same = dict(other, work=item.work, channel=item.channel)
+unattributed = dict(other, work=None)
+
+
+class World(rw.AppWorld):
+    config = repos_error = ""
+    repos = ["richos"]
+
+    def __init__(self):
+        pass
+
+    def registry_items(self, now, seen):
+        return [], []
+
+    def codex_items(self, now, state):
+        return [item], []
+
+
+class Watcher(rw.Watcher):
+    def start(self, item, trigger, now, attempt, supersede, rows):
+        starts.append((item.work, trigger, attempt))
+
+
+for row in [other] * rw.MAX_LOSSES + [unattributed, dict(other, outcome="held", ended_at=now)]:
+    rw.append_jsonl(rw._p("attempts.jsonl"), row)
+
+starts = []
+Watcher("", "", World()).look(now, {})
+assert starts == [(item.work, "handover", 1)], starts
+starts.clear()
+rw.append_jsonl(rw._p("attempts.jsonl"), same)
+Watcher("", "", World()).look(now, {})
+assert starts == [(item.work, "handover", 2)], starts
+assert len(rw.channels.read(locator)["records"]) == 1
+starts.clear()
+for _ in range(rw.MAX_LOSSES - 1):
+    rw.append_jsonl(rw._p("attempts.jsonl"), same)
+Watcher("", "", World()).look(now + cooldown, {})
+assert not starts, starts
+assert any("NO VERDICT TWICE" in row["text"] for row in rw.channels.read(locator)["records"])
+
+native = rw.Item("teammate:fixture", "worker", repo, tip, base, "ended", source="app")
+native_loss = dict(other, work=native.work, ended_at=now)
+book = rw.Book([], {}, [native_loss] * rw.MAX_LOSSES, app=True)
+assert not rw.due([native], book, now + cooldown - 1, {}, 3600)
+assert rw.due([native], book, now + cooldown, {}, 3600) == [(native, "handover", None)]
+PY
+check "W42 desktop retries dedicated Codex handovers per job and keeps app-native cooldown" $? "see above"
+
+# W43: a watcher that cannot finish acquiring its local lock must leave the
+# company review available. Once acquired, the owner survives a restart.
+python3 - "$LIB" "$SB/w43" "$REPO" "$CTIP" "$BASE" <<'PY'
+import os, sys
+from pathlib import Path
+from unittest.mock import patch
+
+lib, directory, repo, tip, base = sys.argv[1:]
+sys.path.insert(0, lib)
+import review_watch as rw
+
+root = Path(directory)
+os.environ["CODEX_COORDINATION_ROOT"] = str(root / "coord")
+scope = {"entity_id": "fixture-company", "thread_id": "fixture-chat"}
+locator = rw.channels.connect("Review this work", "fixture", scope=scope)["locator"]
+item = rw.Item(f"branch:{repo}:codex/fixture", "codex", repo, tip, base, "ended",
+               branch="codex/fixture", source="codex")
+item.channel = {"locator": locator, "message_id": "fixture-ready"}
+world = object.__new__(rw.AppWorld)
+watcher = rw.Watcher("", "", world)
+now = 1800000000
+
+
+def refuses_local_lock(operation):
+    with operation:
+        try:
+            watcher.take_lock(item, "handover", now, 1)
+        except PermissionError:
+            return
+    raise AssertionError("fixture did not refuse the local lock")
+
+
+os.environ["REVIEW_WATCH_STATE_DIR"] = str(root / "first")
+refuses_local_lock(patch.object(rw, "lock_path", side_effect=PermissionError("cannot resolve lock")))
+
+os.environ["REVIEW_WATCH_STATE_DIR"] = str(root / "replacement")
+replacement = rw.Watcher("", "", world)
+got = replacement.take_lock(item, "handover", now + 1, 1)
+assert got is not None, "failed start kept the replacement from acquiring the review"
+lock, info = got
+claims = list(Path(locator).glob("review-owner-*.json"))
+assert len(claims) == 1 and rw.channels.load(claims[0])["owner"] == rw.state_root(), claims
+assert replacement.settle(lock, info, now + 2, [], "lost")["outcome"] == "lost"
+assert not Path(lock).exists()
+
+os.environ["REVIEW_WATCH_STATE_DIR"] = str(root / "other")
+assert rw.Watcher("", "", world).take_lock(item, "handover", now + 3, 1) is None
+assert not Path(rw.lock_path(repo, tip)).exists(), "denied watcher retained a local lock"
+
+os.environ["REVIEW_WATCH_STATE_DIR"] = str(root / "replacement")
+assert rw.Watcher("", "", world).take_lock(item, "handover", now + 4, 2) is not None
+
+item.tip = "c" * 40
+os.environ["REVIEW_WATCH_STATE_DIR"] = str(root / "second")
+local_lock = Path(rw.lock_path(repo, item.tip))
+refuses_local_lock(patch.object(rw.json, "dump", side_effect=PermissionError("cannot write lock")))
+assert not local_lock.exists()
+assert list(Path(locator).glob("review-owner-*.json")) == claims
+assert rw.Watcher("", "", world).take_lock(item, "handover", now + 5, 1) is not None
+PY
+check "W43 durable company review ownership requires a completed local lock" $? "see above"
+
 echo
 echo "review-watch.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

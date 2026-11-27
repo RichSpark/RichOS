@@ -1050,6 +1050,82 @@ def release_assets(release_id):
     return [asset for page in pages for asset in page]
 
 
+def release_version_key(channel, version):
+    if channel == "nightly":
+        return nightly_key(version)
+    match = re.fullmatch(BASE_RE, version)
+    if channel != "stable" or not match:
+        raise ValueError(f"invalid {channel} release version: {version}")
+    return tuple(map(int, match.groups()))
+
+
+def published_predecessor(channel, version):
+    """The greatest earlier version actually offered on this update channel."""
+    candidate_key = release_version_key(channel, version)
+    nightly = channel == "nightly"
+    pages = json.loads(run("gh", "api", "--paginate", "--slurp",
+                           f"repos/{REPO}/releases?per_page=100"))
+    earlier = []
+    for release in (row for page in pages for row in page):
+        tag = release.get("tag_name", "")
+        if (not tag.startswith("v") or release.get("draft") or not release.get("published_at")
+                or release.get("prerelease") is not nightly):
+            continue
+        try:
+            key = release_version_key(channel, tag[1:])
+        except ValueError:
+            continue
+        if key < candidate_key:
+            earlier.append((key, tag, release["id"]))
+
+    served_version = None
+    for _, tag, release_id in sorted(earlier, reverse=True):
+        assets = {asset["name"]: asset for asset in release_assets(release_id)
+                  if asset.get("state") == "uploaded"}
+        if nightly and "published.json" not in assets:
+            # An uploaded prerelease alone has not necessarily reached the updater.
+            # The public feed covers the roll-out before its receipt was uploaded,
+            # and nightlies published before that receipt existed.
+            if served_version is None:
+                served = json.loads(run("curl", "--fail", "--location", "--silent", "--show-error",
+                                        "--max-time", "30", ENDPOINT))
+                served_version = served["version"]
+                nightly_key(served_version)
+            if served_version != tag[1:]:
+                continue
+        name = f"RichOS-{tag[1:]}-macos-aarch64.zip"
+        digest = assets.get(name, {}).get("digest") or ""
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+            raise ValueError(f"the published predecessor {tag} has no verifiable {name} asset")
+        return {"tag": tag, "version": tag[1:], "sha256": digest.removeprefix("sha256:")}
+    return None
+
+
+def launch_predecessor(channel, version, state):
+    """Return the published first-install ZIP, checking local bytes or downloading it."""
+    previous = published_predecessor(channel, version)
+    if previous is None:
+        return None
+    tag, digest = previous["tag"], previous["sha256"]
+    name = f"RichOS-{previous['version']}-macos-aarch64.zip"
+    staged = state / "releases" / tag / name
+    cached = state / "install-path-predecessors" / digest / name
+    for path in (staged, cached):
+        if path.is_file() and sha256_file(path) == digest:
+            return {**previous, "archive": str(path)}
+
+    cached.parent.mkdir(parents=True, exist_ok=True)
+    url = f"https://github.com/{REPO}/releases/download/{tag}/{name}"
+    with tempfile.TemporaryDirectory(prefix="download-", dir=cached.parent) as tmp:
+        partial = Path(tmp) / name
+        execute("curl", "--fail", "--location", "--silent", "--show-error",
+                "--max-time", "600", "--output", str(partial), url)
+        if sha256_file(partial) != digest:
+            raise ValueError(f"downloaded {name} does not match the published SHA-256")
+        partial.replace(cached)
+    return {**previous, "archive": str(cached)}
+
+
 def verify_served_asset(url, source, *, max_time=600):
     with tempfile.TemporaryDirectory(prefix="richos-asset-verify-") as tmp:
         downloaded = Path(tmp) / "asset"
@@ -2020,6 +2096,10 @@ def main():
     p = sub.add_parser("notes-draft", help="write candidate prose on the worker's branch, never main")
     p.add_argument("--request", type=Path, required=True)
     p.add_argument("--entry", type=Path, required=True)
+    p = sub.add_parser("launch-predecessor", help="resolve and verify the prior published app archive")
+    p.add_argument("--channel", choices=CHANNEL_ENDPOINTS, required=True)
+    p.add_argument("--version", required=True)
+    p.add_argument("--state-dir", type=Path, required=True)
     sub.add_parser("check-rules")
     p = sub.add_parser("release-smoke")
     p.add_argument("--out", type=Path, required=True,
@@ -2060,6 +2140,8 @@ def main():
                            if (ROOT / PROMOTIONS).exists() else "[]", words=args.ceo_words)
         args.output.write_text(json_text(info))
         print(json_text(info))
+    elif args.command == "launch-predecessor":
+        print(json_text(launch_predecessor(args.channel, args.version, args.state_dir.resolve())))
     elif args.command == "check-rules":
         # The runner calls this in preflight so a widened ruleset costs seconds rather
         # than forty minutes of gates; `promote` calls it again immediately before the
