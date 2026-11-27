@@ -121,6 +121,29 @@ class WritePaths(unittest.TestCase):
         self.verdict(f'if false; # note\n  # another note\nthen cd "{main}"; fi; touch new',
                      0, self.work)
 
+    def test_previous_directory_in_linked_worktree(self):
+        subprocess.run(['git', 'init', '-q', '-b', 'main', self.root], check=True)
+        subprocess.run(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test',
+                        '-c', 'core.hooksPath=/dev/null', 'commit', '--allow-empty', '-qm', 'Fixture'],
+                       cwd=self.root, check=True)
+        linked = self.root / 'linked'
+        subprocess.run(['git', 'worktree', 'add', '-qb', 'fixture-writer', linked],
+                       cwd=self.root, check=True)
+        main = self.root / 'src'
+        enter = f'cd "{main}" && cd -'
+        subprocess.run(['/bin/bash', '-c', f'{enter} && [ "$PWD" = "{linked}" ] && touch sample.txt'],
+                       cwd=linked, capture_output=True, check=True)
+        self.assertTrue((linked / 'sample.txt').is_file())
+        self.assertFalse((main / 'sample.txt').exists())
+        self.verdict(f'cd "{main}" && cd "{linked}" && touch sample.txt', 0, linked)
+        self.verdict(f'{enter} && touch sample.txt', 0, linked)
+        self.verdict(f'{enter} && cd - && touch sample.txt', 2, linked)
+        self.verdict(f'cd "{linked}" && cd - && touch sample.txt', 2, main)
+        self.verdict(f'if test -n "$FLAG"; then cd "{main}"; else cd "{main}/sub"; fi'
+                     ' && cd - && touch sample.txt', 0, linked)
+        self.verdict('cd - && touch sample.txt', 2, linked)
+        self.verdict(f'cd - && touch "{linked}/sample.txt"', 0, linked)
+
     def test_32_physical_aliases(self):
         for target in (self.root / 'src/file', self.alias / 'src/file'):
             with self.subTest(target=target):
