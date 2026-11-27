@@ -16,8 +16,7 @@ struct BrowserDragSurface: NSViewRepresentable {
     /// A click on empty space in the pane, never on a scroll bar or a text box.
     var blankClick: (CGPoint) -> Void = { _ in }
     /// A right-click (or a Control-click the Windows keys did not take), before its menu opens.
-    /// It returns the frame of the item it selected, so the menu can open clear of its name.
-    var secondaryPress: (CGPoint) -> CGRect? = { _ in nil }
+    var secondaryPress: (CGPoint) -> Void = { _ in }
     /// Every press anywhere in the window, with whether it landed in a text box.
     var anyPress: (_ inText: Bool) -> Void = { _ in }
 
@@ -44,11 +43,8 @@ struct BrowserDragSurface: NSViewRepresentable {
         var click: ((CGPoint, CGPoint, NSEvent, Bool) -> Bool)?
         var controlClick: ((CGPoint?, NSPoint, NSWindow) -> Bool)?
         var blankClick: (CGPoint) -> Void = { _ in }
-        var secondaryPress: (CGPoint) -> CGRect? = { _ in nil }
+        var secondaryPress: (CGPoint) -> Void = { _ in }
         var anyPress: (Bool) -> Void = { _ in }
-        /// An event to dispatch in place of the one being tracked (a right-click moved to the
-        /// clicked item's edge, so its menu opens below or above the item and leaves its name readable).
-        private var replacement: NSEvent?
         /// The inline name box and the character a press in it started at, while the press lasts.
         private var textAnchor: (editor: NSTextView, index: Int)?
 
@@ -74,40 +70,12 @@ struct BrowserDragSurface: NSViewRepresentable {
             monitor = NSEvent.addLocalMonitorForEvents(
                 matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .rightMouseDown]
             ) { [weak self] event in
-                guard let self else { return event }
-                self.replacement = nil
-                let consumed = self.track(event)
-                defer { self.replacement = nil }
-                return consumed ? nil : (self.replacement ?? event)
+                self?.track(event) == true ? nil : event
             }
         }
 
         deinit {
             if let monitor { NSEvent.removeMonitor(monitor) }
-        }
-
-        /// The same press moved to the clicked item's trailing edge, still inside the item, so the
-        /// menu is the item's and opens beside it, right after the name, instead of over it
-        /// (catalog entry 8). Where the screen has no room for the menu on that side (the last
-        /// column), the press goes to the item's bottom edge, or its top edge near the screen's
-        /// bottom, where macOS opens the menu upward.
-        private func menuEvent(_ event: NSEvent, at point: CGPoint, clearOf item: CGRect, in window: NSWindow) -> NSEvent? {
-            let visible = (window.screen ?? NSScreen.main)?.visibleFrame ?? .infinite
-            let beside = convert(CGPoint(x: item.maxX - 1, y: point.y), to: nil)
-            let target: CGPoint
-            // The widest item menu here measures under 250 points.
-            if visible.maxX - window.convertPoint(toScreen: beside).x >= 260 {
-                target = beside
-            } else {
-                let below = convert(CGPoint(x: point.x, y: item.maxY - 1), to: nil)
-                let above = convert(CGPoint(x: point.x, y: item.minY + 1), to: nil)
-                // An item menu here is 330 to 420 points tall.
-                target = window.convertPoint(toScreen: below).y - visible.minY < 430 ? above : below
-            }
-            return NSEvent.mouseEvent(with: event.type, location: target, modifierFlags: event.modifierFlags,
-                                      timestamp: event.timestamp, windowNumber: event.windowNumber, context: nil,
-                                      eventNumber: event.eventNumber, clickCount: event.clickCount,
-                                      pressure: event.pressure)
         }
 
         /// The deepest view under a window point is a scroll bar or a text box, which take
@@ -140,12 +108,12 @@ struct BrowserDragSurface: NSViewRepresentable {
                 return false
             }
             if event.type == .rightMouseDown {
-                anyPress(landsOnControl(event, in: window).text)
+                let target = landsOnControl(event, in: window)
+                anyPress(target.text)
                 let point = convert(event.locationInWindow, from: nil)
-                if bounds.contains(point), let item = secondaryPress(point) {
-                    replacement = menuEvent(event, at: point, clearOf: item, in: window)
-                }
-                return false
+                guard bounds.contains(point) else { return false }
+                secondaryPress(point)
+                return !target.control && BrowserContextMenu.fitAtRightEdge(event, in: window)
             }
             // A press in the inline name box places the caret there, a drag selects the part of the
             // name it crosses and a double-click selects a word, as in any text box. SwiftUI's
@@ -188,11 +156,12 @@ struct BrowserDragSurface: NSViewRepresentable {
                 let modifiers = event.modifierFlags.intersection([.control, .command, .option, .shift])
                 consumedClick = modifiers == .control &&
                     controlClick?(inside ? point : nil, event.locationInWindow, window) == true
-                if modifiers == .control && !consumedClick && inside, let item = secondaryPress(point) {
-                    replacement = menuEvent(event, at: point, clearOf: item, in: window)
-                }
                 down = nil
                 blankDown = nil
+                if modifiers == .control && !consumedClick && inside {
+                    secondaryPress(point)
+                    if !target.control && BrowserContextMenu.fitAtRightEdge(event, in: window) { return true }
+                }
                 // A press in the inline name box is the box's own: a drag there selects text.
                 if inside && !consumedClick && !target.text, let start = prepare?(point) {
                     let wasKey = window.isKeyWindow

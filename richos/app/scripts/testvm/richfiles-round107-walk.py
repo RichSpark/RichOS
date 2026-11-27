@@ -26,6 +26,9 @@ Search Filters, Create ZIP, New Folder, the Open With chooser, the new file's na
 Disk Cleanup's Move to Trash, and measures from the guest's pixels each default button's label
 on its fill (4.5:1) and its fill against what is around it (3:1), and each Cancel's label. The
 Change the File Extension? alert, drawn by macOS, is measured as a finding in notes.json.
+
+--menu-position uses a single long filename to check the menu anchor and the
+window and display edges in the signed guest.
 """
 import argparse
 import json
@@ -226,6 +229,119 @@ class Walk:
             time.sleep(1)
         return False
 
+    def menu_at(self, label, point, item, check):
+        code, detail = self.right(*point)
+        try:
+            self.shot(label)
+            action = self.node(item, "--role", "AXMenuItem")
+            menus = self.nodes("--role", "AXMenu")
+            menu = next((m for m in menus if action and
+                         m["x"] <= action["x"] < m["x"] + m["w"] and
+                         m["y"] <= action["y"] < m["y"] + m["h"]), None)
+            self.record(label, code == 0 and menu is not None and check(menu),
+                        f"pointer {point}, menu {menu}, action {item}: {bool(action)}"
+                        + (f", input error: {detail}" if code else ""))
+        finally:
+            self.key(53)
+
+    def menu_position(self, theme):
+        folder = "/Users/admin/Menu Placement Fixture"
+        name = "Quarterly report with a deliberately long filename for the pointer test.txt"
+        code, detail = self.guest(
+            f"mkdir -p {shlex.quote(folder)} && touch {shlex.quote(folder + '/' + name)} && "
+            f"defaults write {BUNDLE} richfiles.theme -string {shlex.quote(theme)} && "
+            f"open -a /Applications/RichFiles.app {shlex.quote(folder)}")
+        if code:
+            raise RuntimeError(detail)
+        deadline = time.monotonic() + 30
+        while not self.node(name) and time.monotonic() < deadline:
+            time.sleep(0.25)
+        if not self.node(name):
+            raise RuntimeError("RichFiles did not open the menu fixture")
+
+        def move(x, y):
+            target = 'tell application "System Events" to tell process "RichFiles" to '
+            code, detail = self.guest("osascript -e " + shlex.quote(target + "set size of window 1 to {920, 560}")
+                                      + " -e " + shlex.quote(target + f"set position of window 1 to {{{x}, {y}}}"))
+            if code:
+                raise RuntimeError(detail)
+            window = self.nodes("--role", "AXWindow")
+            return window[0]
+
+        def view(mode):
+            for title, match in [("File view", []), (mode, ["--role", "AXMenuItem"])]:
+                code, detail = run([HERE / "ax.sh", self.vm, "click", "--app", APP,
+                                    "--title", title, *match, "--first", "--json"])
+                if code:
+                    raise RuntimeError(f"could not choose {mode} via {title}: {detail}")
+            if not self.node(name):
+                raise RuntimeError(f"file absent in {mode}")
+
+        def near(point, menu):
+            # Allow the native border and the inset around the first menu item.
+            return abs(menu["x"] - point[0]) <= 12 and abs(menu["y"] - point[1]) <= 24
+
+        def at_pointer(label, point, action="Open", extra=lambda _: True):
+            self.menu_at(f"{theme}-{label}", point, action, lambda menu: near(point, menu) and extra(menu))
+
+        window = move(105, 110)
+        for mode in ("List", "Columns", "Thumbnails", "Details", "Gallery"):
+            view(mode)
+            row = self.node(name)
+            if mode == "List":
+                for offset in (40, 170, 320):
+                    at_pointer(f"list-name-{offset}", (round(row["x"] + offset), self.center(row)[1]))
+            else:
+                at_pointer(mode.lower(), (round(row["x"] + min(48, row["w"] / 2)), self.center(row)[1]))
+
+        view("List")
+        pin = self.node("Pin Current Folder")
+        if not pin:
+            raise RuntimeError("Pin Current Folder is absent")
+        self.click(*self.center(pin))
+        favorite = next((n for n in self.nodes("--title", "Menu Placement Fixture", "--role", "AXButton")
+                         if n["y"] >= pin["y"] - 10), None)
+        if not favorite:
+            raise RuntimeError("the fixture did not appear in Quick Access")
+        at_pointer("sidebar", self.center(favorite), "Remove from Quick Access")
+        volume = self.node("Macintosh HD", "--role", "AXButton")
+        if not volume:
+            raise RuntimeError("the startup volume is absent from the sidebar")
+        at_pointer("sidebar-volume", self.center(volume), "Copy Path")
+
+        right = window["x"] + window["w"]
+        bottom = window["y"] + window["h"]
+        at_pointer("window-right", (round(right - 15), round(bottom - 300)), "New Folder",
+                   extra=lambda m: m["x"] + m["w"] > right)
+        at_pointer("window-bottom", (round(right - 345), round(bottom - 45)), "New Folder",
+                   extra=lambda m: m["y"] + m["h"] > bottom)
+
+        # run-walk.py supplies a single display. Get its bounds from the guest,
+        # rather than assuming the dimensions of the default test VM.
+        code, display = self.guest("osascript -l JavaScript -e " + shlex.quote(
+            'ObjC.import("AppKit"); var screen = $.NSScreen.mainScreen;'
+            'var full = screen.frame, usable = screen.visibleFrame;'
+            'JSON.stringify([usable.origin.x + usable.size.width, full.size.height - usable.origin.y])'))
+        if code:
+            raise RuntimeError(display)
+        screen_right, screen_bottom = json.loads(display)
+        window = move(round(screen_right - 920), 110)
+        right = window["x"] + window["w"]
+        bottom = window["y"] + window["h"]
+        for label, y, action in [
+            ("display-right-empty", round(bottom - 305), "New Folder"),
+            ("display-right-file", self.center(self.node(name))[1], "Open"),
+        ]:
+            point = (round(right - 95), y)
+            self.menu_at(f"{theme}-{label}", point, action,
+                         lambda m: abs(m["y"] - point[1]) <= 24 and 0 <= screen_right - m["x"] - m["w"] <= 12
+                         and m["x"] < point[0] < m["x"] + m["w"])
+        window = move(round(screen_right - 920), round(screen_bottom - 560))
+        point = (round(window["x"] + window["w"] - 345), round(window["y"] + window["h"] - 45))
+        self.menu_at(f"{theme}-display-bottom", point, "New Folder",
+                     lambda m: abs(m["x"] - point[0]) <= 12 and m["y"] < point[1] - 24
+                     and m["y"] + m["h"] <= screen_bottom + 1)
+
     # -- the fifteen behaviors ----------------------------------------------------------------
     def walk(self, theme):
         t = theme
@@ -261,20 +377,18 @@ class Walk:
         time.sleep(0.6)
         self.shot(f"{t}-06-deselected-outline")
 
-        # 8: right-click an unselected item: it is selected and its menu opens beside it.
+        # 8: right-click an unselected item: it is selected and its menu opens at the pointer.
         html = self.node("landing-page-v1.html")
-        self.right(*self.name_point(html))
+        point = self.name_point(html)
+        self.right(*point)
         time.sleep(1.0)
         self.shot(f"{t}-08-right-click-selects")
         menus = [m for m in self.nodes("--role", "AXMenu") if m["h"] > 100]
         if html and menus:
             menu = menus[0]
-            # Clear of the row: beside its end, below it or above it.
-            clear = (menu["x"] >= html["x"] + html["w"] - 3 or menu["y"] >= html["y"] + html["h"] - 3
-                     or menu["y"] + menu["h"] <= html["y"] + 3)
-            self.record(f"{t}: the menu opens clear of the right-clicked row, its name readable", clear,
-                        f"row x {html['x']}-{html['x'] + html['w']} y {html['y']}-{html['y'] + html['h']}, "
-                        f"menu x {menu['x']} y {menu['y']}-{menu['y'] + menu['h']}")
+            anchored = abs(menu["x"] - point[0]) <= 12 and abs(menu["y"] - point[1]) <= 24
+            self.record(f"{t}: the menu opens at the pointer", anchored,
+                        f"pointer {point}, menu x {menu['x']} y {menu['y']}")
         else:
             self.record(f"{t}: the right-click menu was found", False, f"row {bool(html)}, menus {len(menus)}")
         # 3: Open With lists the apps.
@@ -888,6 +1002,7 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--fixes", action="store_true", help="walk only the handover review's fixes")
     mode.add_argument("--sheets", action="store_true", help="open every sheet with a default button and measure it")
+    mode.add_argument("--menu-position", action="store_true", help="check context menu placement")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     walk = Walk(args.vm, args.out)
@@ -895,7 +1010,10 @@ def main():
         walk.prepare(args.standalone_zip)
         for theme in args.themes.split(","):
             try:
-                (walk.fixes if args.fixes else walk.sheets if args.sheets else walk.walk)(theme)
+                if args.menu_position:
+                    walk.menu_position(theme)
+                else:
+                    (walk.fixes if args.fixes else walk.sheets if args.sheets else walk.walk)(theme)
             except Exception as error:  # record and go on to the next theme
                 walk.record(f"{theme}: walk step raised", False, repr(error)[:300])
                 walk.quit()
