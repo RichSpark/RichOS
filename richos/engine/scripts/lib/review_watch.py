@@ -1460,8 +1460,6 @@ class Watcher(object):
 
     # -- locks -------------------------------------------------------------------
     def take_lock(self, item, trigger, now, attempt):
-        if getattr(item, "channel", None) and not owns_channel_review(item):
-            return None
         path = lock_path(item.repo, item.tip)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         try:
@@ -1476,9 +1474,19 @@ class Watcher(object):
                 "session": getattr(item, "session", "") or ""}
         if getattr(item, "channel", None):
             info["channel"] = item.channel
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(info, f)
-        return path, info
+        keep_lock = False
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(info, f)
+            # Reserve the durable company owner only after this watcher has
+            # a local lock. The coordinator still serializes competing roots.
+            keep_lock = not info.get("channel") or owns_channel_review(item)
+            if keep_lock:
+                return path, info
+        finally:
+            if not keep_lock:
+                os.unlink(path)
+        return None
 
     def rewrite_lock(self, path, info):
         tmp = "%s.%d.tmp" % (path, os.getpid())

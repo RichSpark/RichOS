@@ -3184,6 +3184,68 @@ assert rw.due([native], book, now + cooldown, {}, 3600) == [(native, "handover",
 PY
 check "W42 desktop retries dedicated Codex handovers per job and keeps app-native cooldown" $? "see above"
 
+# W43: a watcher that cannot finish acquiring its local lock must leave the
+# company review available. Once acquired, the owner survives a restart.
+python3 - "$LIB" "$SB/w43" "$REPO" "$CTIP" "$BASE" <<'PY'
+import os, sys
+from pathlib import Path
+from unittest.mock import patch
+
+lib, directory, repo, tip, base = sys.argv[1:]
+sys.path.insert(0, lib)
+import review_watch as rw
+
+root = Path(directory)
+os.environ["CODEX_COORDINATION_ROOT"] = str(root / "coord")
+scope = {"entity_id": "fixture-company", "thread_id": "fixture-chat"}
+locator = rw.channels.connect("Review this work", "fixture", scope=scope)["locator"]
+item = rw.Item(f"branch:{repo}:codex/fixture", "codex", repo, tip, base, "ended",
+               branch="codex/fixture", source="codex")
+item.channel = {"locator": locator, "message_id": "fixture-ready"}
+world = object.__new__(rw.AppWorld)
+watcher = rw.Watcher("", "", world)
+now = 1800000000
+
+
+def refuses_local_lock(operation):
+    with operation:
+        try:
+            watcher.take_lock(item, "handover", now, 1)
+        except PermissionError:
+            return
+    raise AssertionError("fixture did not refuse the local lock")
+
+
+os.environ["REVIEW_WATCH_STATE_DIR"] = str(root / "first")
+refuses_local_lock(patch.object(rw, "lock_path", side_effect=PermissionError("cannot resolve lock")))
+
+os.environ["REVIEW_WATCH_STATE_DIR"] = str(root / "replacement")
+replacement = rw.Watcher("", "", world)
+got = replacement.take_lock(item, "handover", now + 1, 1)
+assert got is not None, "failed start kept the replacement from acquiring the review"
+lock, info = got
+claims = list(Path(locator).glob("review-owner-*.json"))
+assert len(claims) == 1 and rw.channels.load(claims[0])["owner"] == rw.state_root(), claims
+assert replacement.settle(lock, info, now + 2, [], "lost")["outcome"] == "lost"
+assert not Path(lock).exists()
+
+os.environ["REVIEW_WATCH_STATE_DIR"] = str(root / "other")
+assert rw.Watcher("", "", world).take_lock(item, "handover", now + 3, 1) is None
+assert not Path(rw.lock_path(repo, tip)).exists(), "denied watcher retained a local lock"
+
+os.environ["REVIEW_WATCH_STATE_DIR"] = str(root / "replacement")
+assert rw.Watcher("", "", world).take_lock(item, "handover", now + 4, 2) is not None
+
+item.tip = "c" * 40
+os.environ["REVIEW_WATCH_STATE_DIR"] = str(root / "second")
+local_lock = Path(rw.lock_path(repo, item.tip))
+refuses_local_lock(patch.object(rw.json, "dump", side_effect=PermissionError("cannot write lock")))
+assert not local_lock.exists()
+assert list(Path(locator).glob("review-owner-*.json")) == claims
+assert rw.Watcher("", "", world).take_lock(item, "handover", now + 5, 1) is not None
+PY
+check "W43 durable company review ownership requires a completed local lock" $? "see above"
+
 echo
 echo "review-watch.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
