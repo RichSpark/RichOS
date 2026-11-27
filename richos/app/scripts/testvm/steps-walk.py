@@ -42,7 +42,9 @@ its exit status, its output and the clock, so a walk's evidence is one file and 
                                        column's resize handle, a window's title bar; the nightly 114 walk);
                                        "within": true with "find" reads every point as a "dx,dy" offset
                                        from the found control's center and starts at the first of them:
-                                       a drag inside a canvas, such as RichGlance's picture (round 108)
+                                       a drag inside a canvas, such as RichGlance's picture (round 108);
+                                       "cmd": true holds Command on a left click or drag: a Command-click
+                                       adds an item to a Finder selection (the Desktop Forward Delete walk)
   openlink pattern [app] [seconds]     read the app window's tree until an https:// address containing
                                        PATTERN is drawn, then open it in the guest with APP (default
                                        Safari): the Mac's pairing address handed to the guest's phone
@@ -159,6 +161,7 @@ def step_run(vm, step, out):
                    + (['--scroll', str(step['scroll'])] if step.get('scroll') else [])
                    + (['--ctrl'] if step.get('ctrl') else [])
                    + (['--double'] if step.get('double') else [])
+                   + (['--cmd'] if step.get('cmd') else [])
                    # "asis": the pointer lands with no app raised first (a Dock icon, a background
                    # window); "app" then only names whose tree "find" reads, such as the Dock's.
                    + (['--as-is'] if step.get('asis') else (['--app', step['app']] if step.get('app') else [])))
@@ -210,7 +213,7 @@ REQUIRED = {
 }
 OPTIONAL = {'tree': {'app': str}, 'shot': {'ocr': bool}, 'handfile': {'to': str},
             'pointer': {'right': bool, 'hover': bool, 'find': list, 'scroll': int, 'ctrl': bool, 'double': bool, 'app': str,
-                        'asis': bool, 'from': bool, 'within': bool},
+                        'asis': bool, 'from': bool, 'within': bool, 'cmd': bool},
             'relaunch': {'env': list}, 'openlink': {'app': str, 'seconds': (int, float)},
             'until': {'seconds': (int, float)}, '*': {'allow_fail': bool}}
 
@@ -266,6 +269,10 @@ def problems(steps):
                 or (isinstance(step.get('points'), list) and len(step['points']) + found_point != 1)):
             found.append(f'step {i} (pointer): "double" is a left double-click on exactly one point, '
                          f'with no "scroll", "hover" or "right"')
+        elif op == 'pointer' and step.get('cmd') is True and (
+                step.get('scroll') or step.get('hover') or step.get('right') or step.get('double')):
+            found.append(f'step {i} (pointer): "cmd" holds Command on a left click or drag, '
+                         f'so it takes no "scroll", "hover", "right" or "double"')
         elif op == 'pointer' and step.get('ctrl') is True and not step.get('scroll'):
             found.append(f'step {i} (pointer): "ctrl" holds Control on a wheel turn, so it needs "scroll"')
         elif op == 'pointer' and isinstance(step.get('points'), list) and not step.get('scroll') and not step.get('double') and (

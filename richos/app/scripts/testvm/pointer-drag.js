@@ -52,8 +52,12 @@ function run() {
   // P.right: the RIGHT button (CGMouseButton 1). Given one point twice it is a real right-click,
   // a `contextmenu` event in the app (the Output panel row's menu, PRD §6.3).
   var button = P.right ? 1 : 0;
+  // P.cmd: Command held on the button's down, dragged and up events (kCGEventFlagMaskCommand),
+  // the way a hand Command-clicks to add an item to a Finder selection. Set on those events only,
+  // so no key is left down. Added with the Desktop Forward Delete walk (several Desktop items selected together).
   function mouse(type, x, y) {
     var ev = $.CGEventCreateMouseEvent($(), type, { x: x, y: y }, type === 5 ? 0 : button);
+    if (P.cmd && type !== 5) $.CGEventSetFlags(ev, 0x100000);
     $.CGEventPost(0, ev);
   }
   var pts = P.points;
@@ -146,5 +150,5 @@ function run() {
   }
   delay(0.3);
   return out({ dragged: true, button: P.right ? "right" : "left", points: pts, moves: sent, pid: pid,
-               thenKey: P.thenKey === undefined ? null : P.thenKey });
+               thenKey: P.thenKey === undefined ? null : P.thenKey, cmd: !!P.cmd });
 }
