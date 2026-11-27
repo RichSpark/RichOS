@@ -4,6 +4,20 @@ import Carbon.HIToolbox
 import XCTest
 
 final class DesktopFileKeyTests: XCTestCase {
+    func testOnlyTheInitialNewFolderShortcutStartsTracking() throws {
+        let key = try XCTUnwrap(CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(kVK_ANSI_N), keyDown: true))
+        key.flags = [.maskCommand, .maskShift]
+        XCTAssertEqual(DesktopFileKey.classify(key), .newFolder)
+
+        key.setIntegerValueField(.keyboardEventAutorepeat, value: 1)
+        XCTAssertEqual(DesktopFileKey.classify(key), .passThrough)
+        key.setIntegerValueField(.keyboardEventAutorepeat, value: 0)
+        key.flags = [.maskCommand, .maskShift, .maskControl]
+        XCTAssertEqual(DesktopFileKey.classify(key), .passThrough)
+        key.flags = [.maskCommand]
+        XCTAssertEqual(DesktopFileKey.classify(key), .passThrough)
+    }
+
     func testDesktopDefaultsAndIndependentOptOutsSurviveUpgradeAndRelaunch() throws {
         typealias Preferences = WindowGesturePreferences
         let domain = "richfiles.tests.desktop." + UUID().uuidString

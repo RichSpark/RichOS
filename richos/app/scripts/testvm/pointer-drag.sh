@@ -7,6 +7,7 @@
 #   ... [--app NAME | --as-is]
 #   ... [--then-key KEYCODE [--then-after S]]   (after a click or drag with the left or right button)
 #   ... [--cmd]                                  (Command held on a left click or drag)
+#   ... [--fn]                                   (Function flag on pointer events)
 #
 #   --cmd holds Command on the button's down, dragged and up events, the way a hand Command-clicks
 #   to add an item to a Finder selection (a file, a folder and a link on the Desktop selected
@@ -68,12 +69,12 @@ if [ "${TESTVM_AX_SUPERVISED:-}" != 1 ]; then
 fi
 . "$HERE/lib.sh"
 
-usage="usage: pointer-drag.sh <vm> <x>,<y> <x>,<y> [<x>,<y> ...] [--step PX] [--pause S] [--rest S] [--right | --hover] [--then-key KEYCODE [--then-after S]] [--cmd] | <vm> <x>,<y> --scroll LINES [--ctrl] | <vm> <x>,<y> --double; any with [--app NAME | --as-is]"
+usage="usage: pointer-drag.sh <vm> <x>,<y> <x>,<y> [<x>,<y> ...] [--step PX] [--pause S] [--rest S] [--right | --hover] [--then-key KEYCODE [--then-after S]] [--cmd] | <vm> <x>,<y> --scroll LINES [--ctrl] | <vm> <x>,<y> --double; any with [--app NAME | --as-is] [--fn]"
 VM="${1:-}"
 [ -n "$VM" ] || die "$usage"
 shift
 POINTS=()
-STEP=8; PAUSE=0.02; REST=0.15; RIGHT=0; HOVER=0; SCROLL=0; CTRL=0; APP=""; DOUBLE=0; ASIS=0; THEN_KEY=""; THEN_AFTER=0.1; CMD=0
+STEP=8; PAUSE=0.02; REST=0.15; RIGHT=0; HOVER=0; SCROLL=0; CTRL=0; APP=""; DOUBLE=0; ASIS=0; THEN_KEY=""; THEN_AFTER=0.1; CMD=0; FN=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --step) STEP="${2:-}"; shift 2 ;;
@@ -86,6 +87,7 @@ while [ $# -gt 0 ]; do
     --double) DOUBLE=1; shift ;;
     --as-is) ASIS=1; shift ;;
     --cmd) CMD=1; shift ;;
+    --fn) FN=1; shift ;;
     --then-key) THEN_KEY="${2:-}"; shift 2 ;;
     --then-after) THEN_AFTER="${2:-}"; shift 2 ;;
     --app) APP="${2:-}"; [ -n "$APP" ] || die "--app needs a process name — $usage"; shift 2 ;;
@@ -150,7 +152,7 @@ DEADLINE
 # Every number is parsed here, so the guest program only ever receives JSON.
 PARAMS="$(PD_PID="$PID" PD_STEP="$STEP" PD_PAUSE="$PAUSE" PD_REST="$REST" PD_RIGHT="$RIGHT" PD_HOVER="$HOVER" \
            PD_SCROLL="$SCROLL" PD_CTRL="$CTRL" PD_APP="$APP" PD_DOUBLE="$DOUBLE" PD_ASIS="$ASIS" \
-           PD_THEN_KEY="$THEN_KEY" PD_THEN_AFTER="$THEN_AFTER" PD_CMD="$CMD" python3 - "${POINTS[@]}" <<'PY'
+           PD_THEN_KEY="$THEN_KEY" PD_THEN_AFTER="$THEN_AFTER" PD_CMD="$CMD" PD_FN="$FN" python3 - "${POINTS[@]}" <<'PY'
 import json, os, sys
 try:
     points = [[float(v) for v in p.split(',', 1)] for p in sys.argv[1:]]
@@ -170,6 +172,7 @@ print("var DRAG_PARAMS = " + json.dumps({"pid": int(os.environ['PD_PID']), "poin
                                          "thenKey": int(os.environ['PD_THEN_KEY']) if os.environ['PD_THEN_KEY'] else None,
                                          "thenAfter": then_after,
                                          "cmd": os.environ['PD_CMD'] == '1',
+                                         "fn": os.environ['PD_FN'] == '1',
                                          "app": os.environ['PD_APP'] or None}) + ";")
 PY
 )"
