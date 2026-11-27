@@ -65,6 +65,21 @@ with tempfile.TemporaryDirectory() as tmp:
     code, out, _ = tool('check', 'a', '--none')
     check('--none fails when something moved', code == 1 and 'expected nothing' in out['why'], out)
 
+    # A positive check fails when something besides the moved items is also new in the Trash
+    # (review of the Desktop Forward Delete walk tools: an extra Trash entry passed before).
+    (desk / 'Solo.txt').write_text('s')
+    code, out, _ = tool('mark', 'extra')
+    os.rename(desk / 'Solo.txt', trash / 'Solo.txt')
+    (trash / 'Stray from elsewhere').mkdir()
+    code, out, _ = tool('check', 'extra', '--moved', 'Solo.txt')
+    check('--moved fails when another entry is also new in the Trash', code == 1 and out['moved'] == ['Solo.txt']
+          and 'also new in the Trash' in out['why'] and 'Stray from elsewhere' in out['why'], out)
+    code, out, _ = tool('check', 'extra', '--moved-count', '1')
+    check('--moved-count fails the same way', code == 1 and 'also new in the Trash' in out['why'], out)
+    os.rmdir(trash / 'Stray from elsewhere')
+    code, out, _ = tool('check', 'extra', '--moved', 'Solo.txt')
+    check('without the stray entry the same check holds', code == 0 and out['trashed'] == ['Solo.txt'], out)
+
     # An item that left the Desktop for somewhere other than the Trash is never "moved".
     code, out, _ = tool('mark', 'b')
     os.rename(desk / 'Keep.txt', root / 'Keep.txt')
