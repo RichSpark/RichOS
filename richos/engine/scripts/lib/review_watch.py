@@ -193,7 +193,9 @@ HANDOVER_KINDS = ("handover", "manual")
 CONTINUES_RE = re.compile(r"(?<![\w-])continues:")   # a recorded wait naming the job that continues the work
 DEFAULT_TO_RICH = "~/.richos-coordination/rich-codex/to-rich.md"
 DEFAULT_TO_CODEX = "~/.richos-coordination/rich-codex/to-codex.md"
-SHA_RE = re.compile(r"\b[0-9a-f]{40}\b")
+SHA_VALUE = re.compile(r"^[ `\t]*([0-9a-f]{7,40})\b", re.IGNORECASE)
+TIP_LABEL = re.compile(r"^\s*(?:[-*]\s+)?(?:\*\*)?(Commit|(?:Branch )?Tip|(?:Branch )?Head):(?:\*\*)?",
+                       re.IGNORECASE)
 CODEX_BRANCH_RE = re.compile(r"\bcodex/[A-Za-z0-9._/-]*[A-Za-z0-9_]")
 
 
@@ -732,14 +734,15 @@ class World(object):
             for bullet in lines[i + 1:]:
                 if not re.match(r"\s*[-*]\s", bullet):
                     break
-                label = bullet.split(":", 1)[0]
-                tipm = SHA_RE.search(bullet)
+                label, _, value = bullet.partition(":")
+                # In a repository list, a leading hash is that repository's declared tip.
+                tipm = SHA_VALUE.match(value)
                 for n in re.findall(r"[A-Za-z0-9._-]+", label):
                     n = n.strip(".")
                     if n in allowed or self.repo_named(n):
                         listed.append(n)
                         if tipm:
-                            line_tips.setdefault(n, tipm.group(0))
+                            line_tips.setdefault(n, tipm.group(1).lower())
         names = [n for n in listed if n in allowed]
         if repo_map is not None and listed and not names:
             return "Codex's handover %r names no uniquely connected repository for this company; no review started" % header[:90]
@@ -757,13 +760,28 @@ class World(object):
         work = "branch:%s:%s" % (repo, branch)
         if work in skip_work:
             return None
-        cm = re.search(r"Commit:\s*`?([0-9a-f]{40})", text) or SHA_RE.search(text)
-        tip = line_tips.get(names[0]) or (cm.group(1) if cm and cm.groups() else (cm.group(0) if cm else ""))
-        if not tip:
+        declared = line_tips.get(names[0])
+        if not declared:
+            labels = [m for line in lines if (m := TIP_LABEL.match(line))]
+            label = next((m for m in labels if m.group(1).lower() == "commit"), None)
+            if label is None and labels:
+                label = labels[0]
+            if label:
+                sha = SHA_VALUE.match(label.string[label.end():])
+                if not sha:
+                    return ("Codex's handover %r has no commit ID after %s, so no review of it started"
+                            % (header[:90], label.group(1)))
+                declared = sha.group(1).lower()
+        if declared:
+            tip = git(repo, "rev-parse", "--verify", "-q", declared + "^{commit}") or ""
+            if not tip.startswith(declared):
+                tip = ""
+        else:
+            # A hash in prose may name main, a proof base or a different repository.
             tip = git(repo, "rev-parse", "--verify", "-q", "refs/heads/%s^{commit}" % branch) or ""
-        if not tip or git(repo, "cat-file", "-e", tip + "^{commit}") is None:
+        if not tip:
             return ("Codex's handover %r names %s, whose commit %s is not in %s, so no review of it started"
-                    % (header[:90], branch, tip[:12] or "(none)", repo))
+                    % (header[:90], branch, declared or "(branch head unavailable)", repo))
         words = codex_words(to_codex, to_rich, branch) if words is None else words
         if not words:
             return NoWords("Codex's handover %r: no entry in %s names %s or comes before Codex first named it, so "
@@ -835,20 +853,24 @@ class World(object):
                             words.append(("Source excerpt (%s; %s)" % (direction, row.get("provenance", "explicit task amendment")), row["text"]))
                 for _, end, row in channels.records(source, offset):
                     if row.get("kind", "message") == "message":
+                        channel = {"locator": locator, "message_id": row["message_id"]}
+                        # Re-reading the journal must keep the tip already queued for this READY.
+                        queued = {p["work"] for p in pending if p["channel"] == channel}
                         text = row["text"]
                         first = text.lstrip().split("\n", 1)[0]
                         if first.startswith("READY TO LAND:"):
                             text = "## " + text.lstrip()
                         for header, body in split_entries(text):
                             got = self.codex_handover(header, body, str(source), str(path / "to-codex.jsonl"), now,
-                                                      words=words, repo_map=repos, origin=endpoint["connection_id"])
+                                                      words=words, repo_map=repos, origin=endpoint["connection_id"],
+                                                      skip_work=queued)
                             if isinstance(got, str):
                                 channel_reply(path, row["message_id"], "review-held", got)
                             elif got:
-                                got["channel"] = {"locator": locator, "message_id": row["message_id"]}
+                                got["channel"] = channel
                                 got["chat"] = chat_partition(endpoint["entity_id"], endpoint["thread_id"])
-                                if not any(p["channel"] == got["channel"] and p["repo"] == got["repo"] and p["tip"] == got["tip"] for p in pending):
-                                    pending.append(got)
+                                pending.append(got)
+                                queued.add(got["work"])
                     positions[locator] = dict(source_identity=identity, through=end)
             except (OSError, ValueError, KeyError) as exc:
                 print("review-watch: connection held %s: %s" % (path, exc), file=sys.stderr)

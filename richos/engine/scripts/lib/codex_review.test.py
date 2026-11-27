@@ -235,13 +235,56 @@ class Reviews(unittest.TestCase):
         self.assertEqual(state["channel_pending"], [])
         self.assertEqual(len(c.read(path)["records"]), 1, "no review result or held notice was generated")
 
-    def test_world_uses_same_handler_but_managed_terminal_does_not_compete(self):
+    def test_base_first_handover_reviews_the_branch_tip(self):
+        path = Path(c.connect("Review the workspace change", "fixture source", terminal_session="fixture")["locator"])
+        c.send(path, "base-first", (
+            "READY TO LAND: codex/fixture\n"
+            f"Current main base: `{self.base}`.\n"
+            f"Delivered work at `{self.tip}`.\n"
+            "Repository: work only.\nProof passed."
+        ))
+        world = self.terminal_world()
+        state = {}
+        items, problems = world.channel_items(100, state, [c.connection(path)])
+        self.assertFalse(problems)
+        self.assertEqual([row["tip"] for row in state["channel_pending"]], [self.tip])
+        self.assertEqual([(item.tip, item.base) for item in items], [(self.tip, self.base)])
+        [(item, trigger, _)] = rw.due(items, rw.Book([], {}, []), 100, {}, 3600)
+        args = item.args(trigger)
+        self.assertEqual(args[args.index("--tip") + 1], self.tip)
+        self.git("update-ref", "refs/heads/codex/fixture", self.base)
+        state["channels"].clear()
+        replayed, problems = world.channel_items(101, state, [c.connection(path)])
+        self.assertFalse(problems)
+        self.assertEqual([item.tip for item in replayed], [self.tip])
+        self.assertEqual(len(state["channel_pending"]), 1)
+
+    def test_labelled_tip_stays_pinned_even_if_branch_moves(self):
+        self.git("update-ref", "refs/heads/codex/fixture", self.base)
+        for label, sha in (("Commit", self.tip), ("Tip", self.tip[:12]), ("Head", self.tip)):
+            with self.subTest(label=label):
+                path = Path(c.connect("Review the delivered change", "fixture source", scope=self.scope)["locator"])
+                c.send(path, "labelled", (
+                    "READY TO LAND: codex/fixture\n"
+                    f"Base: {self.base}\n"
+                    f"{label}: `{sha}`\n"
+                    "Repository: work"
+                ))
+                items, problems = self.world.channel_items(100, {}, [c.connection(path)])
+                self.assertFalse(problems)
+                self.assertEqual([item.tip for item in items], [self.tip])
+
+    def terminal_world(self):
         world = rw.World.__new__(rw.World)
         world.config = ""
         world.repos = ["work"]
         world._merge_bases = {}
         world.repo_named = lambda name: str(self.repo) if name == "work" else ""
         world.integration_tip = lambda chain, repo: (self.base, "")
+        return world
+
+    def test_world_uses_same_handler_but_managed_terminal_does_not_compete(self):
+        world = self.terminal_world()
         state = {}
         items, problems = world.channel_items(100, state, [c.connection(self.path)])
         self.assertEqual(len(items), 1)
