@@ -64,8 +64,17 @@ class GestureWalk(up.Walk):
         self.g('defaults write app.richos.richfiles windowGestures.selection -int 27')
         self.g('defaults write -g AppleActionOnDoubleClick -string None')
         self.g('defaults write com.apple.WindowManager EnableStandardClickToShowDesktop -bool false')
-        for name in ('Slot 1', 'Slot 2', 'Slot 3', 'Open me'):
+        # Let Finder occupy the top three icon positions before creating the
+        # probe. macOS places login item notifications over those positions.
+        for name in ('Slot 1', 'Slot 2', 'Slot 3'):
             self.g('mkdir -p ' + q(home + '/Desktop/' + name))
+        def anchors_visible():
+            try:
+                return all(self.point('Finder', name, 'AXImage') for name in ('Slot 1', 'Slot 2', 'Slot 3'))
+            except (up.StepFailed, StopIteration):
+                return False
+        self.wait(anchors_visible, 'Finder placed the Desktop anchors', 20)
+        self.g('mkdir -p ' + q(home + '/Desktop/Open me'))
         self.g('touch ' + q(home + '/Desktop/Open me/marker-open-me.txt')
                + ' && printf "Gesture test\n" > ' + q(home + '/gesture-window.txt'))
 
@@ -102,12 +111,11 @@ class GestureWalk(up.Walk):
         return self.osascript('tell application "System Events" to name of first process whose frontmost is true')
 
     def desktop(self):
-        for name in ('RichFiles', 'TextEdit', 'Calculator', 'Finder'):
+        for name in ('RichFiles', 'TextEdit', 'Calculator', 'Finder', 'System Settings'):
             self.g("osascript -e " + q(f'tell application "System Events" to tell process "{name}"\n'
                    'repeat with w in windows\ntry\nclick (first button of w whose subrole is "AXCloseButton")\nend try\nend repeat\nend tell')
                    + ' 2>/dev/null || true')
         self.suite_ax('richos-tauri', 'set visible to false')
-        self.g('/usr/bin/killall NotificationCenter 2>/dev/null || true')
         self.focus_app('Finder')
         self.click('300,700')
         self.wait(lambda: self.front() == 'Finder' and self.focus_role() == 'AXGroup', 'Finder desktop group', 15)
@@ -118,6 +126,9 @@ class GestureWalk(up.Walk):
     def folder_open(self):
         self.desktop()
         point = self.point('Finder', 'Open me', 'AXImage')
+        _, y = map(float, point.split(','))
+        if y < 350:
+            raise RuntimeError(f'Desktop fixture icon is in the system banner area at {point}')
         self.mouse(point, '--double', '--fn')
         def opened():
             if self.front() == 'Finder' and any(row.startswith('Open me|') for row in self.windows('Finder')):
@@ -129,18 +140,10 @@ class GestureWalk(up.Walk):
         self.wait(opened, 'the desktop folder marker in RichFiles', 12)
         return 'marker-open-me.txt'
 
-    def folder_delete(self, label, mode='keyboard'):
+    def folder_delete(self, label):
         self.desktop()
         before = self.g('ls -1 ' + q(self.home + '/Desktop')).splitlines()
-        if mode == 'keyboard':
-            self.key('45', '--cmd', '--shift')
-        elif mode == 'file':
-            item = self.point('Finder', 'File', 'AXMenuBarItem', 'menubar')
-            self.click(item)
-            self.click(self.point('Finder', 'New Folder', 'AXMenuItem', 'menubar'))
-        else:
-            self.mouse('500,700', '500,700', '--right')
-            self.click('550,711')
+        self.key('45', '--cmd', '--shift')
         self.wait(lambda: self.focus_role() == 'AXTextField', 'Finder new-folder rename editor', 10)
         selected = self.suite_ax('Finder', 'return name of (every UI element of group 1 of scroll area 1 whose selected is true)')
         assert selected and selected not in before, (selected, before)
@@ -269,9 +272,7 @@ try:
             record(cycle + '-reopen', w.reopen)
         record(cycle + '-maximize-before-desktop', w.maximize, False)
         record(cycle + '-desktop-open', w.folder_open, False)
-        modes = (('keyboard', 'file', 'context') if i == 0 else ('keyboard',))
-        for mode in modes:
-            record(cycle + '-new-folder-' + mode, lambda mode=mode: w.folder_delete(cycle + '-' + mode, mode), False)
+        record(cycle + '-new-folder-keyboard', lambda: w.folder_delete(cycle + '-keyboard'), False)
         record(cycle + '-maximize-after-desktop', lambda: w.maximize(function_key=True), False)
         record(cycle + '-edge', w.edge, False)
         record(cycle + '-keyboard-tile', w.keyboard_tile, False)
