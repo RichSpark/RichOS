@@ -1181,9 +1181,11 @@ class Book(object):
                 self.held.pop(k, None)
 
     def attempt_key(self, key, work):
-        # Terminal retry state follows the job. Older unattributed attempts still
-        # have a notice key, but cannot spend another job's retry budget.
-        return key if self.app or not work else key + (work,)
+        # Codex handovers use branch work IDs in both watchers. App-native
+        # work keeps its tip-based cooldown, including older unattributed rows.
+        if work and (not self.app or str(work).startswith("branch:")):
+            return key + (work,)
+        return key
 
     def handover_verdict(self, key, work=None):
         return [r for r in self.verdicts.get(key, []) if r.get("trigger") in HANDOVER_KINDS
@@ -1858,14 +1860,14 @@ def publish_channel_results(rows, owners):
                 print("review-watch: result retained in review ledger for %s: %s" % (channel, exc), file=sys.stderr)
     # Use the existing loss budget and notice text, not a new first-loss or
     # quota-hold notification policy for dedicated channels.
-    book = Book(rows, {}, [o for o in owners if o.get("outcome")], app=True)
-    for key in lost_review_keys(book).values():
+    book = Book(rows, {}, [o for o in owners if o.get("channel") and o.get("outcome")])
+    for notice, key in lost_review_keys(book).items():
         attempt = book.losses[key][-1]
         channel = attempt.get("channel")
         if not channel or (key[0] and git(key[0], "merge-base", "--is-ancestor", str(key[1]), "refs/heads/main") is not None):
             continue
         try:
-            channel_reply(channel["locator"], channel["message_id"], "lost:%s:%s" % key,
+            channel_reply(channel["locator"], channel["message_id"], notice,
                           "\n".join(lost_review_notice(key, attempt, None)))
         except (OSError, ValueError, KeyError) as exc:
             print("review-watch: attempt notice retained for %s: %s" % (channel, exc), file=sys.stderr)
