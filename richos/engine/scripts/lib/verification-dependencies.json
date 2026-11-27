@@ -14669,8 +14669,8 @@
     },
     "scripts/lib/stall_watch.py#review-watch-helpers": {
       "source": "scripts/lib/stall_watch.py",
-      "sha256": "6c40217611c9454b036c3ee4bcbefb99ac9c60a747fa61c92b58a60797cd8888",
-      "evidence": "Added 2026-10-09 (second review slice 4) for review_watch.py, which imports this module and uses its helpers; the --notice path stays bound by scripts/lib/stall_watch.py#notice. Module load: standard-library imports, the sibling imports resource_waits and escalations (neither reads configuration at import), constants. Helpers review_watch.py calls: hhmm, _env_float, _read_json/_write_json (JSON state files it names), _load (a module by fixed path, None when absent), Sources(engine_root) (loads mega-lander/workspaces.py by fixed path, loads richos/app/scripts/lib/proof_slots.py beside the engine without calling it, imports sibling agent_hold.py without calling it; reserve.py is loaded only by cpu_busy, which review_watch never calls), thresholds (environment STALL_WATCH_SILENT_MINUTES, STALL_WATCH_SELF_WAIT_MINUTES, STALL_WATCH_REPEAT_MINUTES and, through resource_waits.wait_minutes, RICHOS_RESOURCE_WAIT_MINUTES), _git_last_commit (git log -1 in the workspace), _transcript (workspaces.platform_agent_transcript), _try_lock/lock_held (flock on a named file), and in the monitor loop only session_alive_check (ps) and _nap. No orchestration.config read and no engine execution. Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names). Renewed 2026-10-31 (two-day cleanup O1.2): _silent reads the app gate's pause records under RICHOS_APP_STATE/quota-waits (app_quota_waits); neither --notice nor any helper review_watch.py calls reaches it.",
+      "sha256": "db436a744723580f6aad55343fce2a4241d8a9a520d9d3f5a61406c4e5ca841c",
+      "evidence": "Added 2026-10-09 (second review slice 4) for review_watch.py, which imports this module and uses its helpers; the --notice path stays bound by scripts/lib/stall_watch.py#notice. Module load: standard-library imports, the sibling imports resource_waits and escalations (neither reads configuration at import), constants. Helpers review_watch.py calls: hhmm, _env_float, _read_json/_write_json (JSON state files it names), _load (a module by fixed path, None when absent), Sources(engine_root) (loads mega-lander/workspaces.py by fixed path, loads richos/app/scripts/lib/proof_slots.py beside the engine without calling it, imports sibling agent_hold.py without calling it; reserve.py is loaded only by cpu_busy, which review_watch never calls), thresholds (environment STALL_WATCH_SILENT_MINUTES, STALL_WATCH_SELF_WAIT_MINUTES, STALL_WATCH_REPEAT_MINUTES and, through resource_waits.wait_minutes, RICHOS_RESOURCE_WAIT_MINUTES), _git_last_commit (git log -1 in the workspace), _transcript (workspaces.platform_agent_transcript), _try_lock/lock_held (flock on a named file), and in the monitor loop only session_alive_check (ps) and _nap. No orchestration.config read and no engine execution. Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names). Renewed 2026-10-31 (two-day cleanup O1.2): _silent reads the app gate's pause records under RICHOS_APP_STATE/quota-waits (app_quota_waits); neither --notice nor any helper review_watch.py calls reaches it. The terminal keep-alive helper imports only standard-library modules. These entry points do not read its monitor state or evaluate a keep-alive.",
       "keys": [],
       "edges": [
         {
@@ -14687,6 +14687,9 @@
         },
         {
           "to": "scripts/lib/host_child.py"
+        },
+        {
+          "to": "scripts/lib/terminal_keep_alive.py"
         }
       ],
       "external": [
@@ -16449,8 +16452,8 @@
     },
     "scripts/lib/stall_watch.py#notice": {
       "source": "scripts/lib/stall_watch.py",
-      "sha256": "6c40217611c9454b036c3ee4bcbefb99ac9c60a747fa61c92b58a60797cd8888",
-      "evidence": "--notice parses arguments and prints fixed text; its numbers are this file's constants or the STALL_WATCH_* and RICHOS_RESOURCE_WAIT_MINUTES environment overrides. It returns before the registry, the slot line or the CPU sampler is loaded. The module imports resource_waits.py, which reads no configuration at import. Renewed 2026-10-01: the module also imports escalations.py (the ESCALATION watch), which reads no configuration at import; --notice prints fixed text about it and reads neither the ledger nor any transcript. Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names). Renewed 2026-10-31 (two-day cleanup O1.2): _silent reads the app gate's pause records under RICHOS_APP_STATE/quota-waits (app_quota_waits); neither --notice nor any helper review_watch.py calls reaches it.",
+      "sha256": "db436a744723580f6aad55343fce2a4241d8a9a520d9d3f5a61406c4e5ca841c",
+      "evidence": "--notice parses arguments and prints fixed text; its numbers are this file's constants or the STALL_WATCH_* and RICHOS_RESOURCE_WAIT_MINUTES environment overrides. It returns before the registry, the slot line or the CPU sampler is loaded. The module imports resource_waits.py, which reads no configuration at import. Renewed 2026-10-01: the module also imports escalations.py (the ESCALATION watch), which reads no configuration at import; --notice prints fixed text about it and reads neither the ledger nor any transcript. Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names). Renewed 2026-10-31 (two-day cleanup O1.2): _silent reads the app gate's pause records under RICHOS_APP_STATE/quota-waits (app_quota_waits); neither --notice nor any helper review_watch.py calls reaches it. The terminal keep-alive helper imports only standard-library modules. These entry points do not read its monitor state or evaluate a keep-alive.",
       "keys": [],
       "edges": [
         {
@@ -16461,6 +16464,9 @@
         },
         {
           "to": "scripts/lib/host_child.py"
+        },
+        {
+          "to": "scripts/lib/terminal_keep_alive.py"
         }
       ]
     },
@@ -17634,10 +17640,14 @@
     },
     "scripts/lib/hook-python.sh": {
       "source": "scripts/lib/hook-python.sh",
-      "sha256": "9a556688e2faab43de72d7b56bfedee4f2d56c5555468dc414aed76ba9309271",
+      "sha256": "45244e48b0d5e89646084a0300301993f3ca13b41b2b80b8864cc654da963205",
       "keys": [],
-      "edges": [],
-      "evidence": "Full file reviewed (2026-10-30). Sourced first by every hook: chooses python3 by path with file tests only (<engine>/runtime/bin/python3, a non-stub python3 on PATH, the developer directory's python3) and never executes a stub; defines and exports the python3 function, RICHOS_HOOK_PYTHON and RICHOS_HOOK_CALLER_PATH, and may put the chosen folder first on PATH. Environment: PATH, DEVELOPER_DIR, RICHOS_TOOLCHAIN_ROOT (test prefix); reads /var/db/xcode_select_link; no orchestration key."
+      "edges": [
+        {
+          "to": "scripts/lib/terminal_keep_alive.py"
+        }
+      ],
+      "evidence": "Full file reviewed (2026-10-30). Sourced first by every hook: chooses python3 by path with file tests only (<engine>/runtime/bin/python3, a non-stub python3 on PATH, the developer directory's python3) and never executes a stub; defines and exports the python3 function, RICHOS_HOOK_PYTHON and RICHOS_HOOK_CALLER_PATH, and may put the chosen folder first on PATH. Environment: PATH, DEVELOPER_DIR, RICHOS_TOOLCHAIN_ROOT (test prefix); reads /var/db/xcode_select_link; no orchestration key. The terminal keep-alive branch requires the direct Claude Code parent (CLAUDE_PID), its CLAUDE_CODE_SESSION_ID and a hook input pipe or socket. It tests for a monitor-issued pending marker in STALL_WATCH_STATE_DIR or the default HOME state folder and only then invokes the classifier with the native hook input. Ordinary hook payloads are replayed to their original callers."
     },
     "scripts/lib/notice_once.py": {
       "source": "scripts/lib/notice_once.py",
@@ -17861,6 +17871,13 @@
       "keys": [],
       "edges": [],
       "evidence": "Packaged terminal or Codex instructions read as text. No executable content or outside inputs."
+    },
+    "scripts/lib/terminal_keep_alive.py": {
+      "source": "scripts/lib/terminal_keep_alive.py",
+      "sha256": "56ed1bbfa312eff5f4abc6ef92d5839045507f61ec6a28b706190c11cfc52b95",
+      "evidence": "Standard-library imports. The terminal stall monitor passes its own session transcript, clock and state. The hook classifier reads the pending marker and a bounded tail of Claude Code's session transcript named in the native hook payload. Diagnostic rendering reads only bounded monitor state. No orchestration key or subprocess.",
+      "keys": [],
+      "edges": []
     }
   },
   "units": {
