@@ -535,8 +535,8 @@ final class GestureController {
         }
         let foreground = NSWorkspace.shared.frontmostApplication
         guard let menu = desktopMenu else {
+            // A revealed auto-hidden menu bar can overlap the visible frame.
             guard type == .leftMouseDown, let foreground, foreground.bundleIdentifier == "com.apple.finder",
-                  GestureDisplay.current().contains(where: { $0.frame.contains(event.location) && event.location.y < $0.usable.minY }),
                   hit(at: event.location)?.role == kAXMenuBarItemRole,
                   desktopFileGroup(finderElement(foreground.processIdentifier)) != nil else { return }
             desktopMenu = (event.location, false)
