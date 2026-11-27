@@ -327,7 +327,9 @@ final class GestureController {
             desktopIconClick = nil
         }
         if selection.contains(.desktopDelete) { trackDesktopMenu(type, event) }
-        let modifiers: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift, .maskSecondaryFn]
+        // Forward Delete can leave the keyboard-only Fn flag on a later
+        // pointer event. Finder and window clicks still have their usual meaning.
+        let modifiers: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift]
         guard event.flags.intersection(modifiers).isEmpty else {
             pointerRevision &+= 1
             desktopFolder.reset()
