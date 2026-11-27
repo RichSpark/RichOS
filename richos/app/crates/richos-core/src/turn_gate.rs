@@ -234,18 +234,20 @@ impl TurnGate {
             return;
         }
         let mut reader = std::io::BufReader::new(file);
-        let mut line = String::new();
+        let mut raw = Vec::new();
         loop {
-            line.clear();
-            // A concurrent append may not have completed its last record yet.
-            match reader.read_line(&mut line) {
-                Ok(count) if count > 0 && line.ends_with('\n') => inner.read += count as u64,
+            raw.clear();
+            // Advance past every complete row, even corrupt UTF-8. A concurrent append
+            // may not have completed its last row yet, so leave its offset alone.
+            match reader.read_until(b'\n', &mut raw) {
+                Ok(count) if raw.ends_with(b"\n") => inner.read += count as u64,
                 _ => break,
             }
+            let Ok(line) = std::str::from_utf8(&raw) else { continue };
             if !line.contains("PromptReceived") {
                 continue;
             }
-            let Ok(row) = serde_json::from_str::<Value>(&line) else { continue };
+            let Ok(row) = serde_json::from_str::<Value>(line) else { continue };
             if row["event"] == "PromptReceived"
                 && matches!(row["source"].as_str(), Some("text" | "jam"))
                 && row["at"].as_u64().is_some_and(|at| at >= self.since_ms)

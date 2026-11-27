@@ -180,3 +180,33 @@ fn rich_s_answer_cut_off_by_the_apps_end_waits_for_his_next_words_and_then_carri
     assert!(sent[1].contains("Is it done?"), "{sent:?}");
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn fresh_words_after_a_damaged_history_row_resume_cut_off_work() {
+    use richos_core::turn_gate::Origin;
+    use std::io::Write;
+
+    let (root, path) = opened();
+    let mut ledger = Ledger::open(&path).unwrap();
+    let thread = ledger.create_thread("fixture", &EntityId::parse("femcboost").unwrap()).unwrap();
+    let binding = ledger.thread_binding(&thread).unwrap();
+    drop(ledger);
+    let mut journal = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+    journal.write_all(&[0xff]).unwrap();
+
+    let gate = TurnGate::at_launch(&root.join("engine-state"));
+    assert!(!gate.may_start(&binding, Origin::CarriesOn));
+    assert!(gate.cut_off(&thread));
+
+    journal.write_all(b"\n").unwrap();
+    drop(journal);
+    let mut ledger = Ledger::open(&path).unwrap();
+    ledger.record_prompt_received(&binding, "A new typed question", Source::Text).unwrap();
+    gate.user_acted(&binding);
+    let written = gate.written(&thread);
+    let resumed = gate.may_start(&binding, Origin::CarriesOn);
+    let paused = gate.cut_off(&thread);
+    assert_eq!(Ledger::open(&path).unwrap().thread_turns(&thread).unwrap().len(), 1);
+    std::fs::remove_dir_all(root).unwrap();
+    assert!(written && resumed && !paused, "the damaged row hid the user's new words");
+}
