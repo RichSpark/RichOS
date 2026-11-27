@@ -735,3 +735,72 @@ fn agent_input_survives_restart_and_duplicate_delivery_without_a_report_writer()
     std::fs::remove_file(path).unwrap();
     std::fs::remove_file(intake).unwrap();
 }
+
+#[test]
+fn grouped_turns_keep_each_bound_threads_scope_and_order() {
+    use serde_json::json;
+    use std::fs;
+
+    let path = std::env::temp_dir().join(format!(
+        "richos-chat-list-scope-{}-{}.jsonl",
+        std::process::id(),
+        richos_core::util::now_millis(),
+    ));
+    let company = EntityId::parse("fixture-company").unwrap();
+    let other = EntityId::parse("other-company").unwrap();
+    let mut ledger = Ledger::open(&path).unwrap();
+    let chat = ledger.create_thread("First chat", &company).unwrap();
+    let second = ledger.create_thread("Second chat", &other).unwrap();
+    drop(ledger);
+
+    let mut data = fs::read_to_string(&path).unwrap();
+    data.push_str(
+        "{\"event\":\"ThreadCreated\",\"thread_id\":\"unbound\",\"title\":\"Legacy\",\"at\":1}\n",
+    );
+    for (at, (id, thread, entity)) in [
+        ("first", chat.as_str(), Some(&company)),
+        ("second", second.as_str(), Some(&other)),
+        ("legacy", chat.as_str(), None),
+        ("foreign", chat.as_str(), Some(&other)),
+        ("unbound", "unbound", None),
+        ("orphan", "missing", None),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        data.push_str(
+            &json!({
+                "event": "PromptReceived", "turn_id": id, "thread_id": thread,
+                "entity_id": entity, "at": at + 2, "text": id, "source": "text"
+            })
+            .to_string(),
+        );
+        data.push('\n');
+    }
+    fs::write(&path, data).unwrap();
+
+    let ledger = Ledger::open(&path).unwrap();
+    fs::remove_file(&path).unwrap();
+    assert_eq!(ledger.turns().len(), 6);
+    let grouped = ledger.turns_by_thread();
+    assert_eq!(grouped.len(), 2);
+    for (thread, expected) in [(&chat, vec!["first", "legacy"]), (&second, vec!["second"])] {
+        let turns = &grouped[thread.as_str()];
+        assert_eq!(
+            turns
+                .iter()
+                .map(|turn| turn.id.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(
+            turns.iter().map(|turn| &turn.id).collect::<Vec<_>>(),
+            ledger
+                .thread_turns(thread)
+                .unwrap()
+                .iter()
+                .map(|turn| &turn.id)
+                .collect::<Vec<_>>(),
+        );
+    }
+}
