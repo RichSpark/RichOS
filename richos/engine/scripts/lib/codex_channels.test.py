@@ -466,7 +466,7 @@ else:
         world = object.__new__(review_watch.World)
         world.config = str(config)
         with mock.patch.dict(review_watch.MONITOR, {"session": "new-session"}), \
-             mock.patch.object(world, "channel_items", side_effect=lambda _, __, rows: (list(rows), [])):
+             mock.patch.object(world, "channel_items", side_effect=lambda _, __, rows, reviewed: (list(rows), [])):
             items, _ = world.codex_items(10, {})
         self.assertEqual([str(path) for path, _ in items], [pair])
 

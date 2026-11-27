@@ -274,6 +274,54 @@ class Reviews(unittest.TestCase):
                 self.assertFalse(problems)
                 self.assertEqual([item.tip for item in items], [self.tip])
 
+    def test_unreviewable_range_is_reported_once_to_rich(self):
+        for tip, base, reason in (
+            (self.base, self.base, "already reachable"),
+            (self.tip, None, "could not determine its merge base"),
+        ):
+            with self.subTest(reason=reason):
+                path = Path(c.connect("Review the change", "fixture source", terminal_session="fixture")["locator"])
+                c.send(path, "undue", f"READY TO LAND: codex/fixture\nCommit: {tip}\nRepository: work")
+                state = {}
+                world = self.terminal_world()
+                world.merge_base_for = lambda repo, tip: base
+                connection = [c.connection(path)]
+                self.assertEqual(world.channel_items(100, state, connection), ([], []))
+                state["channels"].clear()
+                self.assertEqual(world.channel_items(101, state, connection), ([], []))
+                self.assertEqual(state["channel_pending"][0]["tip"], tip)
+                for direction in ("to-rich", "to-codex"):
+                    [notice] = [row for row in c.read(path, direction)["records"] if row.get("kind") == "review_result"]
+                    self.assertEqual(notice["reply_to"], "undue")
+                    self.assertIn("codex/fixture", notice["text"])
+                    self.assertIn(tip, notice["text"])
+                    self.assertIn(reason, notice["text"])
+
+    def test_landing_an_already_reviewed_commit_sends_no_range_notice(self):
+        state = {}
+        connections = [c.connection(self.path)]
+        [item], _ = self.world.channel_items(100, state, connections)
+        self.world.integration_tip = lambda chain, repo: (self.tip, "")
+        reviewed = {(item.repo, item.tip, item.work)}
+        self.assertEqual(self.world.channel_items(101, state, connections, reviewed), ([], []))
+        self.assertFalse(any(row.get("kind") == "review_result" for row in c.read(self.path, "to-rich")["records"]))
+
+    def test_legacy_unreviewable_range_is_reported_as_a_problem(self):
+        world = self.terminal_world()
+        ready, words = self.root / "ready.md", self.root / "words.md"
+        ready.touch()
+        words.write_text("## Instructions for codex/fixture\nReview the change.\n")
+        state = {}
+        with mock.patch.dict(os.environ, REVIEW_WATCH_TO_RICH=str(ready), REVIEW_WATCH_TO_CODEX=str(words)):
+            world.codex_items(100, state)
+            ready.write_text(f"## READY TO LAND: codex/fixture\nCommit: {self.base}\nRepository: work\n")
+            world.codex_items(101, state)
+            items, problems = world.codex_items(102, state)
+        self.assertEqual(items, [])
+        [problem] = problems
+        self.assertIn(self.base, problem)
+        self.assertIn("already reachable", problem)
+
     def terminal_world(self):
         world = rw.World.__new__(rw.World)
         world.config = ""

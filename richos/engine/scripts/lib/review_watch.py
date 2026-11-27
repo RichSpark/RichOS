@@ -619,8 +619,8 @@ class World(object):
     def channel_repositories(self, endpoint):
         return {name: self.repo_named(name) for name in self.repos or [] if self.repo_named(name)}
 
-    def codex_items(self, now, codex_state):
-        """(items, problems, notes). codex_state is the shared reading state
+    def codex_items(self, now, codex_state, reviewed=()):
+        """(items, problems). codex_state is the shared reading state
         (offset in to-rich.md and the pending handovers), updated in place."""
         to_rich = os.path.expanduser(os.environ.get("REVIEW_WATCH_TO_RICH") or DEFAULT_TO_RICH)
         to_codex = os.path.expanduser(os.environ.get("REVIEW_WATCH_TO_CODEX") or DEFAULT_TO_CODEX)
@@ -628,7 +628,7 @@ class World(object):
         # still comes from the project's existing review configuration.
         sid = MONITOR["session"]
         project = os.path.dirname(os.path.abspath(self.config)) if self.config else None
-        dedicated, problems = self.channel_items(now, codex_state, channels.rich_connections(project, sid))
+        dedicated, problems = self.channel_items(now, codex_state, channels.rich_connections(project, sid), reviewed)
         folder = os.path.dirname(to_rich)
         if channels.legacy_associated(folder) and not channels.legacy_live(folder):
             return dedicated, problems
@@ -692,6 +692,8 @@ class World(object):
             keep.append(p)
             base = self.merge_base_for(p["repo"], p["tip"])
             if not base or base == p["tip"]:
+                if (p["repo"], p["tip"], p["work"]) not in reviewed:
+                    problems.append(codex_range_problem(p, base))
                 continue
             items.append(Item(p["work"], "codex", p["repo"], p["tip"], base, "ended", branch=p["branch"],
                               source="codex", words=p.get("words") or [], claims=p.get("claims") or [],
@@ -810,19 +812,19 @@ class World(object):
         """May a review of `item` start now? The terminal's watcher: always."""
         return True
 
-    def channel_items(self, now, codex_state, connections):
+    def channel_items(self, now, codex_state, connections, reviewed=()):
         """The shared READY handler, with its own advisory reading position.
 
         The terminal shares its review state with replacement sessions.
         """
         pending = codex_state.setdefault("channel_pending", [])
         positions = codex_state.setdefault("channels", {})
-        owned = set()
+        owned = {}
         for path, endpoint in connections:
             if endpoint.get("legacy_folder") or endpoint["entity_id"] == channels.AUTOMATIC:
                 continue
             locator = str(path)
-            owned.add(locator)
+            owned[locator] = endpoint
             try:
                 source = path / "to-rich.jsonl"
                 identity = channels.identity(source)
@@ -879,10 +881,20 @@ class World(object):
         # Replaying a lost position cannot add a second due review for the tip.
         pending[:] = [p for p in pending if now - float(p.get("at") or now) <= KEEP_SECONDS]
         for p in pending:
-            if p["channel"]["locator"] not in owned:
+            channel = p["channel"]
+            endpoint = owned.get(channel["locator"])
+            if endpoint is None:
                 continue
             base = self.merge_base_for(p["repo"], p["tip"])
             if not base or base == p["tip"]:
+                if (not p.get("range_notified") and (p["repo"], p["tip"], p["work"]) not in reviewed
+                        and self.chat_open(endpoint)):
+                    try:
+                        channel_reply(channel["locator"], channel["message_id"], "review-held",
+                                      codex_range_problem(p, base))
+                        p["range_notified"] = True
+                    except (OSError, ValueError, KeyError) as exc:
+                        channels.diagnostic(channel["locator"], exc)
                 continue
             item = Item(p["work"], "codex", p["repo"], p["tip"], base, "ended", branch=p["branch"], source="codex",
                         words=p["words"], claims=p["claims"], title=p["title"])
@@ -999,11 +1011,11 @@ class AppWorld(World):
                 os.environ["RICHOS_WORKSPACES_DIR"] = before
         return items, problems
 
-    def codex_items(self, now, codex_state):
+    def codex_items(self, now, codex_state, reviewed=()):
         return self.channel_items(now, codex_state, (
             (path, endpoint) for path, endpoint in channels.registered()
             if endpoint["entity_id"] != channels.TERMINAL
-        ))
+        ), reviewed)
 
     def open_chats(self):
         """THE APP'S ONE RULE FOR A MODEL RUN IT STARTS BY ITSELF (the CEO, 2026-11-26: "there
@@ -1119,6 +1131,13 @@ class NoWords(str):
         problem = super().__new__(cls, message)
         problem.work = work
         return problem
+
+
+def codex_range_problem(handover, base):
+    branch, tip = handover["branch"], handover["tip"]
+    reason = ("the commit is already reachable from the integration branch" if base == tip
+              else "the watcher could not determine its merge base with the integration branch")
+    return "No review started for Codex's handover of %s at %s because %s." % (branch, tip, reason)
 
 
 def split_entries(text):
@@ -1734,7 +1753,9 @@ class Watcher(object):
         rows = read_jsonl(review_ledger())
         running = self.reconcile(now, rows)
         items, problems = self.world.registry_items(now, seen)
-        citems, cproblems = self.world.codex_items(now, codex_state)
+        reviewed = {(os.path.realpath(r["repo"]), r.get("tip"), r.get("work")) for r in rows
+                    if r.get("repo") and r.get("verdict") and r.get("trigger") in HANDOVER_KINDS}
+        citems, cproblems = self.world.codex_items(now, codex_state, reviewed)
         items += citems
         problems += cproblems
         # App integration requires a verdict for every implementation worker, including
