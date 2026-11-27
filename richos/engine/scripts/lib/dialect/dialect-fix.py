@@ -290,6 +290,9 @@ def _close(text, at, delim, escapes, multiline):
 # Shell quote removal leaves one delimiter word. The shell does not expand it.
 _SHELL_WORD = re.compile(r"""(?:[^ \t\n;&|<>()'"\\]+|'[^']*'|"(?:\\[\s\S]|[^"\\])*"|\\[\s\S])+""")
 _SHELL_QUOTED = re.compile(r"""'([^']*)'|"((?:\\[\s\S]|[^"\\])*)"|\\([\s\S])""")
+_SHELL_BREAK = " \t\n;&|<>()"
+_SHELL_KEYWORD = re.compile(r"(?:case|in|esac|if|then|elif|else|while|until|do|time|!|\{)"
+                            r"(?=[ \t\n;&|<>()]|$)")
 
 
 def _shell_delimiter(raw):
@@ -329,27 +332,78 @@ def _shell_regions(text):
         if depth > 64:
             regions.append(("shell_data", i, n))
             return n
-        pending, word = [], False
+        pending, cases = [], []
+        word, command_start = False, True
         while i < n:
             c = text[i]
+            phase = cases[-1] if cases else None
+            # A case arm's ')' belongs to this shell, even inside "$( ... )".
+            if c == ")" and phase in ("pattern_start", "pattern"):
+                cases[-1] = "body"
+                i, word, command_start = i + 1, False, True
+                continue
             if stop and c == stop:
                 return i + 1
-            if c == "\\":
-                word = word or text[i + 1:i + 2] != "\n"
+            if text.startswith("\\\n", i):
                 i += 2
-            elif c == "\n":
+                continue
+            if phase == "subject" and word and c in _SHELL_BREAK:
+                phase = cases[-1] = "in"
+            if c == "\n":
                 i += 1
                 for delimiter, tabs, quoted in pending:
                     end = _shell_body_end(text, i, delimiter, tabs, quoted)
                     regions.append(("shell_data", i, end))
                     i = end
                 pending.clear()
-                word = False
-            elif c == "#" and not word:
+                word, command_start = False, True
+                continue
+            if c in " \t":
+                i, word = i + 1, False
+                continue
+            if c == "#" and not word:
                 end = text.find("\n", i)
                 end = n if end < 0 else end
                 regions.append(("comment", i + 1, end))
                 i = end
+                continue
+
+            match = _SHELL_KEYWORD.match(text, i) if not word else None
+            keyword = match[0] if match else None
+            if phase == "in":
+                if keyword == "in":
+                    cases[-1] = "pattern_start"
+                    i, word = match.end(), False
+                    continue
+                cases.pop()
+                phase = cases[-1] if cases else None
+            if keyword == "esac" and (phase == "pattern_start" or
+                                      (phase == "body" and command_start)):
+                cases.pop()
+                i, word, command_start = match.end(), True, False
+                continue
+            if phase == "pattern_start":
+                cases[-1] = "pattern"
+                if c == "(":  # optional opening parenthesis for the arm
+                    i += 1
+                    continue
+            if phase == "body" and text.startswith((";;", ";&", ";|"), i):
+                cases[-1] = "pattern_start"
+                i += 3 if text.startswith(";;&", i) else 2
+                word = False
+                continue
+            if phase in (None, "body") and command_start and keyword:
+                if keyword == "case":
+                    cases.append("subject")
+                    i, word, command_start = match.end(), False, False
+                    continue
+                if keyword not in ("in", "esac"):
+                    i, word = match.end(), False
+                    continue
+
+            command_start = c in ";|&"
+            if c == "\\":
+                i, word = i + 2, True
             elif text.startswith("$'", i) or c == "'":
                 ansi = c == "$"
                 start = i + (2 if ansi else 1)
@@ -407,8 +461,9 @@ def _shell_regions(text):
                 opener = 1 if c in ("(", chr(96)) else 2
                 i = shell(i + opener, chr(96) if c == chr(96) else ")", depth + 1)
                 word = opener == 2 or c == chr(96)
+                command_start = c == "("
             else:
-                word = c not in " \t;|&<>)"
+                word = c not in _SHELL_BREAK
                 i += 1
         return n
 

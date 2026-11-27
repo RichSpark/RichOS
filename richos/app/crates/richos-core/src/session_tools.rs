@@ -875,8 +875,32 @@ fn cursor_state(inbox:&Path)->Result<Value,String> {
     Ok(value)
 }
 
-pub fn previous_attempt(scope:&StatusToolScope,role:&str,input:&str)->Result<Option<Value>,String> {
-    Ok(cursor_state(&inbox(scope,role)?)?["active"].get(input).cloned())
+fn saved_attempt(scope: &StatusToolScope, role: &str, input: &str) -> Result<Option<Value>, String> {
+    Ok(cursor_state(&inbox(scope, role)?)?["active"].get(input).cloned())
+}
+
+pub fn previous_attempt(scope: &StatusToolScope, role: &str, input: &str) -> Result<Option<Value>, String> {
+    Ok(saved_attempt(scope, role, input)?.map(|mut attempt| {
+        // This marker is for the app's startup rule. Session reconciliation still sees the
+        // native session and its receipts in the same format.
+        if let Some(fields) = attempt.as_object_mut() {
+            fields.remove("app_run_id");
+        }
+        attempt
+    }))
+}
+
+fn began_in_run(attempt: &Value, run_id: &str) -> bool {
+    attempt["app_run_id"].as_str() == Some(run_id)
+}
+
+/// Legacy attempts without a run marker are evidence from before this launch.
+pub(crate) fn previous_run_attempt(
+    scope: &StatusToolScope, role: &str, input: &str, run_id: Option<&str>,
+) -> Result<Option<Value>, String> {
+    Ok(saved_attempt(scope, role, input)?.filter(|attempt| {
+        run_id.is_none_or(|run_id| !began_in_run(attempt, run_id))
+    }))
 }
 
 /// Keep uncertain peer delivery and question-answer evidence independently until accepted.
@@ -896,19 +920,31 @@ pub(crate) fn stop_open_attempts(scope:&StatusToolScope,role:&str)->Result<(),St
 }
 
 /// Preserve the actual native session that may have acted before an interrupted delivery.
-pub fn begin_attempt(scope:&StatusToolScope,role:&str,input:&str,session:&str)->Result<(),String> {
-    update_cursor(scope, role, |cursor| { cursor["active"][input]=json!({"input":input,"session_id":session}); Ok(()) })
+pub fn begin_attempt(scope: &StatusToolScope, role: &str, input: &str, session: &str) -> Result<(), String> {
+    begin_attempt_in_run(scope, role, input, session, None)
+}
+
+pub(crate) fn begin_attempt_in_run(
+    scope: &StatusToolScope, role: &str, input: &str, session: &str, run_id: Option<&str>,
+) -> Result<(), String> {
+    let mut attempt = json!({"input": input, "session_id": session});
+    if let Some(run_id) = run_id {
+        attempt["app_run_id"] = json!(run_id);
+    }
+    update_cursor(scope, role, |cursor| {
+        cursor["active"][input] = attempt;
+        Ok(())
+    })
 }
 
 /// **Inbox inputs given to a session and still open**, each with whether its turn ended
 /// (`delivered`): none that "Quit and stop the work" stopped (`stopped`), whether or not that
-/// session's record holds it (`received`). Read before this process begins any attempt, every
-/// one of them was begun by an earlier run (`WorkHost::next_for_stu`, which decides which the
-/// app's end cut off).
-pub(crate) fn open_inputs(scope:&StatusToolScope,role:&str)->Result<std::collections::BTreeMap<u64,bool>,String> {
+/// session's record holds it (`received`). Only attempts from earlier runs are candidates for
+/// work the app's end cut off (`WorkHost::next_for_stu`).
+pub(crate) fn open_inputs(scope:&StatusToolScope,role:&str,run_id:&str)->Result<std::collections::BTreeMap<u64,bool>,String> {
     let cursor=cursor_state(&inbox(scope,role)?)?;
     Ok(cursor["active"].as_object().into_iter().flatten().filter(|(_,entry)| entry["session_id"].is_string()
-        && entry["stopped"]!=true)
+        && entry["stopped"]!=true && !began_in_run(entry, run_id))
         .filter_map(|(input,entry)| Some((input.strip_prefix("peer:")?.parse().ok()?, entry["delivered"]==true))).collect())
 }
 
