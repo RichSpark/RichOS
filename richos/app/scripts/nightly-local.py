@@ -2872,21 +2872,45 @@ class Runner:
             return False
         return state is not None or bool(info.get("no_host_screen"))
 
+    @staticmethod
+    def new_proof_attempt(root):
+        """Keep each proof's own evidence, including when the next guest is refused."""
+        root.mkdir(parents=True, exist_ok=True)
+        return Path(tempfile.mkdtemp(prefix=f"attempt-{time.time_ns()}-", dir=root))
+
+    @staticmethod
+    def proof_results(root, report, *legacy):
+        paths = sorted(root.glob(f"attempt-*/{report}"), reverse=True)
+        return paths + [path for path in legacy if path.is_file()]
+
+    @staticmethod
+    def accept_proof_result(paths, validate):
+        """Reuse a valid verdict, or report the newest available record's problem."""
+        first_error = None
+        for path in paths:
+            try:
+                return validate(path)
+            except ValueError as error:
+                if first_error is None:
+                    first_error = error
+        raise first_error
+
     def gui_proof_path(self, run_id):
-        """Where the build keeps its own VM boot proof: gui-proof-in-vm.sh's default."""
+        """Default standalone proof path, also used by older nightlies."""
         return self.state / "gui-proofs" / f"{run_id}.proof"
 
-    def proven_boot_leftover(self, proof, started):
-        """The guest name a passing proof written during this attempt names, else None.
+    def gui_proof_results(self, run_id):
+        legacy = self.gui_proof_path(run_id)
+        standalone = legacy.with_name(f"{legacy.name}.attempts")
+        return (self.proof_results(legacy.with_suffix(""), "boot.proof", legacy)
+                + self.proof_results(standalone, "boot.proof")
+                + self.proof_results(standalone, "previous.proof"))
 
-        Read only after the boot command failed. A proof from an earlier attempt of the same
-        run (older than `started`), a missing or unreadable one, or any result but `pass`
-        answers None: that failure stays "not proven"."""
+    def proven_boot_leftover(self, proof):
+        """The guest named in this failed command's own passing boot report, if any."""
         try:
-            if Path(proof).stat().st_mtime < started - 1:
-                return None
             fields = self.read_gui_proof(proof)
-        except (OSError, ValueError):
+        except ValueError:
             return None
         if fields.get("result") != "pass":
             return None
@@ -2948,17 +2972,18 @@ class Runner:
         run = nightly.get("run_id") if isinstance(nightly, dict) else None
         if not isinstance(run, str) or not re.fullmatch(r"\d{8}T\d{6}Z-[0-9a-f]{8}", run):
             return None
-        try:
-            proof = self.read_gui_proof(self.gui_proof_path(run))
-        except ValueError:
-            return None
-        checker = proof.get("gui-boot_commit")
-        if (proof.get("suite") != "shipped-bundle-boot" or proof.get("result") != "pass"
-                or proof.get("commit") != nightly.get("build_commit")
-                or proof.get("front-door_exit") != "0" or proof.get("gui-boot_exit") != "0"
-                or checker == source_commit or not self.only_the_checker_changed(checker, [source_commit])):
-            return None
-        return checker
+        for path in self.gui_proof_results(run):
+            try:
+                proof = self.read_gui_proof(path)
+            except ValueError:
+                continue
+            checker = proof.get("gui-boot_commit")
+            if (proof.get("suite") == "shipped-bundle-boot" and proof.get("result") == "pass"
+                    and proof.get("commit") == nightly.get("build_commit")
+                    and proof.get("front-door_exit") == "0" and proof.get("gui-boot_exit") == "0"):
+                if checker != source_commit and self.only_the_checker_changed(checker, [source_commit]):
+                    return checker
+        return None
 
     def candidate_boot_proof(self, run_id, info):
         """Use the same verified checker for the initial stable proof and its recovery."""
@@ -2985,15 +3010,16 @@ class Runner:
         Nothing here touches this Mac's screen: gui-proof-in-vm.sh boots, watches and deletes
         a guest on the guest's own display, inside one of the two guest slots.
         """
-        proof = self.gui_proof_path(run_id)
-        args = ["bash", (checker or self.source) / SCRIPTS / "gui-proof-in-vm.sh",
-                "--run", run_id, "--out", proof]
-        if self.gui_host:
-            args += ["--vm", self.gui_host]
         short = self.guest_memory_check("on entering the VM boot proof")
         if short:
             return (f"THE CANDIDATE IS BUILT, AND ITS BOOT WAS NOT PROVEN IN THE TEST VM: {short}. "
                     "Nothing waited for a slot. Restart to free memory for the boot proof.")
+        attempt = self.new_proof_attempt(self.gui_proof_path(run_id).with_suffix(""))
+        proof = attempt / "boot.proof"
+        args = ["bash", (checker or self.source) / SCRIPTS / "gui-proof-in-vm.sh",
+                "--run", run_id, "--out", proof]
+        if self.gui_host:
+            args += ["--vm", self.gui_host]
         # Written literally for this one step: where the run pointer lives, the testvm settings
         # the operator's shell gave (TESTVM_ROOT, TESTVM_SLOTS, ...), and the name its slot wait
         # holds every other admission under.
@@ -3002,12 +3028,12 @@ class Runner:
         guest = f"guest {self.gui_host}" if self.gui_host else "a fresh guest"
         self.announce(f"Booting the candidate's own bundle in {guest} on the test VM "
                       "(nothing is put on this Mac's screen)...")
-        started = time.time()
         try:
             with self.phase(VM_PROOF_PHASE):
                 self.command(*args, env_extra=extra, timeout=VM_PROOF_BUDGET)
         except RuntimeError as error:
-            leftover = self.proven_boot_leftover(proof, started)
+            (attempt / "error.txt").write_text(f"{error}\n")
+            leftover = self.proven_boot_leftover(proof)
             if leftover is not None:
                 # gui-proof-in-vm.sh exits 1 over a passing proof only when it could not stop its
                 # guest (its cleanup). The boot WAS proven and publish accepts the proof as it
@@ -3031,18 +3057,16 @@ class Runner:
         (NEW_USER_WALK_PHASE). None on a pass, else the sentence that says what failed, where
         the evidence is and how to walk it again without a rebuild."""
         bundle = Path(out) / f"RichOS-{info['version']}-macos-aarch64.zip"
-        walk = self.new_user_walk_dir(run_id)
         short = self.guest_memory_check("on entering the new-user walk")
         if short:
             return (f"THE CANDIDATE IS BUILT, AND A NEW USER'S FIRST RUN OF IT WAS NOT WALKED: {short}. "
                     "Nothing waited for a slot. Restart to free memory for the walk.")
-        home = walk.parent / f"{run_id}.home"
-        shutil.rmtree(walk, ignore_errors=True)
-        shutil.rmtree(home, ignore_errors=True)
-        home.mkdir(parents=True)
+        attempt = self.new_proof_attempt(self.new_user_walk_dir(run_id))
+        walk, home = attempt / "walk", attempt / "home"
+        home.mkdir()
         testvm = self.source / SCRIPTS / "testvm"
         args = [sys.executable, testvm / "run-walk.py", "--new-user", "--wait", str(NEW_USER_WALK_WAIT),
-                "--bundle", bundle, "--home", home, "--engine", "none", "--report", walk.parent / f"{run_id}.run.json",
+                "--bundle", bundle, "--home", home, "--engine", "none", "--report", attempt / "run.json",
                 "--", testvm / "new-user-walk.py", "--out", walk,
                 "--expect-sha", info.get("build_commit") or info["source_commit"], "--keep-going"]
         self.announce("Walking the candidate as a new user in a fresh guest on the test VM "
@@ -3053,6 +3077,7 @@ class Runner:
                                                NIGHTLY_WAIT_ENV: f"{NEW_USER_WALK_PHASE} (run {run_id})"},
                              timeout=NEW_USER_WALK_BUDGET)
         except RuntimeError as error:
+            (attempt / "error.txt").write_text(f"{error}\n")
             return (f"THE CANDIDATE IS BUILT, AND A NEW USER'S FIRST RUN OF IT FAILED: {error}. "
                     f"Each step's verdict is in {walk / 'report.json'}, with its frames and app.log "
                     "beside it.")
@@ -3078,20 +3103,19 @@ class Runner:
             older = max(earlier, key=lambda archive: archive.stat().st_mtime_ns, default=None)
         engine = Path(out) / "richos-engine-1.2.0.tar.gz"
         said, failed = None, None
-        for attempt in (1, 2):
-            walk = self.state / "launch-speed" / f"{run_id}.{attempt}"
-            home = walk.parent / f"{run_id}.{attempt}.home"
-            shutil.rmtree(walk, ignore_errors=True)
-            shutil.rmtree(home, ignore_errors=True)
-            home.mkdir(parents=True)
+        root = self.state / "launch-speed" / run_id
+        for number in (1, 2):
+            attempt = self.new_proof_attempt(root)
+            walk, home = attempt / "walk", attempt / "home"
+            home.mkdir()
             args = [sys.executable, testvm / "run-walk.py", "--no-app", "--wait", str(LAUNCH_SPEED_WAIT),
                     "--home", home, "--engine", engine if engine.exists() else "none",
-                    "--report", walk.parent / f"{run_id}.{attempt}.run.json"]
+                    "--report", attempt / "run.json"]
             if older:
                 args += ["--previous-bundle", older]
             args += ["--", testvm / "launch-speed-walk.py", "--candidate", bundle, "--out", walk]
             self.announce("Timing the candidate from the launch request to its splash showing, a p95 against "
-                          f"{LAUNCH_SPEED_LIMIT_MS} ms, in a fresh guest on the test VM (attempt {attempt})...")
+                          f"{LAUNCH_SPEED_LIMIT_MS} ms, in a fresh guest on the test VM (attempt {number})...")
             failed = None
             try:
                 with self.phase(LAUNCH_SPEED_PHASE):
@@ -3100,6 +3124,7 @@ class Runner:
                                  timeout=LAUNCH_SPEED_BUDGET)
             except RuntimeError as error:
                 failed = str(error)
+                (attempt / "error.txt").write_text(f"{error}\n")
             finally:
                 shutil.rmtree(home, ignore_errors=True)
             try:
@@ -3110,11 +3135,11 @@ class Runner:
                         said += " Install path failed. " + check.get("detail", "")
             except (OSError, ValueError, KeyError):
                 said = None
-            self.announce(f"{said or 'Launch speed not measured.'} Evidence: {walk}.")
+            self.announce(f"{said or failed or 'Launch speed not measured.'} Evidence: {attempt}.")
             if failed is None:
                 return None
         return (f"THE CANDIDATE IS BUILT, AND ITS LAUNCH SPEED WAS REFUSED OR COULD NOT BE PROVEN, twice: "
-                f"{said or failed}. The evidence is in {self.state / 'launch-speed'}.")
+                f"{said or failed}. The evidence is in {root}.")
 
     def require_launch_speed(self, info, run_id):
         """Refuse to publish a candidate without a complete, matching launch-speed measurement
@@ -3125,8 +3150,10 @@ class Runner:
             return None
         run = run_id or info.get("run_id") or "none"
         problems = []
-        for attempt in (2, 1):
-            report = self.state / "launch-speed" / f"{run}.{attempt}" / "report.json"
+        root = self.state / "launch-speed"
+        legacy = [root / f"{run}.{number}" / "report.json" for number in (2, 1)]
+        reports = self.proof_results(root / run, "walk/report.json", *legacy)
+        for report in reports or legacy[:1]:
             try:
                 walked = json.loads(report.read_text())
             except (OSError, ValueError) as error:
@@ -3174,7 +3201,12 @@ class Runner:
         the contract it was built under, as `screen_suites_required` does."""
         if not info.get("new_user_walk_required"):
             return None
-        report = self.new_user_walk_dir(run_id or info.get("run_id") or "none") / "report.json"
+        root = self.new_user_walk_dir(run_id or info.get("run_id") or "none")
+        legacy = root / "report.json"
+        reports = self.proof_results(root, "walk/report.json", legacy)
+        return self.accept_proof_result(reports or [legacy], lambda path: self.validate_new_user_walk(info, path))
+
+    def validate_new_user_walk(self, info, report):
         try:
             walked = json.loads(report.read_text())
         except (OSError, ValueError) as error:
@@ -3209,12 +3241,12 @@ class Runner:
         has to arrive before anything becomes installable, or the mode is just a way of
         skipping a gate.
         """
-        if not gui_proof and self.needs_gui_proof(info):
-            # The build takes this proof itself (vm_boot_proof) and keeps it here, so nobody
-            # has to carry its path to this command. It is checked exactly like a given one.
-            own = self.gui_proof_path(run_id or info.get("run_id") or "none")
-            if own.is_file():
-                gui_proof = own
+        proofs = [gui_proof] if gui_proof else []
+        if not proofs and self.needs_gui_proof(info):
+            proofs = self.gui_proof_results(run_id or info.get("run_id") or "none")
+        return self.accept_proof_result(proofs or [None], lambda path: self.validate_gui_proof(info, path))
+
+    def validate_gui_proof(self, info, gui_proof):
         state = self.gui_boot_state(info)
         stable = info.get("channel") == "stable"
         if (state is None and not info.get("no_host_screen")

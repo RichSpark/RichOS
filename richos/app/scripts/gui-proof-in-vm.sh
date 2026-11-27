@@ -155,7 +155,11 @@ fi
 
 [ -n "$VM" ] || VM="richos-gui-proof-$$"
 [ -n "$OUT" ] || OUT="$STATE_DIR/gui-proofs/${RUN_ID:-$COMMIT}.proof"
-mkdir -p "$(dirname "$OUT")" || die "cannot create $(dirname "$OUT")"
+[ ! -d "$OUT" ] || die "proof destination is a directory: $OUT"
+mkdir -p "$OUT.attempts" || die "cannot create $OUT.attempts"
+ATTEMPT="$(mktemp -d "$OUT.attempts/attempt-$(date +%s)-XXXXXX")" || die "cannot create a proof attempt"
+PROOF="$ATTEMPT/boot.proof"
+echo "gui-proof-in-vm.sh: attempt evidence: $ATTEMPT"
 
 # ---------------------------------------------------------------------------------------
 # Scratch, and the promise that none of it outlives this script (CEO ruling §54)
@@ -239,7 +243,7 @@ fi
 cat "$WORK/run.out"
 
 if [ "$RESULT" = pass ] && [ "$SCREEN_SUITES" = 1 ]; then
-  RESULTS="$OUT.suites"
+  RESULTS="$PROOF.suites"
   # This is the pid returned by this run.sh, inside this guest. End only that app before
   # front-door owns the foreground. stop.sh still owns the eventual clone cleanup.
   APP_PID="$(sed -n 's/^vm=.* pid=\([0-9][0-9]*\) .*$/\1/p' "$WORK/run.out" | tail -1)"
@@ -252,8 +256,6 @@ if [ "$RESULT" = pass ] && [ "$SCREEN_SUITES" = 1 ]; then
   esac
   if [ "$RESULT" = pass ]; then
     mkdir -p "$RESULTS" || die "cannot create screen results at $RESULTS"
-    # Remove only these previous verdicts. A failed transfer must not read an old pass.
-    rm -f "$RESULTS/front-door.rc" "$RESULTS/gui-boot.test.sh.rc"
     RICHOS_TEST_RESULTS_DIR="$RESULTS" "$TESTVM/run-suite.sh" "$VM" "$HERE/gui-boot.test.sh" \
       --existing-guest "$VM" --release "$CAND_DIR" 2>&1 | tee "$WORK/suites.out"
     SUITE_PIPE=("${PIPESTATUS[@]}")
@@ -284,18 +286,27 @@ fi
   echo "--- output ---"
   cat "$WORK/run.out" 2>/dev/null
   cat "$WORK/suites.out" 2>/dev/null || true
-} > "$OUT"
+} > "$PROOF" || die "cannot write the proof at $PROOF"
+
+# Keep the caller's output path as a pointer to the last completed report. A legacy
+# regular file and its suite evidence are kept when converting that path to a pointer.
+if [ -f "$OUT" ] && [ ! -L "$OUT" ]; then
+  cp -p "$OUT" "$ATTEMPT/previous.proof" || die "cannot preserve the previous proof at $OUT"
+fi
+ln -s "$(basename "$OUT").attempts/$(basename "$ATTEMPT")/boot.proof" "$ATTEMPT/latest" \
+  || die "cannot create a pointer to $PROOF"
+mv -f "$ATTEMPT/latest" "$OUT" || die "cannot update $OUT to point to $PROOF"
 
 echo ""
 if [ "$RESULT" = "pass" ]; then
   echo "  PASS  the candidate's own signed bundle started in a clean guest and drew $WINDOWS window(s)"
   [ "$SCREEN_SUITES" = 0 ] || echo "  PASS  front-door --release and gui-boot both passed in that same guest; results: $RESULTS"
-  echo "  proof: $OUT"
+  echo "  proof: $PROOF"
   echo ""
-  echo "  nightly-local.py publish --run ${RUN_ID:-<run-id>} --gui-proof $OUT"
+  echo "  nightly-local.py publish --run ${RUN_ID:-<run-id>} --gui-proof $PROOF"
   exit 0
 fi
 echo "  FAIL  the candidate's guest proof did not complete ($RESULT)"
-echo "        The proof records the failure rather than deleting it: $OUT"
+echo "        The proof records the failure rather than deleting it: $PROOF"
 echo "        publish will refuse it. Read the recorded boot and screen-suite output."
 exit 1

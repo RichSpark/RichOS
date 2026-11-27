@@ -172,6 +172,13 @@ out="$(screen_proof 2>&1)"; rc=$?
   && [ "$(grep -c '^boot$' "$STUB_LOG")" = 1 ] \
   && [ "$(grep -c '^stop proof-vm$' "$STUB_LOG")" = 1 ]; ok=$?
 check "screen suites run in the boot guest, after prebuild, with one cleanup and two green verdicts" "$ok" "rc=$rc $out"
+first_proof="$(readlink "$TMP/screen.proof")"
+case "$first_proof" in /*) ;; *) first_proof="$TMP/$first_proof" ;; esac
+out="$(STUB_FRONT_RC=1 screen_proof 2>&1)"; rc=$?
+[ "$rc" = 1 ] && grep -q '^result=fail:screen-suites$' "$TMP/screen.proof" \
+  && [ -f "$first_proof" ] && grep -q '^result=pass$' "$first_proof" \
+  && grep -qx 0 "$first_proof.suites/front-door.rc"; ok=$?
+check "a retake writes new boot and suite evidence while preserving the first proof and verdicts" "$ok" "rc=$rc $out"
 for refused in 1 2; do
   out="$(STUB_FRONT_RC=$refused screen_proof 2>&1)"; rc=$?
   [ "$rc" = 1 ] && grep -q '^result=fail:screen-suites$' "$TMP/screen.proof" \

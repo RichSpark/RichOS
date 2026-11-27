@@ -2061,6 +2061,67 @@ while True: time.sleep(.02)
             publisher.perform("publish", run_id="fixture-run-id")
         self.assertEqual(publisher.command.call_args.args[2], "finish")
 
+    def test_proof_retries_preserve_earlier_frames_and_reports_before_admission(self):
+        r = self.runner()
+        run = self.CANDIDATE_INFO["run_id"]
+        out = self.root / "candidate"
+        out.mkdir()
+        info = self.CANDIDATE_INFO
+        legacy_walks = [r.new_user_walk_dir(run), *(r.state / "launch-speed" / f"{run}.{n}" for n in (1, 2))]
+        evidence = {}
+        for walk in legacy_walks:
+            walk.mkdir(parents=True)
+            for path in (walk / "failed.png", walk / "report.json", walk.with_suffix(walk.suffix + ".run.json")):
+                evidence[path] = b"previous failure"
+                path.write_bytes(evidence[path])
+        boot = r.gui_proof_path(run)
+        boot.parent.mkdir(parents=True)
+        evidence[boot] = b"previous boot failure"
+        boot.write_bytes(evidence[boot])
+
+        outputs, homes, reports = set(), set(), set()
+        refused = False
+
+        def command(*args, **kwargs):
+            output = Path(args[args.index("--out") + 1])
+            self.assertNotIn(output, outputs)
+            outputs.add(output)
+            for path, contents in evidence.items():
+                self.assertTrue(path.is_file(), f"retry erased {path}")
+                self.assertEqual(path.read_bytes(), contents)
+            if "--home" in args:
+                home = Path(args[args.index("--home") + 1])
+                report = Path(args[args.index("--report") + 1])
+                self.assertNotIn(home, homes)
+                self.assertNotIn(report, reports)
+                self.assertFalse(any(home.iterdir()))
+                homes.add(home)
+                reports.add(report)
+                if not refused:
+                    output.mkdir(parents=True, exist_ok=True)
+                    for path in (output / "frame.png", output / "report.json", report):
+                        path.write_bytes(b"new failure")
+                        evidence[path] = b"new failure"
+            elif not refused:
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(b"new boot failure")
+                evidence[output] = b"new boot failure"
+            if refused:
+                raise m.GateNotAdmitted("fixture admission refused")
+            raise RuntimeError("fixture attempt failed")
+
+        r.command = command
+        with contextlib.redirect_stdout(io.StringIO()):
+            for refused in (False, True):
+                self.assertIn("WAS NOT PROVEN", r.vm_boot_proof(run))
+                self.assertIn("FIRST RUN OF IT FAILED", r.new_user_walk(run, out, info))
+                self.assertIn("LAUNCH SPEED WAS REFUSED", r.launch_speed_check(run, out, info))
+        self.assertEqual(len(outputs), 8)
+        self.assertEqual(len(homes), 6)
+        self.assertEqual(len(reports), 6)
+        for path, contents in evidence.items():
+            self.assertEqual(path.read_bytes(), contents)
+
     def test_resume_proofs_finishes_only_the_outstanding_proofs_in_build_order(self):
         passed = [{"step": s, "outcome": "PASS"} for s in m.NEW_USER_WALK_STEPS]
         failed = [{"step": "setup", "outcome": "FAIL", "detail": "setup failed"}]
@@ -2087,7 +2148,7 @@ while True: time.sleep(.02)
         self.assertNotIn("nightly-local.py publish --run", output.getvalue())
         self.assertEqual(self.slot_waits(calls), ["gui-proof-in-vm.sh", "run-walk.py"])
         repair.restore_build_commit.assert_called_once_with(info)
-        boot = repair.gui_proof_path(run)
+        boot = repair.gui_proof_results(run)[0]
         boot_stat = boot.stat()
 
         repair, calls = self.build_that_walks_as_a_new_user(passed)
@@ -2130,7 +2191,7 @@ while True: time.sleep(.02)
             self.assertIn(f"{phase}: present", output.getvalue())
         self.assertTrue(output.getvalue().strip().endswith(f"nightly-local.py publish --run {run}"))
 
-        report = r.new_user_walk_dir(run) / "report.json"
+        report, = r.new_user_walk_dir(run).glob("attempt-*/walk/report.json")
         wrong = json.loads(report.read_text())
         wrong["expect_sha"] = "a" * 40
         report.write_text(json.dumps(wrong))
@@ -2177,7 +2238,7 @@ while True: time.sleep(.02)
             r.perform("build", no_host_screen=True)
         _, info = r.load_candidate("fixture-run-id")
         self.assertIs(info.get("install_path_required"), True)
-        report = r.state / "launch-speed" / "fixture-run-id.1" / "report.json"
+        report, = (r.state / "launch-speed" / "fixture-run-id").glob("attempt-*/walk/report.json")
         measured = json.loads(report.read_text())
         for checks in ([], [{"id": "install-path", "pass": False}]):
             measured["checks"] = checks
