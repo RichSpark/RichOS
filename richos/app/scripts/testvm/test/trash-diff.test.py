@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 TOOL = Path(__file__).resolve().parents[1] / 'trash-diff.py'
@@ -70,6 +71,21 @@ with tempfile.TemporaryDirectory() as tmp:
     code, out, _ = tool('check', 'b', '--moved-count', '0', '--wait', '0.4')
     check('gone but not in the Trash fails, after waiting', code == 1 and out['removed'] == ['Keep.txt'] and out['moved'] == []
           and 'without reaching the Trash' in out['why'], out)
+
+    # --none watches its whole window: a move that lands after the first clean reading still fails.
+    import threading
+    (desk / 'Keep folder').mkdir()
+    code, out, _ = tool('mark', 'late')
+    threading.Timer(0.6, lambda: os.rename(desk / 'Keep folder', trash / 'Keep folder')).start()
+    t0 = time.monotonic()
+    code, out, _ = tool('check', 'late', '--none', '--wait', '2')
+    took = time.monotonic() - t0
+    check('--none fails on a move 0.6 s into a 2 s window, as soon as it lands', code == 1 and out['moved'] == ['Keep folder']
+          and took < 1.8, (code, out, took))
+    code, out, _ = tool('mark', 'quiet')
+    t0 = time.monotonic()
+    code, out, _ = tool('check', 'quiet', '--none', '--wait', '1')
+    check('--none with no move holds only after watching the whole window', code == 0 and time.monotonic() - t0 >= 1.0, (code, out))
 
     os.chmod(desk, 0)
     code, out, err = tool('mark', 'c')

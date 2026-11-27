@@ -18,7 +18,7 @@ U+F728: `hid-key.py 117 --fn --keypad --char f728`.
 Command, Shift, Control, Alternate) on both events; --char sets the event's Unicode character
 (hexadecimal); --times presses it N times (1..20), 0.08 s apart. Prints one JSON line naming what
 was posted. Exit 0 once posted; 2 when it cannot post (not a virtual machine, no CoreGraphics, a bad
-argument), with a sentence. It refuses to post anywhere but a virtual machine. Added with the Desktop
+argument, no permission to post events), with a sentence. It refuses to post anywhere but a virtual machine. Added with the Desktop
 Forward Delete walk.
 """
 import argparse
@@ -80,6 +80,13 @@ def main(argv=None):
     cg.CGEventSetFlags.argtypes = [vp, ctypes.c_uint64]
     cg.CGEventKeyboardSetUnicodeString.argtypes = [vp, ctypes.c_ulong, ctypes.POINTER(ctypes.c_uint16)]
     cg.CGEventPost.argtypes = [ctypes.c_uint32, vp]
+    # CGEventPost returns nothing: without the permission to post events the key is dropped silently,
+    # and a walk would read an undelivered key as the product's answer. Ask first.
+    cg.CGPreflightPostEventAccess.restype = ctypes.c_bool
+    if not cg.CGPreflightPostEventAccess():
+        print('hid-key: this process may not post events (CGPreflightPostEventAccess is false); nothing was posted',
+              file=sys.stderr)
+        return 2
     cf = ctypes.CDLL(ctypes.util.find_library('CoreFoundation'))
     cf.CFRelease.argtypes = [vp]
     for n in range(a.times):

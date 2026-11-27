@@ -24,7 +24,9 @@ The expectation decides the exit:
                     (a New Folder whose name the walk does not choose)
   --none            nothing left the Desktop and nothing new is in the Trash
 --wait SECONDS asks again until the expectation holds or the time is up (Finder moves an item a
-moment after the key), and reports the last reading either way.
+moment after the key), and reports the last reading either way. With --none the wait is a window
+watched to its end: the first move seen in it fails at once, and only a window with no move holds
+(a no-move check that stopped at its first clean reading would miss a move that lands later).
 
 Exit 0 when the expectation holds, 1 when it does not (with a sentence), 2 when it cannot answer
 (no mark under that label, a folder it cannot read). Default folders are ~/Desktop and ~/.Trash,
@@ -116,7 +118,12 @@ def main(argv=None):
         while True:
             r = reading(before, args.desktop, args.trash)
             why = verdict(r, args)
-            if why is None or time.monotonic() >= deadline:
+            if time.monotonic() >= deadline:
+                break
+            if args.none:
+                if why is not None:
+                    break  # a move appeared: fail now
+            elif why is None:
                 break
             time.sleep(0.2)
     except OSError as e:

@@ -2069,8 +2069,12 @@ t_done
 
 t "files-since: every class, the baseline window, and a control that must be found and flagged"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/files-since.test.py" >"$TMP/files-since.log" 2>&1; ok $? "$(cat "$TMP/files-since.log")"
+t_done
+
 t "trash-diff: Desktop items told by inode in the Trash, a wrong expectation fails, and no mark cannot answer"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/trash-diff.test.py" >"$TMP/trash-diff.log" 2>&1; ok $? "$(cat "$TMP/trash-diff.log")"
+t_done
+
 t "hid-key: a key as a hardware keyboard sends it (flags, character), each refusal, and nothing posted outside a virtual machine"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/hid-key.test.py" >"$TMP/hid-key.log" 2>&1; ok $? "$(cat "$TMP/hid-key.log")"
 t_done
