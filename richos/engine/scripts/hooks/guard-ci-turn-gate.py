@@ -497,8 +497,20 @@ def push_observations(push, result, failed):
 
 
 def reported_destination(url):
-    # Git can omit HTTP credentials in its "To" line.
-    return re.sub(r"^(https?://)[^/@]+@", r"\1", url)
+    """Return the configured URL as Git's transport prints it in a To line."""
+    scheme, marker, address = url.partition("://")
+    if marker:
+        # Git strips user info before the path for any valid scheme.
+        userinfo, at, host_and_path = address.partition("@")
+        if at and "/" not in userinfo and re.fullmatch(r"[A-Za-z0-9+.-]*", scheme):
+            return scheme + marker + host_and_path
+    else:
+        # An scp-style URL has its colon before the first slash. A local
+        # path containing an at sign must keep that character.
+        _, at, host_and_path = url.partition("@")
+        if at and ":" in host_and_path and "/" not in url.partition(":")[0]:
+            return host_and_path
+    return url
 
 
 def completed_pushes(calls, output, failed, completed_at):
@@ -511,7 +523,7 @@ def completed_pushes(calls, output, failed, completed_at):
         sections = re.split(r"^To ([^\r\n]+)\r?\n", output, flags=re.MULTILINE)
         by_url = {}
         for url, section in zip(sections[1::2], sections[2::2]):
-            by_url.setdefault(reported_destination(url), []).append(section)
+            by_url.setdefault(url, []).append(section)
         results = {url: push_result("\n".join(parts)) for url, parts in by_url.items()}
         if results or not failed:
             for push in calls:
