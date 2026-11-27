@@ -172,6 +172,42 @@ class Reviews(unittest.TestCase):
         # The terminal's watcher has no such record and starts as before.
         self.assertTrue(rw.World.may_start(object.__new__(rw.World), worker))
 
+    def test_a_ready_from_before_is_reviewed_only_once_the_bridge_has_handed_it_to_stu(self):
+        """A held handover never starts a paid review before the user acts (review
+        rv-20261127T025408Z-0159fa0b-818a, finding 4: "Eligible for second review: ['old',
+        'fresh']"). The READY was written while the app was closed. Codex writes a fresh one while
+        it is open; the bridge sets the old one aside and hands Stu the fresh one, which opens the
+        chat (richos-core codex_bridge.rs). The fresh READY is reviewed; the old one only once the
+        bridge has handed it to Stu, after the user acted in that chat."""
+        source = self.path / "to-rich.jsonl"
+        bridge = self.state / "codex-watch"
+        # The app opens: the bridge's record of each journal's length (codex_bridge.rs JOURNALS_AT_LAUNCH).
+        c.mkdir(bridge)
+        (self.state / rw.JOURNALS_AT_LAUNCH).write_text(json.dumps(dict(version=1, journals={os.path.realpath(source): source.stat().st_size})))
+        c.send(self.path, "fresh", "## READY TO LAND: codex/fixture\nRepository: work\nCommit: " + self.tip + "\nClaims: one more change")
+        items, problems = self.world.codex_items(100, {})
+        self.assertFalse(problems)
+        old, fresh = sorted(items, key=lambda item: item.channel["message_id"] != "ready")
+        self.assertEqual((old.channel["message_id"], fresh.channel["message_id"]), ("ready", "fresh"))
+        eligible = lambda: [item.channel["message_id"] for item in (old, fresh) if self.world.may_start(item)]
+        self.assertEqual(eligible(), ["fresh"], "a READY the bridge has not taken was eligible for review")
+        # The bridge set the old one aside and handed Stu the fresh one: its place is past both.
+        records = list(c.records(source))
+        c.mkdir(bridge / "held")
+        (bridge / "held" / (self.path.name + ".jsonl")).write_text(json.dumps(dict(
+            type="channel", locator=str(self.path), through=records[0][1], record=records[0][2])) + "\n")
+        c.mkdir(bridge / "accepted")
+        c.save(bridge / "accepted" / (self.path.name + ".json"), dict(through=records[-1][1], source_identity=c.identity(source)))
+        self.assertEqual(eligible(), ["fresh"], "a READY the bridge set aside was eligible for review")
+        # The user acts in that chat: the bridge hands Stu what it set aside.
+        (bridge / "held" / (self.path.name + ".jsonl")).unlink()
+        self.assertEqual(eligible(), ["ready", "fresh"], "a READY handed to Stu after the user acted was never reviewed")
+        # An unreadable record holds what it cannot place; an app that writes none holds nothing here.
+        (self.state / rw.JOURNALS_AT_LAUNCH).write_text("{not json")
+        self.assertEqual(eligible(), [])
+        (self.state / rw.JOURNALS_AT_LAUNCH).unlink()
+        self.assertEqual(eligible(), ["ready", "fresh"])
+
     def test_unheaded_ready_uses_the_existing_scoped_handler(self):
         path = Path(c.connect("Original plain-message task", "fixture source", scope=self.scope)["locator"])
         text = "READY TO LAND: codex/fixture\nRepository: work\nCommit: " + self.tip + "\nClaims: same work"

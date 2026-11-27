@@ -221,6 +221,26 @@ pub struct Asked {
 /// (`codex_watch.py` `_legacy_tick`, the app host's session directory).
 const MARKDOWN_PLACES: &str = "codex-watch/watch/app-host/live-offsets.json";
 
+/// **How long each connection's journal was when the app opened**, for the app's review
+/// watcher, a process of its own (`review_watch.py` `AppWorld.held_by_the_bridge`): a READY
+/// written before then is reviewed only once this bridge has handed it to Stu, which it does
+/// once the user has acted in its chat (review rv-20261127T025408Z-0159fa0b-818a, finding 4).
+/// In the app's engine state folder, replaced whole at every launch.
+pub const JOURNALS_AT_LAUNCH: &str = "codex-watch/journals-at-launch.json";
+
+fn write_journals_at_launch(state: &Path, journals: &std::collections::HashMap<PathBuf, u64>) {
+    let path = state.join(JOURNALS_AT_LAUNCH);
+    let partial = path.with_extension("json.partial");
+    let body = json!({"version": 1, "journals": journals.iter()
+        .map(|(journal, length)| (journal.to_string_lossy().into_owned(), json!(length))).collect::<serde_json::Map<_, _>>()});
+    let written = std::fs::create_dir_all(path.parent().unwrap_or(state))
+        .and_then(|()| std::fs::write(&partial, body.to_string()))
+        .and_then(|()| std::fs::rename(&partial, &path));
+    if let Err(error) = written {
+        eprintln!("[richos] the Codex journals' lengths at launch could not be written for the review watcher: {error}");
+    }
+}
+
 impl Asked {
     /// **The app is opening now.** Neither the journals nor the Markdown channels carry a
     /// clock, so how long each file is at this moment is what tells a report from before from
@@ -240,6 +260,7 @@ impl Asked {
                 journals.insert(journal, length);
             }
         }
+        write_journals_at_launch(state, &journals);
         // The files the watcher already has a place in. One it has never read starts at its
         // end (`look_one`), so it holds nothing from before.
         let mut markdown = std::collections::HashMap::new();
@@ -944,6 +965,19 @@ mod tests {
         prompt(&f, "What did Codex say?", crate::ledger::Source::Text);
         f.release(&asked);
         assert_eq!(f.delivered(), ["message-2", "review-2", "message-1", "review-1"]);
+    }
+
+    /// **The review watcher is told how long each journal was when the app opened** (review
+    /// rv-20261127T025408Z-0159fa0b-818a, finding 4): it reviews a READY from before only once
+    /// this bridge has handed it to Stu (`review_watch.py` `AppWorld.held_by_the_bridge`, whose
+    /// own test reads this record's shape).
+    #[test]
+    fn the_journals_lengths_at_launch_are_written_for_the_review_watcher() {
+        let f = Fixture::new();
+        let _asked = opened(&f);
+        let record: Value = serde_json::from_slice(&std::fs::read(f.state.join(JOURNALS_AT_LAUNCH)).unwrap()).unwrap();
+        let journal = Path::new(f.event["locator"].as_str().unwrap()).join(JOURNAL).canonicalize().unwrap();
+        assert_eq!(record, json!({"version": 1, "journals": {journal.to_str().unwrap(): 100}}));
     }
 
     /// **The old Markdown channel.** A reply written while the app was closed starts no turn at
