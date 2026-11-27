@@ -3,7 +3,7 @@
 //! they run green with NO live Claude / network (the live round-trip itself is proven
 //! separately by examples/native_roundtrip.rs).
 
-use richos_core::cognition::{Cognition, CognitionError, TurnItem, MockCognition};
+use richos_core::cognition::{Cognition, CognitionError, PendingReply, TurnItem, MockCognition};
 use richos_core::ledger::{Ledger, Source, TurnState};
 use richos_core::entity::EntityId;
 use richos_core::spine::Spine;
@@ -72,6 +72,122 @@ fn full_roundtrip_persists_and_renders_clean() {
     assert_eq!(msgs[1].role, "assistant");
     assert_eq!(msgs[1].text, "Hello CEO, I'm Rich.");
     let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn held_report_does_not_keep_finished_input_busy_in_another_chat() {
+    use richos_core::{
+        spine::KeptAlive, steering::TurnControl, turn_gate::TurnGate,
+    };
+    use std::{fs, time::Duration};
+
+    // The v7 audit's desk retirement fixture, with a local lease and no provider.
+    struct Desk;
+    impl Cognition for Desk {
+        fn session_id(&self) -> &str {
+            "fixture-desk"
+        }
+
+        fn requires_thread_isolation(&self) -> bool {
+            true
+        }
+
+        fn prompt(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
+            Ok("end_turn".into())
+        }
+
+        fn keep_chat_alive(&mut self) -> Result<PendingReply, CognitionError> {
+            Ok(PendingReply::new(|_| Ok("end_turn".into())))
+        }
+    }
+
+    for hold_report in [false, true] {
+        let root = std::env::temp_dir().join(format!(
+            "richos-held-report-{}-{}-{hold_report}",
+            std::process::id(),
+            richos_core::util::now_millis(),
+        ));
+        fs::create_dir(&root).unwrap();
+        let intake = root.join("intake.jsonl");
+        let control = TurnControl::open(&intake).unwrap();
+        let mut spine = support::spine(Ledger::open(root.join("ledger.jsonl")).unwrap());
+        spine.set_turn_control(control.clone());
+        let entity = femcboost();
+        let untouched = spine.create_thread("Untouched", &entity).unwrap();
+        let work = spine.create_thread("Completes normally", &entity).unwrap();
+        let current = spine.create_thread("Now displayed", &entity).unwrap();
+        let gate = Arc::new(TurnGate::at_launch(&root.join("engine-state")));
+        let held_id = hold_report.then(|| {
+            control
+                .submit_agent_message_written_at(
+                    &untouched,
+                    Some(entity.clone()),
+                    r#"{"from":"fixture","text":"Old report"}"#,
+                    "fixture",
+                    "old-report",
+                    gate.since_ms().saturating_sub(1),
+                )
+                .unwrap()
+                .id()
+        });
+        spine.set_turn_gate(gate);
+        spine.switch_thread(&work).unwrap();
+        spine.attach_lease(Box::new(Desk));
+        let mut typed_ids = Vec::new();
+        for number in 1..=2 {
+            let input = control
+                .submit_from_desk(&work, Some(entity.clone()), &format!("New request {number}"))
+                .unwrap();
+            if number == 1 {
+                assert!(matches!(spine.keep_front_desk_alive(&work), KeptAlive::Busy));
+            }
+            spine.poll_intake().unwrap();
+            assert_eq!(
+                spine.ledger().turn_for_intake(input.id()).unwrap().state,
+                TurnState::Completed,
+            );
+            typed_ids.push(input.id());
+        }
+
+        spine.switch_thread(&current).unwrap();
+        let keep = spine.keep_front_desk_alive(&work);
+        let retired = spine.retire_idle_front_desks(u64::MAX, Duration::from_secs(1), &|_| false);
+        if let Some(id) = held_id {
+            assert!(spine.ledger().turn_for_intake(id).is_none());
+        }
+        let last_intake = *typed_ids.last().unwrap();
+        let expected_pending = held_id.into_iter().chain(typed_ids.into_iter().filter(|_| hold_report))
+            .collect::<Vec<_>>();
+        drop(spine);
+        drop(control);
+        let control = TurnControl::open(&intake).unwrap();
+        let pending = control.pending_intake().iter().map(|row| row.id()).collect::<Vec<_>>();
+        assert_eq!(pending, expected_pending, "the on-disk drain mark crossed the held report");
+        assert!(
+            matches!(keep, KeptAlive::Sent { spawned: false, .. }) && retired.contains(&work),
+            "finished input should allow keep-alive and retirement (held={hold_report}, keep={keep:?}, retired={retired:?})",
+        );
+
+        if hold_report {
+            // A continuation shares the original intake ID, but can still be waiting.
+            let mut ledger = Ledger::open(root.join("ledger.jsonl")).unwrap();
+            let prior = ledger.turn_for_intake(last_intake).unwrap().id.clone();
+            let binding = ledger.thread_binding(&work).unwrap();
+            let replay = ledger.replay_turn(&binding, &prior).unwrap();
+            assert_eq!(ledger.turn(&replay).unwrap().state, TurnState::Received);
+            let mut restarted = support::spine(ledger);
+            restarted.set_turn_control(control.clone());
+            restarted.switch_thread(&work).unwrap();
+            restarted.attach_lease(Box::new(Desk));
+            restarted.switch_thread(&current).unwrap();
+            assert!(matches!(restarted.keep_front_desk_alive(&work), KeptAlive::Busy));
+            assert!(!restarted
+                .retire_idle_front_desks(u64::MAX, Duration::from_secs(1), &|_| false)
+                .contains(&work));
+        }
+        drop(control);
+        fs::remove_dir_all(&root).unwrap();
+    }
 }
 
 
