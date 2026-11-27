@@ -497,24 +497,11 @@ final class GestureController {
         newDesktopFolder = NewDesktopFolder(finder: pid, foreground: NSWorkspace.shared.frontmostApplication, chosenAt: Date())
     }
 
-    private func desktopFileGroup(_ finder: AXUIElement, allowingNewFolderName: Bool = false) -> AXUIElement? {
+    private func desktopFileGroup(_ finder: AXUIElement) -> AXUIElement? {
         guard let window = finder.element(kAXFocusedWindowAttribute), window.role == kAXScrollAreaRole,
-              let focused = finder.element(kAXFocusedUIElementAttribute) else { return nil }
-        if focused.role == kAXGroupRole, focused.element(kAXParentAttribute) == window {
-            return focused
-        }
-        // Forward Delete can trash the folder immediately after New Folder,
-        // while Finder still selects its untouched name in the editor.
-        guard allowingNewFolderName, focused.role == kAXTextFieldRole,
-              focused.element(kAXParentAttribute) == finder,
-              let name: String = focused.value(kAXValueAttribute), !name.isEmpty,
-              focused.value(kAXSelectedTextAttribute) as String? == name,
-              let groups: [AXUIElement] = window.value(kAXChildrenAttribute) else { return nil }
-        return groups.first { group in
-            guard group.role == kAXGroupRole, let icons: [AXUIElement] = group.value(kAXSelectedChildrenAttribute),
-                  icons.count == 1, icons[0].role == kAXImageRole else { return false }
-            return icons[0].value(kAXTitleAttribute) as String? == name
-        }
+              let focused = finder.element(kAXFocusedUIElementAttribute), focused.role == kAXGroupRole,
+              focused.element(kAXParentAttribute) == window else { return nil }
+        return focused
     }
 
     private func desktopFileReferences(_ icons: [AXUIElement]) -> [NSURL] {
@@ -588,11 +575,11 @@ final class GestureController {
     }
 
     private func moveFinderSelectionToTrash(_ finder: AXUIElement, group: AXUIElement, icons: [AXUIElement],
-                                            allowingNewFolderName: Bool = false, started: TimeInterval) {
+                                            started: TimeInterval) {
         guard !icons.isEmpty else { return }
         guard let item = finderTrashCommand(finder), item.value(kAXEnabledAttribute) as Bool? == true,
               NSWorkspace.shared.frontmostApplication?.processIdentifier == finder.processID,
-              desktopFileGroup(finder, allowingNewFolderName: allowingNewFolderName) == group,
+              desktopFileGroup(finder) == group,
               group.value(kAXSelectedChildrenAttribute) as [AXUIElement]? == icons,
               item.perform(kAXPressAction) else {
             record(.desktopDeleteShortcut, .unavailable, started: started)
@@ -642,10 +629,13 @@ final class GestureController {
                 trashAfterDesktopClick(click, key: desktopKeyRevision, pointer: pointerRevision, started: started)
                 return nil
             }
+            if let newFolder, app.processIdentifier == newFolder.finder || newFolder.foreground == app {
+                trashAfterNewFolder(newFolder, key: desktopKeyRevision, pointer: pointerRevision, started: started)
+                return nil
+            }
             if app.bundleIdentifier == "com.apple.finder" {
                 let finder = finderElement(app.processIdentifier)
-                let allowName = newFolder?.finder == app.processIdentifier
-                if let group = desktopFileGroup(finder, allowingNewFolderName: allowName),
+                if let group = desktopFileGroup(finder),
                    let icons: [AXUIElement] = group.value(kAXSelectedChildrenAttribute),
                    NSWorkspace.shared.frontmostApplication == app {
                     let key = desktopKeyRevision
@@ -653,18 +643,30 @@ final class GestureController {
                     DispatchQueue.main.async { [weak self] in
                         guard let self, self.desktopKeyRevision == key, self.pointerRevision == pointer,
                               Preferences.selection.contains(.desktopDelete) else { return }
-                        self.moveFinderSelectionToTrash(finder, group: group, icons: icons,
-                                                        allowingNewFolderName: allowName, started: started)
+                        self.moveFinderSelectionToTrash(finder, group: group, icons: icons, started: started)
                     }
                     return nil
                 }
             }
-            if let newFolder, newFolder.foreground == app, app.bundleIdentifier != "com.apple.finder",
-               let reference = backgroundFolderReference(newFolder), NSWorkspace.shared.frontmostApplication == app {
-                recycleNewFolder(reference, createdAfter: newFolder.chosenAt, started: started)
-                return nil
-            }
             return Unmanaged.passUnretained(event)
+        }
+    }
+
+    private func trashAfterNewFolder(_ folder: NewDesktopFolder, key: UInt64, pointer: UInt64, started: TimeInterval) {
+        // The New Folder command can still be creating and selecting its
+        // target when the key arrives. Wait without using the old selection.
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(15)) { [weak self] in
+            guard let self, self.desktopKeyRevision == key, self.pointerRevision == pointer,
+                  Preferences.selection.contains(.desktopDelete),
+                  let app = NSWorkspace.shared.frontmostApplication,
+                  app.processIdentifier == folder.finder || app == folder.foreground else { return }
+            if let reference = self.backgroundFolderReference(folder), NSWorkspace.shared.frontmostApplication == app {
+                self.recycleNewFolder(reference, createdAfter: folder.chosenAt, started: started)
+            } else if ProcessInfo.processInfo.systemUptime - started < 0.5 {
+                self.trashAfterNewFolder(folder, key: key, pointer: pointer, started: started)
+            } else {
+                self.record(.desktopDeleteShortcut, .unavailable, started: started)
+            }
         }
     }
 
