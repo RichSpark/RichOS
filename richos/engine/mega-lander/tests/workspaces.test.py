@@ -8631,6 +8631,39 @@ class NoSilentHolds(Base):
             with self.assertRaises(ws.SpecError, msg=bad):
                 ws.hold_end(bad)
 
+    def test_damaged_app_review_locks_leave_unrelated_due_work_readable(self):
+        app = os.path.join(self.env.home, "fixture-app-state")
+        review = ws._import_path("fixture_app_review", os.path.join(ENGINE, "scripts", "lib", "app_review.py"))
+        paths = review.app_paths(app)
+        locks = os.path.join(paths["watch"], "locks")
+        os.makedirs(locks)
+        at = 1800000000
+        tip = "a" * 40
+        end = "review:%s@%s" % (os.path.basename(self.other), tip[:12])
+        matching = {"repo": self.other, "tip": tip}
+        with patch.dict(os.environ, {"RICHOS_APP_STATE": app, "REVIEW_WATCH_STATE_DIR": "",
+                                     "SECOND_REVIEW_STATE_DIR": paths["reviews"]}), \
+                patch.object(ws, "now", return_value=at), \
+                patch.object(ws, "_monitor_health", return_value=(False, "fixture watcher inactive")):
+            ws.hold("after-review", "After review", end, "Waiting for review", self.sid)
+            ws.hold("expired-timer", "Expired timer", "at:2020-01-01T00:00:00Z", "Due now", self.sid)
+            healthy = os.path.join(locks, "z-healthy.lock")
+            with open(healthy, "w") as f:
+                json.dump(matching, f)
+            os.utime(healthy, (at - 60, at - 60))  # Legacy locks use their mtime.
+            self.assertEqual([item["name"] for item in ws.due_set(self.sid)], ["expired-timer"])
+            for i, bad in enumerate(([], dict(matching, started_at=[]), dict(matching, started_at="NaN"),
+                                     dict(matching, started_at="Infinity"))):
+                with open(os.path.join(locks, "bad-%d.lock" % i), "w") as f:
+                    json.dump(bad, f)
+            self.assertEqual([item["name"] for item in ws.due_set(self.sid)], ["expired-timer"])
+            notice = ws.fallback_notice(self.sid, [])
+            self.assertIn("expired-timer", notice)
+            self.assertNotIn("could NOT be read", notice)
+            self.assertNotIn("after-review", notice)
+            os.unlink(healthy)
+            self.assertEqual(ws.hold_end_state(end)[0], "due")
+
     def test_holds_t5_the_work_running_ends_it_and_a_false_catch_is_shown_once(self):
         aid, _n = self.spawn("zach-opus-y")
         ws.hold("stream-c", "Stream C", "agent:zach-opus-y", "", self.sid)

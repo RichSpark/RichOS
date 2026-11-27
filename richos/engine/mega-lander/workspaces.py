@@ -61,6 +61,7 @@ import fcntl
 import glob
 import hashlib
 import json
+import math
 import os
 import re
 import shlex
@@ -3571,15 +3572,18 @@ def _review_at_ended(repo_name, prefix):
             "state", "review-watch")
     quiet = None
     for path in sorted(glob.glob(os.path.join(watch, "locks", "*.lock"))):
-        try:
-            with open(path, encoding="utf-8") as f:
-                lock = json.load(f)
-        except (OSError, ValueError):
-            continue
-        if (os.path.basename(str(lock.get("repo") or "").rstrip("/")) != repo_name
+        lock = read_json(path)
+        if (not lock or os.path.basename(str(lock.get("repo") or "").rstrip("/")) != repo_name
                 or not str(lock.get("tip") or "").startswith(prefix)):
             continue
-        age = now() - float(lock.get("started_at") or os.path.getmtime(path))
+        started = lock.get("started_at")
+        try:
+            started = os.path.getmtime(path) if started in (None, "", 0) else float(started)
+        except (OSError, OverflowError, TypeError, ValueError):
+            continue
+        if not math.isfinite(started):
+            continue
+        age = now() - started
         if age <= REVIEW_RUN_SECONDS:
             return None
         quiet = "review %s wrote nothing for %d min and has no verdict" % (ref, age // 60)
