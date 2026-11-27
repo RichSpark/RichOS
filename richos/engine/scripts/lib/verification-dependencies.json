@@ -14959,7 +14959,7 @@
     },
     "mega-lander/tests/workspace-pause-hold.test.sh": {
       "source": "mega-lander/tests/workspace-pause-hold.test.sh",
-      "sha256": "2b765e2ad4b3627bca5039fc4c2da03b048a720a5738c3df630439a89cfe41be",
+      "sha256": "bd9c74617f149d5960c32384327fdd445a9da61e8c8e0373b72e3572f98f59e5",
       "evidence": "Fixed private Git/process fixture with copied real config. Retain actual isolation/model and lifecycle cleanup keys. Generated shell-evidence prefix invokes bound agent_hold; all body/worker/supervisor/WAIT programs are source-bound. No hook inventory execution. Renewed 2026-10-11 (H11, review rv-20261011T055437Z-206908c9-000f): a fixed helper loads mega-lander/app.py by the suite's own engine path and calls its pause_message and resume_message tools with read_scope stubbed (no app scope, ECS store or orchestration.config is read); the tools reach pause_protocol.issue and the same workspaces.py pause/resume/agent_hold closure as H10, against this fixture's private registry.",
       "keys": [],
       "edges": [
