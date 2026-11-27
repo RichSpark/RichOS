@@ -613,7 +613,7 @@ def repo_facts(directory, remote, budget, cache):
         cache[key] = res
         return res
     root = out.strip()
-    rc, out, err = run(["git", "-C", root, "remote", "get-url", remote], budget)
+    rc, out, err = run(["git", "-C", root, "remote", "get-url", "--push", remote], budget)
     if rc == TIMEOUT_RC:
         return (root, "", TRANSIENT + err)
     if rc != 0:

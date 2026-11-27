@@ -254,10 +254,32 @@ class G3(unittest.TestCase):
             self.git(repo, "config", key, value)
         self.git(repo, "commit", "--allow-empty", "-qm", "initial")
         self.git(repo, "remote", "add", "origin", bare)
-        slug_of = gate.slug_of
+        self.original_slug_of = gate.slug_of
         self.enterContext(patch.object(gate, "slug_of",
-                                      lambda url: "fixture/repo" if url == bare else slug_of(url)))
+                                      lambda url: "fixture/repo" if url == bare else self.original_slug_of(url)))
         return repo, bare
+
+    def test_v7_62_verdict_uses_push_destination(self):
+        repo, bare = self.repo()
+        self.git(repo, "remote", "set-url", "origin", "https://github.com/fixture/fetch-only.git")
+        self.git(repo, "remote", "set-url", "--push", "origin", bare)
+        self.call("git push origin main", repo)
+        self.result(self.git(repo, "push", "origin", "main").stderr)
+        sha = self.git(bare, "rev-parse", "main").stdout.strip()
+        self.assertEqual(sha, self.git(repo, "rev-parse", "HEAD").stdout.strip())
+
+        with patch.object(gate, "slug_of", side_effect=self.original_slug_of):
+            with patch.object(gate, "verdict_for", return_value={"state": "green"}) as verdict:
+                rc, out, _ = gate.evaluate(dict(self.payload, session_id="local-url"), gate.Budget(5))
+                self.assertEqual(rc, 0)
+                verdict.assert_not_called()
+                self.assertIn("is not a GitHub remote", out)
+
+        # Label the actual local destination to exercise the positive lookup.
+        with patch.object(gate, "verdict_for", return_value={"state": "green"}) as verdict:
+            self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 0)
+            self.assertEqual([call.args[:2] for call in verdict.call_args_list],
+                             [("fixture/repo", sha)])
 
     def test_p3_19_refusal_across_scans_never_creates_obligation(self):
         repo, _ = self.repo()
