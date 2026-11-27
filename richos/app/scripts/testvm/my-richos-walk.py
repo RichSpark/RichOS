@@ -317,7 +317,9 @@ def main():
             self.hover(5, 5)
             self.ax('click', '--id', 'rom-square', '--first')
             self.until('the pinned card', lambda: self.present_id('rom-card'), 15)
-            self.ax('click', '--title', 'Tokens, open the details', '--first')
+            # The token half speaks its figures ("Tokens: 66k tokens a minute. ..."), so it is
+            # found by the start of that name (d0b65e6bc replaced "Tokens, open the details").
+            self.ax('click', '--title', 'Tokens: ', '--contains', '--role', 'AXButton', '--first')
             self.until('the details', lambda: self.present_id('rom-close'), 15)
             tokens = 'details-tokens-%s.png' % theme
             tokens_said = self.until('the Tokens details', lambda: self.seen(tokens, 'Tokens used', 'Where they went', 'By model', 'By kind'), 20, every=2)
