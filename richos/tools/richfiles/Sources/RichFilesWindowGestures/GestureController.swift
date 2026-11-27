@@ -504,48 +504,35 @@ final class GestureController {
         return focused
     }
 
-    private func desktopFileReferences(_ icons: [AXUIElement]) -> [NSURL] {
-        icons.compactMap { icon in
-            guard icon.role == kAXImageRole, let url: NSURL = icon.value(kAXURLAttribute),
-                  CFURLIsFileReferenceURL(url as CFURL) else { return nil }
-            return url
-        }
-    }
-
     // Finder can select the new Desktop item while another app still owns
     // the keyboard. This path must only act on the folder just created.
-    private func backgroundFolderReference(_ command: NewDesktopFolder) -> NSURL? {
+    private func newFolderReference(_ command: NewDesktopFolder) -> FileReference? {
         let finder = finderElement(command.finder)
-        guard let windows: [AXUIElement] = finder.value(kAXWindowsAttribute) else { return nil }
+        guard let windows: [AXUIElement] = finder.value(kAXWindowsAttribute),
+              let desktopDirectory = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first else { return nil }
+        var selected: [AXUIElement] = []
         for desktop in windows where desktop.role == kAXScrollAreaRole {
             guard let groups: [AXUIElement] = desktop.value(kAXChildrenAttribute) else { continue }
             for group in groups where group.role == kAXGroupRole {
-                guard let icons: [AXUIElement] = group.value(kAXSelectedChildrenAttribute), icons.count == 1 else { continue }
-                if let reference = desktopFileReferences(icons).first { return reference }
+                selected += group.value(kAXSelectedChildrenAttribute) ?? []
             }
         }
-        return nil
+        // Finder's AXURL may refer to a previously trashed folder with the
+        // same name. Match the selected name to a fresh folder on the Desktop.
+        guard selected.count == 1, let icon = selected.first, icon.role == kAXImageRole,
+              let name: String = icon.value(kAXTitleAttribute),
+              (try? FileOperations.validateName(name)) != nil else { return nil }
+        let url = desktopDirectory.resolvingSymlinksInPath().appendingPathComponent(name, isDirectory: true)
+        guard let reference = try? FileReference(url: url),
+              let info = try? url.resourceValues(forKeys: [.creationDateKey, .isDirectoryKey, .isSymbolicLinkKey]),
+              info.isDirectory == true, info.isSymbolicLink == false,
+              let birth = info.creationDate, birth >= command.chosenAt else { return nil }
+        return reference
     }
 
-    private func recycleNewFolder(_ reference: NSURL, createdAfter: Date, started: TimeInterval) {
-        // Keep the captured identity until the worker runs. Finder can expose
-        // a stale Accessibility URL if a different item reused the same name.
-        DispatchQueue.global(qos: .userInitiated).async {
-            guard let url = reference.filePathURL,
-                  let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first,
-                  url.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL.path
-                    == desktop.resolvingSymlinksInPath().standardizedFileURL.path,
-                  let info = try? url.resourceValues(forKeys: [.creationDateKey, .isDirectoryKey, .isSymbolicLinkKey]),
-                  info.isDirectory == true, info.isSymbolicLink == false,
-                  let birth = info.creationDate, birth >= createdAfter,
-                  let current = CFURLCreateFileReferenceURL(nil, url as CFURL, nil)?.takeRetainedValue(),
-                  CFEqual(current, reference) else {
-                self.record(.desktopDeleteShortcut, .unavailable, started: started)
-                return
-            }
-            NSWorkspace.shared.recycle([url]) { moved, error in
-                self.record(.desktopDeleteShortcut, error == nil && moved.count == 1 ? .complete : .issues, started: started)
-            }
+    private func recycleNewFolder(_ reference: FileReference, started: TimeInterval) {
+        NSWorkspace.shared.recycle([reference.url]) { moved, error in
+            self.record(.desktopDeleteShortcut, error == nil && moved.count == 1 ? .complete : .issues, started: started)
         }
     }
 
@@ -660,8 +647,9 @@ final class GestureController {
                   Preferences.selection.contains(.desktopDelete),
                   let app = NSWorkspace.shared.frontmostApplication,
                   app.processIdentifier == folder.finder || app == folder.foreground else { return }
-            if let reference = self.backgroundFolderReference(folder), NSWorkspace.shared.frontmostApplication == app {
-                self.recycleNewFolder(reference, createdAfter: folder.chosenAt, started: started)
+            if let reference = self.newFolderReference(folder), NSWorkspace.shared.frontmostApplication == app,
+               (try? FileReference(url: reference.url)) == reference {
+                self.recycleNewFolder(reference, started: started)
             } else if ProcessInfo.processInfo.systemUptime - started < 0.5 {
                 self.trashAfterNewFolder(folder, key: key, pointer: pointer, started: started)
             } else {
