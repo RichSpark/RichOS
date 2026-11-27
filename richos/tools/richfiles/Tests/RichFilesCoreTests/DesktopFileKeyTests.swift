@@ -5,9 +5,8 @@ import XCTest
 
 final class DesktopFileKeyTests: XCTestCase {
     func testOnlyTheInitialNewFolderShortcutStartsTracking() throws {
-        let key = try key(kVK_ANSI_N)
-        let letter = Array("N".utf16)
-        key.keyboardSetUnicodeString(stringLength: letter.count, unicodeString: letter)
+        let keys = try (0...47).map { try key($0) }
+        let key = try XCTUnwrap(keys.first { menuCharacter($0) == "n" })
         key.flags = [.maskCommand, .maskShift]
         XCTAssertEqual(DesktopFileKey.classify(key), .newFolder)
 
@@ -20,14 +19,17 @@ final class DesktopFileKeyTests: XCTestCase {
         XCTAssertEqual(DesktopFileKey.classify(key), .passThrough)
     }
 
-    func testNewFolderShortcutUsesTheCharacterRatherThanTheQWERTYKey() throws {
-        for (code, letter, expected) in [(kVK_ANSI_L, "N", DesktopFileKey.newFolder), (kVK_ANSI_N, "B", .passThrough)] {
+    func testNewFolderShortcutUsesSystemDerivedCommandCharacters() throws {
+        for code in 0...47 {
             let event = try key(code)
             event.flags = [.maskCommand, .maskShift]
-            let units = Array(letter.utf16)
-            event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+            let expected: DesktopFileKey = menuCharacter(event) == "n" ? .newFolder : .passThrough
             XCTAssertEqual(DesktopFileKey.classify(event), expected)
         }
+    }
+
+    private func menuCharacter(_ event: CGEvent) -> String? {
+        NSEvent(cgEvent: event)?.characters(byApplyingModifiers: [.command, .shift])?.lowercased()
     }
 
     func testDesktopDefaultsAndIndependentOptOutsSurviveUpgradeAndRelaunch() throws {

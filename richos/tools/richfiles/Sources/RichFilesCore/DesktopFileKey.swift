@@ -12,9 +12,12 @@ public enum DesktopFileKey {
         guard event.type == .keyDown else { return .passThrough }
         let pressed = event.flags.intersection(modifiers)
         let repeated = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
-        // Finder's menu equivalent follows the character in the active layout.
+        // Finder uses the layout's Command mapping, which can differ from
+        // the character produced with only Shift held.
         if pressed == [.maskCommand, .maskShift], !repeated,
-           NSEvent(cgEvent: event)?.charactersIgnoringModifiers?.lowercased() == "n" { return .newFolder }
+           NSEvent(cgEvent: event)?.characters(byApplyingModifiers: [.command, .shift])?.lowercased() == "n" {
+            return .newFolder
+        }
         guard pressed.isEmpty else { return .passThrough }
         switch Int(event.getIntegerValueField(.keyboardEventKeycode)) {
         case kVK_Delete:
