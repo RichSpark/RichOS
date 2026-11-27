@@ -17258,7 +17258,7 @@
     },
     "scripts/hooks/dialect-guard.test.sh": {
       "source": "scripts/hooks/dialect-guard.test.sh",
-      "sha256": "0d2eb3640ad58c0e5733a848aacc6269b5c7a890bce1b916b05aebccdbd9ae55",
+      "sha256": "1874996deb9ca5a27194ded70921e6d4230388800cb3ce82b5ffe775fd5ed600",
       "evidence": "The default seat is the real engine, so its four downstream config reads remain dependencies. Later entity fixtures override dialect values without removing the default-seat coverage. Registration, installer and vocabulary inventory assertions read source/data. V8-V12 use the parent vendoring registry as data. The finite mutation driver executes the same suite in a copied engine. Added cases pass vocabulary paths as payload data and the source inventory excludes two exact generated fixture paths; no new executable reader. Renewed 2026-10-01: B35 (the malformed payload) is seated on a sandbox copy of the engine's orchestration.config instead of the engine, so its unevaluated-payload log line lands in the sandbox; the same guard and the same config bytes are read. Renewed 2026-10-24 (zach-opus-dialectb1, renamed from guard-dialect.test.sh): cases for fixes (updatedInput), refusals, Edit context, file bytes and the keyed sample; the keyed sample and the fixer are read as data (scripts/lib/dialect/fixtures/british-keyed.txt, scripts/lib/dialect/dialect-fix.py imported by path), and sandbox engine copies (D5b, D5c, D7) are built under its own temporary directory with a copy of the engine's orchestration.config. E8 runs the hook from the checkout root with no entity override and reads richos/engine/orchestration.config through the hook's own resolution, as before for every case. No new configuration key.",
       "keys": [],
       "edges": [
