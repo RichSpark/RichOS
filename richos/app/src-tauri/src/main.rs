@@ -5441,6 +5441,10 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
     )
     .map_err(|e| e.to_string())?;
     let states = state.work.assignment_activity(&rows);
+    // A job written before the app opened, in a chat he has not acted in since, is held by the
+    // one rule (richos-core `turn_gate`): its handoff goes when he writes there. It waits to
+    // start; the composer's line must not say it is starting.
+    let waits = state.turn_gate.waits(&thread_id);
     Ok(serde_json::json!({
         "assignments": rows.iter().zip(states).map(|(row, activity)| {
             use richos_core::assignment::AssignmentState;
@@ -5478,6 +5482,7 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
                 "repositories": row.repositories,
                 "registeredAtMs": row.registered_at_ms,
                 "canStop": row.reported_state().is_some() && row.accepts_input(),
+                "held": waits && row.updated_at_ms < state.turn_gate.since_ms(),
             })
         }).collect::<Vec<_>>()
     }))

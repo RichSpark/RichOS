@@ -183,6 +183,10 @@ struct Backend {
     /// first, once their chat opens, even after later input has moved the scan past them. Its own
     /// lock, never taken while waiting on [`Self::inner`].
     gate_held: Mutex<std::collections::BTreeSet<u64>>,
+    /// Inbox rows whose delivery the app's end cut off ([`WorkHost::next_for_stu`]), read at
+    /// this back end's first selection; `None` until read. Its own lock, like
+    /// [`Self::gate_held`].
+    cut_off: Mutex<Option<std::collections::BTreeSet<u64>>>,
 }
 impl Backend {
     fn new() -> Arc<Self> {
@@ -191,6 +195,7 @@ impl Backend {
             moving: Mutex::new(()),
             lease: Mutex::new(None),
             gate_held: Mutex::new(Default::default()),
+            cut_off: Mutex::new(None),
             inner: Mutex::new(Inner::default()),
             wake: Condvar::new(),
         })
@@ -256,7 +261,8 @@ impl WorkHost {
         gate.when_a_chat_opens(Arc::new(move || {
             let Some(host) = host.upgrade() else { return };
             let backends: Vec<_> = host.backends.lock().unwrap().values().cloned().collect();
-            for backend in backends.iter().filter(|backend| !backend.gate_held.lock().unwrap().is_empty()) {
+            for backend in backends.iter().filter(|backend| !backend.gate_held.lock().unwrap().is_empty()
+                || backend.cut_off.lock().unwrap().as_ref().is_some_and(|rows| !rows.is_empty())) {
                 backend.wake.notify_all();
             }
         }));
@@ -1140,6 +1146,33 @@ impl WorkHost {
     fn next_for_stu(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding, mut after: u64,
         released: &mut Vec<u64>, given: &std::collections::HashSet<u64>) -> Result<Option<(crate::session_tools::Message, u64)>, String> {
         let scope = self.message_scope(binding);
+        // WORK THE APP'S END CUT OFF (the CEO's standing default: paused until he writes in this
+        // chat, then it carries on). An input given to a session by an earlier run whose turn
+        // never ended, read at this back end's first selection, before this process begins any
+        // attempt. That session's record usually holds it already, so it reads as given; but a
+        // resumed session does not carry on by itself, so once he has acted here it is given
+        // again, naming the cut attempt (`run_message`'s `previous_delivery_attempt`), once.
+        // Only where the one rule is set, which is the app.
+        let cut_off: Vec<u64> = match self.turn_gate.get() {
+            None => Vec::new(),
+            Some(_) => backend.cut_off.lock().unwrap()
+                .get_or_insert_with(|| crate::session_tools::cut_off_inputs(&scope, "stu").unwrap_or_default())
+                .iter().copied().collect(),
+        };
+        for &through in &cut_off {
+            if !crate::turn_gate::allows(&self.turn_gate, binding, crate::turn_gate::Origin::CarriesOn) {
+                break;
+            }
+            if let Some(rows) = backend.cut_off.lock().unwrap().as_mut() {
+                rows.remove(&through);
+            }
+            backend.gate_held.lock().unwrap().remove(&through);
+            let message = crate::session_tools::saved_input(&scope, "stu", through)?;
+            if !self.held_for_screen(backend, binding, &message, through) {
+                return Ok(Some((message, through)));
+            }
+        }
+        let cut_off: std::collections::HashSet<u64> = backend.cut_off.lock().unwrap().iter().flatten().copied().collect();
         // Held by the one rule before: given now, oldest first, if the user has been active in
         // this chat since.
         let held: Vec<u64> = backend.gate_held.lock().unwrap().iter().copied().collect();
@@ -1164,7 +1197,8 @@ impl WorkHost {
             let Some((message, through)) = crate::session_tools::pending_after(&scope, "stu", after)? else {
                 return Ok(None);
             };
-            if given.contains(&through) {
+            // Cut-off input is given from above, and only from there.
+            if given.contains(&through) || cut_off.contains(&through) {
                 after = through;
                 continue;
             }
@@ -3405,6 +3439,10 @@ mod tests {
             crate::session_tools::begin_attempt(&scope, "stu", &format!("peer:{through}"), "prior-session").unwrap();
             if stopped {
                 crate::session_tools::stop_open_attempts(&scope, "stu").unwrap();
+            } else {
+                // As on the real app: the cut session's own record holds the input, which made
+                // it read as given forever, so nothing ever gave Stu a turn to carry it on.
+                crate::session_tools::mark_received(&scope, "stu", &format!("peer:{through}")).unwrap();
             }
             // load-bound: this only moves the millisecond clock past what was saved; host load makes the gap larger, never smaller.
             std::thread::sleep(std::time::Duration::from_millis(3));
@@ -3429,6 +3467,8 @@ mod tests {
                 // A third of the idle check's 30 s (`ACCOUNT_CHECK_EVERY`).
                 assert!(acted.elapsed() < std::time::Duration::from_secs(10), "carried on at the idle check, not at his act: {:?}", acted.elapsed());
                 assert!(!gate.cut_off(h.binding.thread_id()));
+                let prompt = h.work_prompts.lock().unwrap().iter().find(|prompt| prompt.contains("cut off by the quit")).cloned().unwrap();
+                assert!(prompt.contains("prior-session"), "the carried-on input does not name the cut attempt: {prompt}");
             }
             h.host.shutdown();
             std::fs::remove_dir_all(&h.root).unwrap();

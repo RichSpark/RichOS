@@ -166,6 +166,12 @@ fn facts(
             let Some(status) = activity.state else { continue };
             result.unconfirmed_assignments |= status == AssignmentState::Unknown;
             newest_progress = newest_progress.max(job.registered_at_ms);
+            // A job the app's end cut off (its record still says it was starting or running)
+            // starts nothing by itself until he acts here: the rule holds its handoff.
+            if gate.waits(&row.id) && job.updated_at_ms < gate.since_ms() && matches!(job.reported_state(),
+                Some(AssignmentState::Registered | AssignmentState::Preparing | AssignmentState::Running)) {
+                cut_off = true;
+            }
             match status {
                 AssignmentState::Blocked => {
                     earliest(&mut result.waiting_since, job.updated_at_ms);
@@ -218,7 +224,10 @@ fn facts(
     result.resume_at = reset.filter(|_| result.paused).map(|(at, _)| at);
     // Work the app's end cut off, paused until he writes here: nothing runs, so the chat says
     // "Paused", never "Working".
-    let cut_off = cut_off && !result.paused && result.waiting_since.is_none() && result.stopped_at.is_none();
+    // Work that does run now in this chat (input that arrived while the app is open) is
+    // shown as working instead.
+    let cut_off = cut_off && result.working_since.is_none() && !result.paused
+        && result.waiting_since.is_none() && result.stopped_at.is_none();
     if cut_off {
         result.paused = true;
         result.working_since = None;
