@@ -42,7 +42,8 @@ its exit status, its output and the clock, so a walk's evidence is one file and 
                                        column's resize handle, a window's title bar; the nightly 114 walk);
                                        "within": true with "find" reads every point as a "dx,dy" offset
                                        from the found control's center and starts at the first of them:
-                                       a drag inside a canvas, such as RichGlance's picture (round 108);
+                                       a drag inside a canvas needs two distinct offsets (one is enough
+                                       with "hover");
                                        "cmd": true holds Command on a left click or drag: a Command-click
                                        adds an item to a Finder selection (the Desktop Forward Delete walk)
   openlink pattern [app] [seconds]     read the app window's tree until an https:// address containing
@@ -63,6 +64,7 @@ step lists are checked by steps-walk-data.test.sh.
 """
 import argparse
 import json
+import math
 from pathlib import Path
 import re
 import subprocess
@@ -152,10 +154,9 @@ def step_run(vm, step, out):
                                            for dx, dy in (pt.split(',') for pt in points)]
             else:
                 points.append(f'{cx},{cy}')
-            if len(points) == 1 and not (step.get('hover') or step.get('double') or step.get('scroll')):
-                # No points of its own and nothing else asked: a click on the found control, the
-                # same point twice (a Dock icon, found in the Dock's own tree).
-                points.append(points[0])
+                if len(points) == 1 and not (step.get('hover') or step.get('double') or step.get('scroll')):
+                    # A click on the found control alone uses its center twice.
+                    points.append(points[0])
         return run([str(HERE / 'pointer-drag.sh'), vm] + points + (['--right'] if step.get('right') else [])
                    + (['--hover'] if step.get('hover') else [])
                    + (['--scroll', str(step['scroll'])] if step.get('scroll') else [])
@@ -218,6 +219,16 @@ OPTIONAL = {'tree': {'app': str}, 'shot': {'ocr': bool}, 'handfile': {'to': str}
             'until': {'seconds': (int, float)}, '*': {'allow_fail': bool}}
 
 
+def finite_point(point):
+    if not isinstance(point, str):
+        return False
+    try:
+        x, y = map(float, point.split(',', 1))
+    except ValueError:
+        return False
+    return math.isfinite(x) and math.isfinite(y)
+
+
 def problems(steps):
     """Every defect of a step list, as sentences; an empty list means each step is runnable."""
     if not isinstance(steps, list) or not steps:
@@ -246,6 +257,14 @@ def problems(steps):
             found.append(f'step {i} (pointer): "within" reads "points" as "dx,dy" offsets of whole numbers from the '
                          f'"find" control\'s center, needs at least one, and takes no "from", "scroll" or "double"')
             continue
+        if op == 'pointer' and step.get('within') is True and step.get('hover') is not True:
+            try:
+                distinct = {tuple(map(int, pt.split(','))) for pt in step['points']}
+            except ValueError:
+                distinct = set()
+            if len(distinct) < 2:
+                found.append(f'step {i} (pointer): "within" needs two distinct "dx,dy" offsets for a drag')
+                continue
         if op == 'pointer' and step.get('from') is True and (
                 not found_point or not isinstance(step.get('points'), list) or not step['points']
                 or step.get('scroll') or step.get('double') or step.get('hover') is True
@@ -254,6 +273,10 @@ def problems(steps):
             found.append(f'step {i} (pointer): "from" starts a drag on the "find" control and needs at least one '
                          f'"dx,dy" offset of whole numbers in "points", one of them not "0,0" (that is a click), '
                          f'with no "scroll", "double" or "hover"')
+            continue
+        if op == 'pointer' and isinstance(step.get('points'), list) and (
+                not step.get('within') and not step.get('from') and not all(map(finite_point, step['points']))):
+            found.append(f'step {i} (pointer): "points" must be "x,y" pairs of finite numbers')
             continue
         if op == 'pointer' and isinstance(step.get('scroll'), int) and not isinstance(step.get('scroll'), bool) and (
                 not -50 <= step['scroll'] <= 50 or step['scroll'] == 0
@@ -276,8 +299,7 @@ def problems(steps):
         elif op == 'pointer' and step.get('ctrl') is True and not step.get('scroll'):
             found.append(f'step {i} (pointer): "ctrl" holds Control on a wheel turn, so it needs "scroll"')
         elif op == 'pointer' and isinstance(step.get('points'), list) and not step.get('scroll') and not step.get('double') and (
-                len(step['points']) + found_point < (1 if step.get('hover') is True or (found_point and not step['points']) else 2)
-                or not all(isinstance(pt, str) and pt.count(',') == 1 for pt in step['points'])):
+                len(step['points']) + found_point < (1 if step.get('hover') is True or (found_point and not step['points']) else 2)):
             found.append(f'step {i} (pointer): \'points\' needs at least two "x,y" strings (the same one twice is a click; '
                          f'one is enough with "hover", and "find" supplies the last one)')
     return found
