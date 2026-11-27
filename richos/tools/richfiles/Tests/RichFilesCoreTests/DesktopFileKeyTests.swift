@@ -5,7 +5,9 @@ import XCTest
 
 final class DesktopFileKeyTests: XCTestCase {
     func testOnlyTheInitialNewFolderShortcutStartsTracking() throws {
-        let key = try XCTUnwrap(CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(kVK_ANSI_N), keyDown: true))
+        let key = try key(kVK_ANSI_N)
+        let letter = Array("N".utf16)
+        key.keyboardSetUnicodeString(stringLength: letter.count, unicodeString: letter)
         key.flags = [.maskCommand, .maskShift]
         XCTAssertEqual(DesktopFileKey.classify(key), .newFolder)
 
@@ -16,6 +18,16 @@ final class DesktopFileKeyTests: XCTestCase {
         XCTAssertEqual(DesktopFileKey.classify(key), .passThrough)
         key.flags = [.maskCommand]
         XCTAssertEqual(DesktopFileKey.classify(key), .passThrough)
+    }
+
+    func testNewFolderShortcutUsesTheCharacterRatherThanTheQWERTYKey() throws {
+        for (code, letter, expected) in [(kVK_ANSI_L, "N", DesktopFileKey.newFolder), (kVK_ANSI_N, "B", .passThrough)] {
+            let event = try key(code)
+            event.flags = [.maskCommand, .maskShift]
+            let units = Array(letter.utf16)
+            event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+            XCTAssertEqual(DesktopFileKey.classify(event), expected)
+        }
     }
 
     func testDesktopDefaultsAndIndependentOptOutsSurviveUpgradeAndRelaunch() throws {
