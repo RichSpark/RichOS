@@ -7520,22 +7520,23 @@ def _keep_ignored(rec, chain, deadline=None):
     plan = [x for x in plan if not _is_ack(x[3])]
     if not plan and not acks:
         return ""
-    # A MOVE, NEVER A COPY: inside a gate's budget only a rename is bounded.
-    # A workspace on another volume than the registry keeps the old answer
-    # (the land waits, and pending() now says why).
-    try:
-        here = os.stat(state_dir()).st_dev
-        if any(os.stat(p).st_dev != here for _k, _l, p, _r in plan):
+    root = ""
+    if plan:
+        # Only files being moved require an archive on the same volume.
+        # A rename keeps the move within the gate's budget.
+        try:
+            here = os.stat(state_dir()).st_dev
+            if any(os.stat(p).st_dev != here for _k, _l, p, _r in plan):
+                return ""
+        except OSError:
             return ""
-    except OSError:
-        return ""
-    archive = _p("kept")
-    try:
-        os.makedirs(archive, exist_ok=True)
-        root = tempfile.mkdtemp(prefix="%s-%d-" % (_key_segment(rec["key"]), int(now())), dir=archive)
-    except OSError as e:
-        raise SpecError("cannot land %s: the ignored-file archive %s could not be opened (%s)"
-                        % (rec["name"], archive, e)) from e
+        archive = _p("kept")
+        try:
+            os.makedirs(archive, exist_ok=True)
+            root = tempfile.mkdtemp(prefix="%s-%d-" % (_key_segment(rec["key"]), int(now())), dir=archive)
+        except OSError as e:
+            raise SpecError("cannot land %s: the ignored-file archive %s could not be opened (%s)"
+                            % (rec["name"], archive, e)) from e
     moved, dropped = [], []
     # An entry that holds the ack directory (a `.claude/` the main checkout
     # lacks) loses the acks first, so they are not kept inside it.

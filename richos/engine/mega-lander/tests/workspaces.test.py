@@ -9206,6 +9206,41 @@ class HuntV5_01_WorkspaceOwnership(Base):
 
 
 class HuntV5_03_PreservationRetries(Base):
+    def test_ack_only_cleanup_does_not_use_the_archive(self):
+        with open(os.path.join(self.other, ".gitignore"), "a") as f:
+            f.write(".claude/\n")
+        run("git", "-C", self.other, "commit", "-qam", "Ignore acknowledgment files")
+        os.makedirs(os.path.join(self.other, ".claude"))
+        archive = os.path.join(ws.state_dir(), "kept")
+        with open(archive, "w") as f:
+            f.write("archive unavailable")
+        for case in ("blocked", "missing"):
+            with self.subTest(archive=case):
+                if case == "missing" and os.path.isfile(archive):
+                    os.unlink(archive)
+                name = "zach-opus-ack-" + case
+                path = self.make_cc(name)
+                aid, _native = self.spawn(name, cc=path)
+                ack = ".claude/inflight-acks/abc123abc123." + name + ".ack"
+                os.makedirs(os.path.dirname(os.path.join(path, ack)))
+                with open(os.path.join(path, ack), "w") as f:
+                    f.write("fixture acknowledgment")
+                self.finish(aid)
+                self.assertEqual(ws.uncommitted(path), ([], [ack]))
+
+                with patch.object(ws, "now", return_value=1800000000):
+                    result = ws.land(name, self.sid, keep_ignored=True)
+                self.assertTrue(result["landed"])
+                self.assertFalse(result.get("cleanup_pending"))
+                self.assertFalse(result.get("kept_ignored"))
+                self.assertFalse(os.path.exists(path))
+                self.assertNotIn("cc/" + name, branches(self.other))
+                if case == "blocked":
+                    with open(archive) as f:
+                        self.assertEqual(f.read(), "archive unavailable")
+                else:
+                    self.assertFalse(os.path.exists(archive))
+
     def test_archive_unavailable_keeps_files_pending_and_the_gate_continues(self):
         blocked = "zach-opus-archive"
         aid, path = self.spawn(blocked)
