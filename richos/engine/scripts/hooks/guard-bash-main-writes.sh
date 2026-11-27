@@ -196,11 +196,20 @@ if not prefixes:
 cwd = d.get('cwd') or ROOT
 ROOT = os.path.realpath(ROOT)
 
+def resolve_path(base, path):
+    if os.path.isabs(path):
+        return os.path.realpath(path)
+    if base is not None:
+        return os.path.realpath(os.path.join(base, path))
+    return None
+
 def check_targets(tokens, base):
     for tok in tokens:
         if not tok or tok.startswith('-'):
             continue
-        target = os.path.realpath(os.path.join(base, os.path.expanduser(tok)))
+        target = resolve_path(base, os.path.expanduser(tok))
+        if target is None:
+            return 'unknown-current-directory'
         for prefix in prefixes:
             protected = os.path.join(ROOT, prefix.strip('/'))
             if target == protected or target.startswith(protected + os.sep):
@@ -345,9 +354,9 @@ def verb_and_args(stmt, base):
         i = 0
         while i < len(rest) and rest[i].startswith('-'):
             if rest[i] == '-C' and i + 1 < len(rest):
-                location = os.path.realpath(os.path.join(location, rest[i + 1]))
+                location = resolve_path(location, rest[i + 1])
             elif rest[i].startswith('-C') and len(rest[i]) > 2:
-                location = os.path.realpath(os.path.join(location, rest[i][2:]))
+                location = resolve_path(location, rest[i][2:])
             i += 2 if rest[i] in ('-C', '-c', '--git-dir', '--work-tree') else 1
         if i < len(rest) and rest[i] in ('rm', 'mv'):
             return rest[i], rest[i + 1:], location
@@ -540,8 +549,9 @@ def command_flow(text):
     return commands((), 0)
 
 
-def inspect(text, bases, depth=0, docs=None):
-    if depth > 6 or not bases:
+def inspect(text, directories, depth=0, docs=None):
+    # Every reachable branch carries its own (cwd, previous cwd) pair.
+    if depth > 6 or not directories:
         return
     if docs is None:
         text, docs = heredoc_projection(text)
@@ -552,10 +562,11 @@ def inspect(text, bases, depth=0, docs=None):
         bodies = docs.get(tuple(st), [])
         body = bodies.pop(0) if bodies else None
         good, bad = set(), set()
-        for base in incoming:
+        for base, previous in incoming:
+            state = (base, previous)
             verb, args, location = verb_and_args(st, base)
             if body is not None and verb in ('bash', 'sh', 'zsh', 'dash', 'ksh'):
-                inspect(body, {base}, depth + 1)
+                inspect(body, {(base, None)}, depth + 1)
             hit = check_targets(redirects, base)
             if not hit and verb in ('mkdir', 'cp', 'mv', 'rm', 'tee', 'touch', 'rsync'):
                 hit = check_targets(write_targets(verb, args), location)
@@ -564,11 +575,12 @@ def inspect(text, bases, depth=0, docs=None):
             if verb == 'cd':
                 dest = [arg for arg in args if arg not in ('--', '-P', '-L')]
                 target = dest[0] if dest else os.path.expanduser('~')
-                good.add(os.path.realpath(os.path.join(base, os.path.expanduser(target))))
+                destination = previous if target == '-' else resolve_path(base, os.path.expanduser(target))
+                good.add((destination, base))
             elif literal != 'false':
-                good.add(base)
+                good.add(state)
             if literal not in ('true', ':'):
-                bad.add(base)
+                bad.add(state)
         if st and st[0] == '!':
             return bad, good
         return good, bad
@@ -624,18 +636,19 @@ def inspect(text, bases, depth=0, docs=None):
         commands = command_flow(text)
     except ValueError:
         # Other compound syntax (for example case patterns) still gets target
-        # checking. Keep both cwd outcomes when its control flow is unknown.
+        # checking. Keep both directory states when its control flow is unknown.
         for st, redirects, nested in statements(text):
-            good, bad = simple(st, redirects, nested, bases)
-            bases = good | bad | bases
-            if len(bases) > 64:
+            good, bad = simple(st, redirects, nested, directories)
+            directories = good | bad | directories
+            if len(directories) > 64:
                 raise ValueError('too many possible shell directories')
     else:
-        run_list(commands, bases)
+        run_list(commands, directories)
 
 
 try:
-    inspect(cmd, {cwd})
+    # The tool payload provides cwd but does not provide the shell's OLDPWD.
+    inspect(cmd, {(cwd, None)})
 except ValueError:
     print('BLOCK unreadable-shell-syntax'); raise SystemExit
 
@@ -650,8 +663,12 @@ case "$RESULT" in
   PASS) exit 0 ;;
   BLOCK*)
     echo "=== guard-bash-main-writes: BLOCKED ===" >&2
-    echo "  This Bash command writes into the MAIN checkout's SOURCE tree" >&2
-    echo "  (protected trees: $PROTECTED_PATHS) — reason: $RESULT." >&2
+    if [ "$RESULT" = 'BLOCK unknown-current-directory' ]; then
+        echo "  A relative write follows cd - with no known previous directory." >&2
+    else
+        echo "  This Bash command writes into the MAIN checkout's SOURCE tree" >&2
+        echo "  (protected trees: $PROTECTED_PATHS) — reason: $RESULT." >&2
+    fi
     echo "  Source is edited ONLY inside your own worktree:" >&2
     echo "    $ENTITY_ROOT/.claude/worktrees/<your-agent-id>/<tree>/..." >&2
     echo "  Use ABSOLUTE paths under your worktree for every file operation; never" >&2
