@@ -92,6 +92,7 @@ die() { echo "gui-proof-in-vm.sh: $*" >&2; exit 2; }
 # ---------------------------------------------------------------------------------------
 if [ -n "$RUN_ID" ]; then
   [ -z "$BUNDLE" ] || die "--run and --bundle name the same thing two ways; give one."
+  case "$RUN_ID" in */*|.|..) die "a valid --run <run-id> is required" ;; esac
   POINTER="$STATE_DIR/runs/$RUN_ID.json"
   [ -f "$POINTER" ] || die "no recorded build for run $RUN_ID at $POINTER; run \`nightly-local.py build\` first."
   CAND_DIR="$(/usr/bin/python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["out"])' "$POINTER")" \
@@ -101,15 +102,21 @@ if [ -n "$RUN_ID" ]; then
   # THE COMMIT IS READ OUT OF THE CANDIDATE, never passed in beside it. A sha a caller
   # types is a sha a caller can mistype, and the one thing `publish` checks is that this
   # proof is about THAT tree.
-  eval "$(/usr/bin/python3 - "$CANDIDATE" <<'PY'
+  FIELDS="$(/usr/bin/python3 - "$CANDIDATE" "$RUN_ID" <<'PY'
 import json, shlex, sys
 info = json.load(open(sys.argv[1]))["info"]
+run = info.get("run_id")
+if not run:
+    raise SystemExit(f"{sys.argv[1]} does not record a run ID for the requested run {sys.argv[2]}")
+if run != sys.argv[2]:
+    raise SystemExit(f"run {sys.argv[2]} was superseded at {sys.argv[1]} by run {run}")
 commit = info.get("build_commit") or info["source_commit"]
 print(f"COMMIT={shlex.quote(commit)}")
 print(f"VERSION={shlex.quote(info['version'])}")
 print(f"TAG={shlex.quote(info['tag'])}")
 PY
-)" || die "could not read $CANDIDATE"
+)" || die "could not use $CANDIDATE for run $RUN_ID"
+  eval "$FIELDS"
   # make-release.sh's own ARCH mapping; this Mac is Apple Silicon only.
   BUNDLE="$CAND_DIR/RichOS-$VERSION-macos-aarch64.zip"
   [ -f "$BUNDLE" ] || die "the candidate has no first-install archive at $BUNDLE"
@@ -155,7 +162,11 @@ fi
 
 [ -n "$VM" ] || VM="richos-gui-proof-$$"
 [ -n "$OUT" ] || OUT="$STATE_DIR/gui-proofs/${RUN_ID:-$COMMIT}.proof"
-mkdir -p "$(dirname "$OUT")" || die "cannot create $(dirname "$OUT")"
+[ ! -d "$OUT" ] || die "proof destination is a directory: $OUT"
+mkdir -p "$OUT.attempts" || die "cannot create $OUT.attempts"
+ATTEMPT="$(mktemp -d "$OUT.attempts/attempt-$(date +%s)-XXXXXX")" || die "cannot create a proof attempt"
+PROOF="$ATTEMPT/boot.proof"
+echo "gui-proof-in-vm.sh: attempt evidence: $ATTEMPT"
 
 # ---------------------------------------------------------------------------------------
 # Scratch, and the promise that none of it outlives this script (CEO ruling §54)
@@ -239,7 +250,7 @@ fi
 cat "$WORK/run.out"
 
 if [ "$RESULT" = pass ] && [ "$SCREEN_SUITES" = 1 ]; then
-  RESULTS="$OUT.suites"
+  RESULTS="$PROOF.suites"
   # This is the pid returned by this run.sh, inside this guest. End only that app before
   # front-door owns the foreground. stop.sh still owns the eventual clone cleanup.
   APP_PID="$(sed -n 's/^vm=.* pid=\([0-9][0-9]*\) .*$/\1/p' "$WORK/run.out" | tail -1)"
@@ -252,8 +263,6 @@ if [ "$RESULT" = pass ] && [ "$SCREEN_SUITES" = 1 ]; then
   esac
   if [ "$RESULT" = pass ]; then
     mkdir -p "$RESULTS" || die "cannot create screen results at $RESULTS"
-    # Remove only these previous verdicts. A failed transfer must not read an old pass.
-    rm -f "$RESULTS/front-door.rc" "$RESULTS/gui-boot.test.sh.rc"
     RICHOS_TEST_RESULTS_DIR="$RESULTS" "$TESTVM/run-suite.sh" "$VM" "$HERE/gui-boot.test.sh" \
       --existing-guest "$VM" --release "$CAND_DIR" 2>&1 | tee "$WORK/suites.out"
     SUITE_PIPE=("${PIPESTATUS[@]}")
@@ -284,18 +293,27 @@ fi
   echo "--- output ---"
   cat "$WORK/run.out" 2>/dev/null
   cat "$WORK/suites.out" 2>/dev/null || true
-} > "$OUT"
+} > "$PROOF" || die "cannot write the proof at $PROOF"
+
+# Keep the caller's output path as a pointer to the last completed report. A legacy
+# regular file and its suite evidence are kept when converting that path to a pointer.
+if [ -f "$OUT" ] && [ ! -L "$OUT" ]; then
+  cp -p "$OUT" "$ATTEMPT/previous.proof" || die "cannot preserve the previous proof at $OUT"
+fi
+ln -s "$(basename "$OUT").attempts/$(basename "$ATTEMPT")/boot.proof" "$ATTEMPT/latest" \
+  || die "cannot create a pointer to $PROOF"
+mv -f "$ATTEMPT/latest" "$OUT" || die "cannot update $OUT to point to $PROOF"
 
 echo ""
 if [ "$RESULT" = "pass" ]; then
   echo "  PASS  the candidate's own signed bundle started in a clean guest and drew $WINDOWS window(s)"
   [ "$SCREEN_SUITES" = 0 ] || echo "  PASS  front-door --release and gui-boot both passed in that same guest; results: $RESULTS"
-  echo "  proof: $OUT"
+  echo "  proof: $PROOF"
   echo ""
-  echo "  nightly-local.py publish --run ${RUN_ID:-<run-id>} --gui-proof $OUT"
+  echo "  nightly-local.py publish --run ${RUN_ID:-<run-id>} --gui-proof $PROOF"
   exit 0
 fi
 echo "  FAIL  the candidate's guest proof did not complete ($RESULT)"
-echo "        The proof records the failure rather than deleting it: $OUT"
+echo "        The proof records the failure rather than deleting it: $PROOF"
 echo "        publish will refuse it. Read the recorded boot and screen-suite output."
 exit 1

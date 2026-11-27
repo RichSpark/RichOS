@@ -1566,7 +1566,8 @@ while True: time.sleep(.02)
         r.gates.assert_not_called()
         self.assertEqual(set(r.skipped), set(m.GATE_NAMES) - {"gates/release-smoke"})
         self.assertEqual(sum(call.args[2] == "release-smoke" for call in r.command.call_args_list), 1)
-        r.only_the_checker_changed.assert_called_once_with(checker_sha, [self.SOURCE])
+        self.assertEqual([c.args for c in r.only_the_checker_changed.call_args_list],
+                         [(checker_sha, [self.SOURCE])] * 2)
         self.assertEqual(r.vm_boot_proof.call_args.args, (r.env["RICHOS_NIGHTLY_RUN_ID"],))
         self.assertEqual(r.vm_boot_proof.call_args.kwargs["checker"].name, "checker")
         self.assertTrue(any(c.args[:4] == ("git", "worktree", "add", "--detach")
@@ -1589,6 +1590,44 @@ while True: time.sleep(.02)
         receipt.with_suffix(".sha256").write_text(m.hashlib.sha256(receipt.read_bytes()).hexdigest() + "\n")
         with self.assertRaisesRegex(ValueError, "does not match its published seal"):
             r.recover_stable_gates(nightly, self.SOURCE)
+
+    def test_stable_resume_reuses_the_checker_selected_at_build(self):
+        self.recorded_run(grade="build")
+        r = self.stable_runner()
+        nightly = {"run_id": self.RESUMED, "build_commit": "a" * 40}
+        checker_sha = "c" * 40
+        proof = r.gui_proof_path(self.RESUMED)
+        proof.parent.mkdir(parents=True)
+        proof.write_text("richos-gui-proof 1\nsuite=shipped-bundle-boot\nresult=pass\n"
+                         f"commit={nightly['build_commit']}\ngui-boot_commit={checker_sha}\n"
+                         "front-door_exit=0\ngui-boot_exit=0\n")
+        r.only_the_checker_changed = Mock(return_value=True)
+        r.stable_plan.return_value[1]["promoted_nightly_proof"] = nightly
+        r.vm_boot_proof.return_value = "first boot failed"
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(RuntimeError, "first boot failed"):
+            r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
+        self.assertEqual(r.vm_boot_proof.call_args.kwargs["checker"].name, "checker")
+
+        run = r.env["RICHOS_NIGHTLY_RUN_ID"]
+        out, info = r.load_candidate(run)
+        (out / f"RichOS-{info['version']}-macos-aarch64.zip").touch()
+        proof.unlink()
+        resumed = self.runner()
+        resumed.source.mkdir(parents=True, exist_ok=True)
+        resumed.require_clean_dedicated_source = Mock()
+        resumed.restore_build_commit = Mock()
+        resumed.only_the_checker_changed = Mock(return_value=True)
+        resumed.require_gui_proof = Mock(side_effect=[ValueError("outstanding"), None])
+        resumed.require_new_user_walk = Mock()
+        resumed.vm_boot_proof = Mock(return_value=None)
+        with contextlib.redirect_stdout(io.StringIO()):
+            resumed.perform("resume-proofs", run_id=run)
+        resumed.restore_build_commit.assert_called_once_with(info)
+        self.assertEqual(resumed.vm_boot_proof.call_args.args, (run,))
+        self.assertEqual(resumed.vm_boot_proof.call_args.kwargs.get("checker", resumed.source).name, "checker")
+        resumed.command.assert_any_call("git", "worktree", "add", "--detach",
+                                        resumed.vm_boot_proof.call_args.kwargs["checker"], checker_sha,
+                                        cwd=resumed.repo)
 
     def test_stable_reuses_the_gates_of_the_run_that_built_the_promoted_nightly(self):
         # CEO, 2026-10-19: "what fucking checks are there needed if ALL OF THE FUCKING CHECKS
@@ -1951,6 +1990,12 @@ while True: time.sleep(.02)
         self.assertEqual(publisher.command.call_args.args[2], "finish")
 
     # ---- 2026-10-21: a new user's first run is a gate of its own -------------------------
+    PREDECESSOR_VERSION = "1.1.9-nightly.20260915.1"
+
+    def predecessor_archive(self, state):
+        version = self.PREDECESSOR_VERSION
+        return state / "releases" / f"v{version}" / f"RichOS-{version}-macos-aarch64.zip"
+
     def build_that_walks_as_a_new_user(self, steps, boot_result="pass"):
         """A build whose candidate carries the plan's `new_user_walk_required`, as nightly.py
         copies the plan into it, and whose walk writes `steps` as its report."""
@@ -1958,6 +2003,12 @@ while True: time.sleep(.02)
         proof_and_build = r.command.side_effect
 
         def fake_command(*args, **kwargs):
+            if args[2] == "launch-predecessor":
+                archive = self.predecessor_archive(r.state)
+                archive.parent.mkdir(parents=True, exist_ok=True)
+                archive.touch()
+                return json.dumps({"archive": str(archive), "version": self.PREDECESSOR_VERSION,
+                                   "tag": archive.parent.name, "sha256": "e" * 64})
             if str(args[1]).endswith("run-walk.py") and any(str(a).endswith("launch-speed-walk.py") for a in args):
                 # The launch-speed gate's walk (LAUNCH_SPEED_PHASE): a report, and a refusal when
                 # this fixture is told the launch is slow.
@@ -1971,7 +2022,7 @@ while True: time.sleep(.02)
                                 "p95 %d ms over 43 launches." % p95,
                     "summary": {"p95_ms": p95, "limit_ms": 506, "guest_ratio": 1.013, "refused": slow,
                                 "incomplete": False},
-                    "facts": {"version": self.CANDIDATE_INFO["version"], "older": "1.2.6-nightly.20261102.86"},
+                    "facts": {"version": self.CANDIDATE_INFO["version"], "older": self.PREDECESSOR_VERSION},
                     "checks": [{"id": "install-path", "pass": True}]}))
                 if slow:
                     raise RuntimeError("python3 failed (exit 1); see the run log")
@@ -2022,6 +2073,67 @@ while True: time.sleep(.02)
             publisher.perform("publish", run_id="fixture-run-id")
         self.assertEqual(publisher.command.call_args.args[2], "finish")
 
+    def test_proof_retries_preserve_earlier_frames_and_reports_before_admission(self):
+        r = self.runner()
+        run = self.CANDIDATE_INFO["run_id"]
+        out = self.root / "candidate"
+        out.mkdir()
+        info = self.CANDIDATE_INFO
+        legacy_walks = [r.new_user_walk_dir(run), *(r.state / "launch-speed" / f"{run}.{n}" for n in (1, 2))]
+        evidence = {}
+        for walk in legacy_walks:
+            walk.mkdir(parents=True)
+            for path in (walk / "failed.png", walk / "report.json", walk.with_suffix(walk.suffix + ".run.json")):
+                evidence[path] = b"previous failure"
+                path.write_bytes(evidence[path])
+        boot = r.gui_proof_path(run)
+        boot.parent.mkdir(parents=True)
+        evidence[boot] = b"previous boot failure"
+        boot.write_bytes(evidence[boot])
+
+        outputs, homes, reports = set(), set(), set()
+        refused = False
+
+        def command(*args, **kwargs):
+            output = Path(args[args.index("--out") + 1])
+            self.assertNotIn(output, outputs)
+            outputs.add(output)
+            for path, contents in evidence.items():
+                self.assertTrue(path.is_file(), f"retry erased {path}")
+                self.assertEqual(path.read_bytes(), contents)
+            if "--home" in args:
+                home = Path(args[args.index("--home") + 1])
+                report = Path(args[args.index("--report") + 1])
+                self.assertNotIn(home, homes)
+                self.assertNotIn(report, reports)
+                self.assertFalse(any(home.iterdir()))
+                homes.add(home)
+                reports.add(report)
+                if not refused:
+                    output.mkdir(parents=True, exist_ok=True)
+                    for path in (output / "frame.png", output / "report.json", report):
+                        path.write_bytes(b"new failure")
+                        evidence[path] = b"new failure"
+            elif not refused:
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(b"new boot failure")
+                evidence[output] = b"new boot failure"
+            if refused:
+                raise m.GateNotAdmitted("fixture admission refused")
+            raise RuntimeError("fixture attempt failed")
+
+        r.command = command
+        with contextlib.redirect_stdout(io.StringIO()):
+            for refused in (False, True):
+                self.assertIn("WAS NOT PROVEN", r.vm_boot_proof(run))
+                self.assertIn("FIRST RUN OF IT FAILED", r.new_user_walk(run, out, info))
+                self.assertIn("LAUNCH SPEED WAS REFUSED", r.launch_speed_check(run, out, info))
+        self.assertEqual(len(outputs), 8)
+        self.assertEqual(len(homes), 6)
+        self.assertEqual(len(reports), 6)
+        for path, contents in evidence.items():
+            self.assertEqual(path.read_bytes(), contents)
+
     def test_resume_proofs_finishes_only_the_outstanding_proofs_in_build_order(self):
         passed = [{"step": s, "outcome": "PASS"} for s in m.NEW_USER_WALK_STEPS]
         failed = [{"step": "setup", "outcome": "FAIL", "detail": "setup failed"}]
@@ -2031,12 +2143,8 @@ while True: time.sleep(.02)
             first.perform("build", no_host_screen=True)
         out, info = first.load_candidate(run)
         bundle = out / f"RichOS-{info['version']}-macos-aarch64.zip"
-        earlier = first.state / "releases" / "earlier" / "RichOS-earlier-macos-aarch64.zip"
-        later = first.state / "releases" / "later" / "RichOS-later-macos-aarch64.zip"
-        for index, archive in enumerate((earlier, bundle, later), start=1):
-            archive.parent.mkdir(parents=True, exist_ok=True)
-            archive.touch()
-            os.utime(archive, (index, index))
+        bundle.touch()
+        earlier = self.predecessor_archive(first.state)
         first.source.mkdir(parents=True, exist_ok=True)
 
         repair, calls = self.build_that_walks_as_a_new_user(failed)
@@ -2048,7 +2156,7 @@ while True: time.sleep(.02)
         self.assertNotIn("nightly-local.py publish --run", output.getvalue())
         self.assertEqual(self.slot_waits(calls), ["gui-proof-in-vm.sh", "run-walk.py"])
         repair.restore_build_commit.assert_called_once_with(info)
-        boot = repair.gui_proof_path(run)
+        boot = repair.gui_proof_results(run)[0]
         boot_stat = boot.stat()
 
         repair, calls = self.build_that_walks_as_a_new_user(passed)
@@ -2091,7 +2199,7 @@ while True: time.sleep(.02)
             self.assertIn(f"{phase}: present", output.getvalue())
         self.assertTrue(output.getvalue().strip().endswith(f"nightly-local.py publish --run {run}"))
 
-        report = r.new_user_walk_dir(run) / "report.json"
+        report, = r.new_user_walk_dir(run).glob("attempt-*/walk/report.json")
         wrong = json.loads(report.read_text())
         wrong["expect_sha"] = "a" * 40
         report.write_text(json.dumps(wrong))
@@ -2138,7 +2246,7 @@ while True: time.sleep(.02)
             r.perform("build", no_host_screen=True)
         _, info = r.load_candidate("fixture-run-id")
         self.assertIs(info.get("install_path_required"), True)
-        report = r.state / "launch-speed" / "fixture-run-id.1" / "report.json"
+        report, = (r.state / "launch-speed" / "fixture-run-id").glob("attempt-*/walk/report.json")
         measured = json.loads(report.read_text())
         for checks in ([], [{"id": "install-path", "pass": False}]):
             measured["checks"] = checks
@@ -2150,6 +2258,46 @@ while True: time.sleep(.02)
                     self.assertRaisesRegex(ValueError, "missing a passing install path check"):
                 publisher.perform("publish", run_id="fixture-run-id")
             publisher.command.assert_not_called()
+
+    def test_required_launch_walk_uses_the_published_predecessor_or_never_starts(self):
+        r = self.runner()
+        info = {**self.CANDIDATE_INFO, "version": "1.3.9", "tag": "v1.3.9", "channel": "stable",
+                "install_path_required": True}
+        releases = r.state / "releases"
+        out = releases / info["tag"]
+        archives = {}
+        for stamp, version in enumerate(("1.3.8", "1.3.10", "1.3.9"), start=1):
+            archive = releases / f"v{version}" / f"RichOS-{version}-macos-aarch64.zip"
+            archive.parent.mkdir(parents=True)
+            archive.write_bytes(b"inert archive")
+            os.utime(archive, (stamp, stamp))
+            archives[version] = archive
+        older = archives["1.3.8"]
+        selected = {"archive": str(older), "version": "1.3.8", "tag": "v1.3.8", "sha256": "c" * 64}
+        walk_calls = []
+
+        def run(*args, **kwargs):
+            if args[2] == "launch-predecessor":
+                self.assertEqual(args[args.index("--channel") + 1], "stable")
+                self.assertEqual(args[args.index("--version") + 1], "1.3.9")
+                self.assertTrue(kwargs["capture"])
+                return json.dumps(selected)
+            self.assertEqual(Path(args[1]).name, "run-walk.py")
+            walk_calls.append(args[args.index("--previous-bundle") + 1] if "--previous-bundle" in args else None)
+
+        r.command = run
+        with contextlib.redirect_stdout(io.StringIO()):
+            with self.subTest("one published older bundle"):
+                self.assertIsNone(r.launch_speed_check(info["run_id"], out, info))
+                self.assertEqual(walk_calls, [older])
+            walk_calls.clear()
+            selected = None
+            for version in ("1.3.8", "1.3.10"):
+                archives[version].unlink()
+            with self.subTest("no published older bundle"):
+                problem = r.launch_speed_check(info["run_id"], out, info)
+                self.assertEqual(walk_calls, [], "a required walk without a predecessor reached the guest")
+                self.assertIn("no published earlier stable", problem)
 
     def test_a_build_times_its_launch_after_the_new_user_walk_and_states_the_p95(self):
         passed = [{"step": s, "outcome": "PASS"} for s in m.NEW_USER_WALK_STEPS]
@@ -2216,12 +2364,14 @@ while True: time.sleep(.02)
     def test_publish_requires_a_passing_install_path_check_for_new_candidates(self):
         r = self.runner()
         info = {**self.CANDIDATE_INFO, "launch_speed_required": True, "install_path_required": True}
-        report = r.state / "launch-speed" / "fixture-run-id.2" / "report.json"
-        report.parent.mkdir(parents=True, exist_ok=True)
+        root = r.state / "launch-speed" / info["run_id"]
+        attempt = r.new_proof_attempt(root)
+        report = attempt / "walk" / "report.json"
+        report.parent.mkdir()
         result = {
             "sentence": "p95 300 ms against 506 ms",
             "summary": {"p95_ms": 300, "limit_ms": 506, "guest_ratio": 1.013, "refused": False, "incomplete": False},
-            "facts": {"version": info["version"], "older": "1.2.6-nightly.20261102.86"},
+            "facts": {"version": info["version"], "older": self.PREDECESSOR_VERSION},
         }
         for checks in ([], [{"id": "install-path", "pass": False}]):
             result["checks"] = checks
@@ -2230,7 +2380,15 @@ while True: time.sleep(.02)
                 r.require_launch_speed(info, "fixture-run-id")
         result["checks"] = [{"id": "install-path", "pass": True}]
         report.write_text(json.dumps(result))
+        with self.assertRaisesRegex(ValueError, "verified published predecessor"):
+            r.require_launch_speed(info, "fixture-run-id")
+        (attempt / "predecessor.json").write_text(json.dumps({
+            "version": self.PREDECESSOR_VERSION, "tag": f"v{self.PREDECESSOR_VERSION}", "sha256": "e" * 64}))
         self.assertEqual(r.require_launch_speed(info, "fixture-run-id"), result["sentence"])
+        result["facts"]["older"] = "1.2.1-nightly.20260916.2"
+        report.write_text(json.dumps(result))
+        with self.assertRaisesRegex(ValueError, "verified published predecessor"):
+            r.require_launch_speed(info, "fixture-run-id")
 
     def test_publish_holds_the_cold_route_to_its_own_fixed_limit(self):
         # The cold route is judged against 500 ms scaled by the FIXED ratio on record after a purge
@@ -2313,7 +2471,7 @@ while True: time.sleep(.02)
             publisher.perform("publish", run_id="fixture-run-id")
         publisher.command.assert_not_called()
         # No walk at all is refused too; a candidate from before the requirement is not.
-        report = publisher.new_user_walk_dir("fixture-run-id") / "report.json"
+        report, = publisher.new_user_walk_dir("fixture-run-id").glob("attempt-*/walk/report.json")
         report.unlink()
         info = {**self.CANDIDATE_INFO, "new_user_walk_required": True}
         with self.assertRaisesRegex(ValueError, "no new-user walk"):
@@ -2557,6 +2715,36 @@ while True: time.sleep(.02)
         self.assertIn("no public version tag or release-list entry", buf.getvalue())
         self.assertIn("RICHOS_ACTIVATION=regular", buf.getvalue())
         self.assertIn(f"publish --run {self.CANDIDATE_INFO['run_id']}", buf.getvalue())
+
+    def test_a_superseded_stable_run_cannot_open_its_replacement(self):
+        spec = importlib.util.spec_from_file_location("stable_release", Path(m.__file__).with_name("nightly.py"))
+        release = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(release)
+
+        r = self.runner()
+        out = r.state / "releases" / "v1.2.0"
+        out.mkdir(parents=True)
+        old = {**self.CANDIDATE_INFO, "run_id": "older-attempt", "channel": "stable",
+               "tag": "v1.2.0", "reservation_ref": "refs/candidates/stable/v1.2.0"}
+        new = {**old, "run_id": "replacement-attempt", "build_commit": "c" * 40}
+        (out / "build-info.json").write_text(json.dumps(old))
+        (out / "candidate.json").write_text(json.dumps({"info": old}))
+        r.record_run(old["run_id"], out)
+        self.assertEqual(r.load_candidate(old["run_id"]), (out, old))
+
+        release.clear_superseded_stable_attempt(new, out)
+        self.assertFalse(out.exists())
+        out.mkdir()
+        (out / "candidate.json").write_text(json.dumps({"info": new}))
+        r.record_run(new["run_id"], out)
+
+        r.command.reset_mock()
+        for command in ("candidate", "resume-proofs", "publish"):
+            with self.subTest(command=command), self.assertRaisesRegex(
+                    ValueError, "older-attempt.*superseded.*replacement-attempt"):
+                r.perform(command, run_id=old["run_id"])
+        r.command.assert_not_called()
+        self.assertEqual(r.load_candidate(new["run_id"]), (out, new))
 
     def test_publish_and_candidate_require_a_recorded_run(self):
         r = self.runner()

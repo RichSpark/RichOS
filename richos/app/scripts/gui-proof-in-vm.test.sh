@@ -172,6 +172,13 @@ out="$(screen_proof 2>&1)"; rc=$?
   && [ "$(grep -c '^boot$' "$STUB_LOG")" = 1 ] \
   && [ "$(grep -c '^stop proof-vm$' "$STUB_LOG")" = 1 ]; ok=$?
 check "screen suites run in the boot guest, after prebuild, with one cleanup and two green verdicts" "$ok" "rc=$rc $out"
+first_proof="$(readlink "$TMP/screen.proof")"
+case "$first_proof" in /*) ;; *) first_proof="$TMP/$first_proof" ;; esac
+out="$(STUB_FRONT_RC=1 screen_proof 2>&1)"; rc=$?
+[ "$rc" = 1 ] && grep -q '^result=fail:screen-suites$' "$TMP/screen.proof" \
+  && [ -f "$first_proof" ] && grep -q '^result=pass$' "$first_proof" \
+  && grep -qx 0 "$first_proof.suites/front-door.rc"; ok=$?
+check "a retake writes new boot and suite evidence while preserving the first proof and verdicts" "$ok" "rc=$rc $out"
 for refused in 1 2; do
   out="$(STUB_FRONT_RC=$refused screen_proof 2>&1)"; rc=$?
   [ "$rc" = 1 ] && grep -q '^result=fail:screen-suites$' "$TMP/screen.proof" \
@@ -216,7 +223,7 @@ os.makedirs(sys.argv[1])
 EOF
 : > "$TMPN/home/Models/Whisper/ggml-small.en.bin"; : > "$TMPN/home/Models/Whisper/ggml-large-v3-turbo-q5_0.bin"
 : > "$TMPN/cand/RichOS-9.9.9-macos-aarch64.zip"; : > "$TMPN/cand/RichOS.app.tar.gz"
-printf '{"info": {"build_commit": "abc123", "version": "9.9.9", "tag": "v9.9.9-nightly.1"}}\n' > "$TMPN/cand/candidate.json"
+printf '{"info": {"build_commit": "abc123", "version": "9.9.9", "tag": "v9.9.9-nightly.1", "run_id": "RUN1"}}\n' > "$TMPN/cand/candidate.json"
 printf '{"out": "%s"}\n' "$TMPN/cand" > "$TMPN/nightly/runs/RUN1.json"
 WANT_RT="$(python3 "$HERE/lib/runtime_cache.py" path "$TMPN/nightly" "$RT/runtime-sources.json")"
 WANT_MODELS="$TMPN/home/Models/Whisper/ggml-small.en.bin:$TMPN/home/Models/Whisper/ggml-large-v3-turbo-q5_0.bin"
@@ -251,6 +258,13 @@ out="$(RICHOS_RUNTIME_DIR="$TMPN/given-runtime" RICHOS_GUI_SPEECH_MODELS="$TMPN/
   "$RT/gui-proof-in-vm.sh" --run RUN1 --vm proof-vm --out "$TMPN/retake.proof" 2>&1)"; rc=$?
 [ "$rc" = 0 ] && grep -q "^prebuild runtime=$TMPN/given-runtime models=$TMPN/m1\$" "$STUB_LOG"; ok=$?
 check "a caller's own RICHOS_RUNTIME_DIR and RICHOS_GUI_SPEECH_MODELS still win" "$ok" "rc=$rc log=$(cat "$STUB_LOG") $out"
+
+: > "$STUB_LOG"
+printf '{"info": {"build_commit": "abc123", "version": "9.9.9", "tag": "v9.9.9", "run_id": "RUN2"}}\n' > "$TMPN/cand/candidate.json"
+out="$(RICHOS_RUNTIME_DIR="$TMPN/given-runtime" RICHOS_GUI_SPEECH_MODELS="$TMPN/m1" TESTVM_SLOT=1 HOME="$TMPN/home" PATH="$TMPN/bin:$PATH" \
+  "$RT/gui-proof-in-vm.sh" --run RUN1 --vm proof-vm --out "$TMPN/superseded.proof" 2>&1)"; rc=$?
+[ "$rc" = 2 ] && has "$out" RUN1 superseded RUN2 && [ ! -s "$STUB_LOG" ] && [ ! -e "$TMPN/superseded.proof" ]; ok=$?
+check "--run refuses a superseded run pointer before running any boot checks" "$ok" "rc=$rc log=$(cat "$STUB_LOG") $out"
 
 if [ "$fail" -eq 0 ]; then echo "gui-proof-in-vm.test.sh: all passed"; else echo "gui-proof-in-vm.test.sh: FAILED"; fi
 cleanup; HOLDER=""; trap - EXIT
