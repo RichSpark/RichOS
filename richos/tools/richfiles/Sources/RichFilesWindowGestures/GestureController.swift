@@ -62,6 +62,7 @@ final class GestureController {
     private var recheckingPermissions = false
     private var permissionCheckQueued = false
     private var permission: GesturePermission?
+    private var permissionRestartFailed = false
 
     init() {
         AXUIElementSetMessagingTimeout(system, 0.08)
@@ -111,6 +112,8 @@ final class GestureController {
         let status: Preferences.Status
         if selection.isEmpty {
             status = .off
+        } else if permissionRestartFailed {
+            status = .inputUnavailable
         } else {
             let measured = GesturePermission.current
             permission = measured
@@ -133,6 +136,7 @@ final class GestureController {
         guard !Preferences.selection.isEmpty else { return }
         if recheckingPermissions { permissionCheckQueued = true; return }
         recheckingPermissions = true
+        permissionRestartFailed = false
         stopTap(keepingWindows: true)
         // Both notifications can describe a grant for a different app. A fresh
         // process can check them without discarding the windows we remember.
@@ -168,14 +172,17 @@ final class GestureController {
             else { refresh() }
             return
         }
-        // exec keeps the launchd job while replacing its cached trust state.
-        if let executable = Bundle.main.executableURL?.path, let argument = strdup(executable) {
-            var arguments: [UnsafeMutablePointer<CChar>?] = [argument, nil]
-            execv(executable, &arguments)
-            free(argument)
+        // A new process must obtain its own Accessibility trust decision.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard !Preferences.restartHelper() else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.permissionCheckQueued = false
+                self.recheckingPermissions = false
+                self.permissionRestartFailed = true
+                self.refresh()
+            }
         }
-        Preferences.publish(.inputUnavailable)
-        record(.windowGestureAvailability, .unavailable)
     }
 
     private func startTap() -> Bool {
