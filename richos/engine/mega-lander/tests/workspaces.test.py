@@ -4605,6 +4605,66 @@ class HuntV2_03_TheBudgetBoundsEveryCleanupStage(Base):
         self.assertEqual([ok for _key, ok in ws.retry_due()], [True])
         self.assertNotIn(branch, branches(self.entity))
 
+    def test_worktree_cleanup_spends_only_its_budget_and_retries_without_a_failure(self):
+        for phase, expected in (
+            ("enumerate", ["enumerate"]),
+            ("remove", ["enumerate", "remove"]),
+            ("confirm", ["enumerate", "remove", "confirm"]),
+            ("admin", ["enumerate", "confirm", "admin"]),
+        ):
+            with self.subTest(expiry=phase):
+                rec, path = self._discarded("zach-opus-" + phase + "-budget")
+                branch = "worktree-agent-" + rec["agent_id"]
+                if phase == "admin":
+                    shutil.rmtree(path)
+                clock = [100.0]
+                calls = []
+                real_git = ws.git
+
+                def controlled_git(repo, *args, **kwargs):
+                    if args[:2] == ("worktree", "list"):
+                        step = "confirm" if calls else "enumerate"
+                    elif args[:2] == ("worktree", "remove"):
+                        step = "remove"
+                    elif args == ("rev-parse", "--path-format=absolute", "--git-common-dir"):
+                        step = "admin"
+                    else:
+                        return real_git(repo, *args, **kwargs)
+                    calls.append((step, clock[0], kwargs.get("timeout", 60)))
+                    if step == "remove" and (phase == "remove" or clock[0] >= 100.04):
+                        clock[0] = 101.0
+                        return 124, "", "controlled timeout before removal"
+                    # The fixture controls elapsed time independently of the host's load.
+                    reply = real_git(repo, *args)
+                    clock[0] = 101.0 if step == phase else clock[0] + 0.01
+                    return reply
+
+                with patch.object(ws, "stop_containers", return_value={}), \
+                        patch.object(ws, "stop_test_instances", return_value={}):
+                    with patch.object(ws, "now", side_effect=lambda: clock[0]), \
+                            patch.object(ws, "git", side_effect=controlled_git), \
+                            patch.object(ws, "event", wraps=ws.event) as events:
+                        result = ws._delete(rec, ws.live_workspaces(rec), branches=True, why="discarded",
+                                            processes={"stopped": [], "survivors": []}, deadline=100.04)
+                    self.assertFalse(result)
+                    self.assertEqual([step for step, _at, _timeout in calls], expected)
+                    for _step, at, timeout in calls:
+                        self.assertLess(at, 100.04)
+                        self.assertAlmostEqual(timeout, 100.04 - at)
+                    self.assertEqual(os.path.exists(path), phase in ("enumerate", "remove"))
+                    self.assertIn(branch, branches(self.entity))
+                    if phase == "admin":
+                        self.assertIn(path, [w["path"] for w in ws.worktree_list(self.entity)])
+                    deletion = self.rec(rec["name"])["deletion"]
+                    self.assertIn("budget ran out", deletion["deferred"])
+                    self.assertEqual(deletion["attempts"], 0)
+                    self.assertNotIn("last_error", deletion)
+                    self.assertEqual(events.call_args.args[0], "deletion-deferred")
+                    self.assertEqual(ws.retry_due(), [(rec["key"], True)])
+                self.assertFalse(os.path.exists(path))
+                self.assertNotIn(path, [w["path"] for w in ws.worktree_list(self.entity)])
+                self.assertNotIn(branch, branches(self.entity))
+
     def test_recovered_lock_does_not_admit_a_branch_retry_after_the_deadline(self):
         branch = "cc/zach-opus-recovered"
         run("git", "-C", self.other, "branch", branch)
