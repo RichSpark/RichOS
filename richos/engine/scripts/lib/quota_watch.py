@@ -1681,7 +1681,8 @@ def _append(path, text, rotate=False):
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(text)
     except OSError:
-        pass
+        return False
+    return True
 
 
 def _write_json(path, data):
@@ -1695,6 +1696,8 @@ def _write_json(path, data):
             os.unlink(tmp)
         except OSError:
             pass
+        return False
+    return True
 
 
 def _read_json(path):
@@ -1779,6 +1782,7 @@ def terminal_worker_refusals(engine_root, session, seen, now):
 
 def terminal_fable(a, reading, week_point, out, now, session):
     """Pass the terminal's existing quota reading to the same rule the app uses."""
+    out.flush_fable_notices()
     if app_state():
         return None
     previous = out.fable
@@ -1819,20 +1823,24 @@ def terminal_fable(a, reading, week_point, out, now, session):
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         print("Fable quota switch: could not read the core decision (%s)." % type(error).__name__, flush=True)
         return previous.get("onOpusUntil")
-    if state != previous:
-        out.fable = state
-        if out.sd:
-            _write_json(os.path.join(out.sd, "fable.json"), state)
+    notices = []
     if answer.get("change") == "opus":
-        out.wake("FABLE-OPUS",
-                 "The Fable week is nearly used up. For new work, take each job's pair from the fallback column in stu.md.",
-                 now)
+        notices.append(("FABLE-OPUS",
+                        "The Fable week is nearly used up. For new work, take each job's pair from the fallback column in stu.md.",
+                        now))
     elif answer.get("change") == "fable":
-        out.wake("FABLE-READY", "Fable quota is available again. New workers can use their Fable pairs.", now)
+        notices.append(("FABLE-READY", "Fable quota is available again. New workers can use their Fable pairs.", now))
     for agent in named:
-        out.wake("FABLE-WORKER",
-                 "%s hit the Fable limit. Resume the job from its saved work using its fallback pair in stu.md."
-                 % refused[agent]["name"], now)
+        notices.append(("FABLE-WORKER",
+                        "%s hit the Fable limit. Resume the job from its saved work using its fallback pair in stu.md."
+                        % refused[agent]["name"], now))
+    pending = previous.get("pendingNotices", [])
+    if pending or notices:
+        # Commit the decision and its notices together. The core only reports
+        # transitions, so a later tick may be unable to recreate the notice.
+        state["pendingNotices"] = [*pending, *notices]
+    if state != previous and out.save_fable(state) and not pending:
+        out.flush_fable_notices()
     return state["onOpusUntil"]
 
 
@@ -1913,12 +1921,37 @@ class Out:
         the block arrive together."""
         if not text.endswith("\n"):
             text += "\n"
+        saved = True
         if self.sd:
-            _append(os.path.join(self.sd, "events.jsonl"),
-                    json.dumps({"at": now, "kind": kind, "text": text}) + "\n")
+            saved = _append(os.path.join(self.sd, "events.jsonl"),
+                            json.dumps({"at": now, "kind": kind, "text": text}) + "\n")
         if self.events is not None:
             self.events.write(text)
             self.events.flush()
+        return saved
+
+    def save_fable(self, state):
+        if self.sd and not _write_json(os.path.join(self.sd, "fable.json"), state):
+            self.line("Fable quota switch: could not save state and pending notices.")
+            return False
+        self.fable = state
+        return True
+
+    def flush_fable_notices(self):
+        pending = self.fable.get("pendingNotices", [])
+        delivered = 0
+        for kind, text, at in pending:
+            if not self.wake(kind, text, at):
+                self.line("Fable quota switch: could not append %s to events.jsonl. It will retry." % kind)
+                break
+            delivered += 1
+        if delivered:
+            state = dict(self.fable)
+            if delivered < len(pending):
+                state["pendingNotices"] = pending[delivered:]
+            else:
+                del state["pendingNotices"]
+            self.save_fable(state)
 
     def beat(self, now, a, extra=None):
         if self.sd:
@@ -2180,8 +2213,10 @@ def _poll_loop(a, out, alive, health=None):
         if weekly_blocked:
             print(quota_weekly.describe(r, now), flush=True)
             _poll_completed(health)
-            interval = _retry_seconds(a) if retry else a.fast_poll if provider_fast else a.poll
-            _sleep_after_poll(started, interval, reset_started, reset_status, r, alive, fable_until)
+            interval = a.fast_poll if provider_fast else a.poll
+            local_due = started + _retry_seconds(a) if retry else None
+            _sleep_after_poll(started, interval, reset_started, reset_status, r, alive, fable_until,
+                              local_due=local_due)
             continue
         if window_end is not None and not has_five(r) and classify(r, a.threshold, a.stale)[0] == "below":
             # THE FIVE-HOUR WINDOW WENT AWAY (second review rv-20261031T192316Z-d2322984-98af): a
@@ -2276,41 +2311,43 @@ def _poll_loop(a, out, alive, health=None):
                     out.wake("STALE" if stale else "UNKNOWN", _capture(_emit_blind, a, r, w, why, outage_detail), now)
                     blind_woken = True
         sleep_for = a.fast_poll if fast or expected or provider_fast else a.poll
+        local_due = window_end
         if window_end is not None:
-            sleep_for = max(1, min(sleep_for, window_end - now))
-            # Wake at the first second inside the last 20 minutes, where a
-            # hold releases, rather than up to one poll late.
-            to_release = window_end - now - (RESET_EXEMPTION_SECONDS - 1)
-            if to_release > 0:
-                sleep_for = max(1, min(sleep_for, to_release))
+            # Wake at the first second inside the last 20 minutes, where a hold releases.
+            release_at = window_end - (RESET_EXEMPTION_SECONDS - 1)
+            if release_at > now:
+                local_due = release_at
         if retry:
             # "retried at the next poll, or sooner" (2026-09-28).
-            sleep_for = max(1, min(sleep_for, _retry_seconds(a)))
+            retry_at = started + _retry_seconds(a)
             if verdict == "below" and r.get("source") == "the status line" and r["age"] is not None:
                 # Recheck as soon as this fallback becomes older than one poll.
                 expires_in = math.floor(a.stale - r["age"]) + 1
-                sleep_for = max(1, min(sleep_for, expires_in))
+                retry_at = min(retry_at, now + max(1, expires_in))
+            local_due = retry_at if local_due is None else min(local_due, retry_at)
         _poll_completed(health)
-        # Count local polls from their start and honor the shared provider deadline.
-        _sleep_after_poll(started, sleep_for, reset_started, reset_status, r, alive, fable_until)
+        _sleep_after_poll(started, sleep_for, reset_started, reset_status, r, alive, fable_until,
+                          local_due=local_due)
 
 
-def _sleep_after_poll(started, interval, reset_started, reset_status, reading, alive, fable_until=None):
+def _sleep_after_poll(started, interval, reset_started, reset_status, reading, alive, fable_until=None,
+                      *, local_due=None):
     deadline = started + interval
     now = time.time()
+    slots = []
     next_at = _ms(reading.get("provider_next_at"))
-    provider_due = next_at / 1000 if next_at is not None and started < next_at / 1000 <= now + interval else None
-    if provider_due is not None:
-        # A check can finish after its poll started. Align the next poll with
-        # the shared slot so a fractionally early poll doesn't miss it.
-        deadline = provider_due
+    if next_at is not None and started < next_at / 1000 <= deadline + 1:
+        slots.append(next_at / 1000)
     retry_at = _ms((reset_status.get("resets") or {}).get("retryAt"))
     if not app_state() and retry_at is not None:
-        # Align a poll that would come fractionally early with the core's
-        # millisecond deadline. Also honor an earlier retry on a slower poll.
         retry = retry_at / 1000
-        if started < retry <= reset_started + interval + 1:
-            deadline = min(provider_due, retry) if provider_due is not None else retry
+        if reset_started < retry <= deadline + 1:
+            slots.append(retry)
+    # Align an ordinary poll that is fractionally early with the shared slot.
+    # A local check keeps its own deadline. Store.claim still gates provider requests.
+    deadline = min(slots, default=deadline)
+    if local_due is not None:
+        deadline = min(deadline, local_due)
     if fable_until is not None and fable_until / 1000 > now:
         deadline = min(deadline, fable_until / 1000)
     _nap(max(1, deadline - now), alive)

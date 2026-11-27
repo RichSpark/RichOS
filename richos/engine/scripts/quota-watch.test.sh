@@ -231,6 +231,8 @@ export TEST_DEVICE_FAILURES_STATE="$SB/test-device-failures.json"
 # every case reads the status-line fallback, as before; the G cases point this
 # at the fixture below, which answers the control protocol from files.
 export QUOTA_CLAUDE_BIN="$SB/no-claude-here"
+# Use private quota data even before fake() supplies a provider fixture.
+export RICHOS_QUOTA_FIXTURE_STORE="$SB/usage-store"
 # Reset integration has its own fake-transport suite; never contact the real account here.
 export QUOTA_RESET_HELPER=/usr/bin/false
 # The login alarm (G09) is sandboxed whole: never the CEO's notification center,
@@ -925,6 +927,18 @@ fi
 replay() { # <label>
     python3 "$SCRIPT_DIR/lib/quota-watch-replay.py" "$1" "$QUOTA_PAYLOAD" "$SB/$1" "$ENGINE" "$FAKE" >"$SB/$1.report" 2>&1
 }
+
+if wants "P5-84b"; then
+    replay fable-notice-retry
+    check "P5-84b  Fable switch and recovery notices survive a failed journal append and restart" \
+        "$?" "$(cat "$SB/fable-notice-retry.report")"
+fi
+
+if wants "P5-101"; then
+    replay local-deadline
+    check "P5-101  a local quota deadline takes priority over a later provider slot or reset retry" \
+        "$?" "$(cat "$SB/local-deadline.report")"
+fi
 
 if wants "R01"; then
 replay r01
