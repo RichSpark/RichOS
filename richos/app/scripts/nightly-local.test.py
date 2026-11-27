@@ -2471,7 +2471,7 @@ while True: time.sleep(.02)
             publisher.perform("publish", run_id="fixture-run-id")
         publisher.command.assert_not_called()
         # No walk at all is refused too; a candidate from before the requirement is not.
-        report = publisher.new_user_walk_dir("fixture-run-id") / "report.json"
+        report, = publisher.new_user_walk_dir("fixture-run-id").glob("attempt-*/walk/report.json")
         report.unlink()
         info = {**self.CANDIDATE_INFO, "new_user_walk_required": True}
         with self.assertRaisesRegex(ValueError, "no new-user walk"):
