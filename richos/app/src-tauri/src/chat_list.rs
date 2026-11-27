@@ -170,8 +170,8 @@ fn facts(
             result.unconfirmed_assignments |= status == AssignmentState::Unknown;
             newest_progress = newest_progress.max(job.registered_at_ms);
             // A job the app's end cut off (its record still says it was starting or running)
-            // starts nothing by itself until he acts here: the rule holds its handoff.
-            if gate.waits(&row.id) && job.updated_at_ms < gate.since_ms() && matches!(job.reported_state(),
+            // starts nothing by itself until he writes here: the rule holds its handoff.
+            if !gate.written(&row.id) && job.updated_at_ms < gate.since_ms() && matches!(job.reported_state(),
                 Some(AssignmentState::Registered | AssignmentState::Preparing | AssignmentState::Running)) {
                 cut_off = true;
             }

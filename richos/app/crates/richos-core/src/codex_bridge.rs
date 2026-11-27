@@ -390,6 +390,15 @@ fn set_aside(state: &Path, id: &str, event: &Value) -> Result<(), String> {
     if held_events(&path)?.iter().any(|held| held["record"] == event["record"] && held["through"] == event["through"]) {
         return Ok(());
     }
+    // A last line a crash left half written is cut off first, or this report would be joined
+    // to it; the watcher's place never moved past that report, so it is offered again now.
+    if let Ok(bytes) = std::fs::read(&path) {
+        if bytes.last().is_some_and(|last| *last != b'\n') {
+            let whole = bytes.iter().rposition(|byte| *byte == b'\n').map_or(0, |end| end + 1);
+            std::fs::OpenOptions::new().write(true).open(&path).and_then(|file| file.set_len(whole as u64))
+                .map_err(|e| e.to_string())?;
+        }
+    }
     let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&path).map_err(|e| e.to_string())?;
     file.write_all(format!("{event}\n").as_bytes()).and_then(|()| file.sync_all()).map_err(|e| e.to_string())?;
     std::fs::File::open(&folder).and_then(|folder| folder.sync_all()).map_err(|e| e.to_string())
@@ -825,6 +834,24 @@ mod tests {
         f.release(&asked);
         assert_eq!(f.delivered(), ["message-2", "message-3", "message-1", "message-4"]);
         assert!(!f.state.join(HELD).join("pair.jsonl").exists(), "a delivered report is still set aside");
+    }
+
+    /// **A crash in the middle of setting a report aside loses nothing** (review
+    /// rv-20261127T020027Z-5e9ff3e9-1d7e, finding 3): the half-written line is cut, the report
+    /// is saved whole when the watcher offers it again, and it goes once he acts.
+    #[test]
+    fn a_half_written_set_aside_line_is_cut_before_the_report_is_saved_again() {
+        let f = Fixture::new();
+        let asked = opened(&f);
+        written(&f, json!({"version":1,"message_id":"message-2","text":"A second report"}));
+        let held = f.state.join(HELD).join("pair.jsonl");
+        std::fs::create_dir_all(held.parent().unwrap()).unwrap();
+        std::fs::write(&held, &f.event.to_string().as_bytes()[..26]).unwrap();
+        accept_when_asked(&f.state, &f.binding, &f.event, &f.coord, &asked).unwrap();
+        assert_eq!(held_events(&held).unwrap(), std::slice::from_ref(&f.event), "the set-aside file is not one whole report");
+        prompt(&f, "Hello", crate::ledger::Source::Text);
+        f.release(&asked);
+        assert_eq!(f.delivered(), ["message-1"]);
     }
 
     /// **Set aside the moment he acts**: the app's release hands it to Stu with nothing more

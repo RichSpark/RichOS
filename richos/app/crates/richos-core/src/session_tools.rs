@@ -900,15 +900,16 @@ pub fn begin_attempt(scope:&StatusToolScope,role:&str,input:&str,session:&str)->
     update_cursor(scope, role, |cursor| { cursor["active"][input]=json!({"input":input,"session_id":session}); Ok(()) })
 }
 
-/// **Inbox inputs whose delivery the app's end cut off**: given to a session, and neither its
-/// turn ended (`delivered`) nor "Quit and stop the work" stopped it (`stopped`), whether or not
-/// that session's record holds it (`received`). Read before this process begins any attempt,
-/// every one of them was begun by an earlier run (`WorkHost::next_for_stu`).
-pub(crate) fn cut_off_inputs(scope:&StatusToolScope,role:&str)->Result<std::collections::BTreeSet<u64>,String> {
+/// **Inbox inputs given to a session and still open**, each with whether its turn ended
+/// (`delivered`): none that "Quit and stop the work" stopped (`stopped`), whether or not that
+/// session's record holds it (`received`). Read before this process begins any attempt, every
+/// one of them was begun by an earlier run (`WorkHost::next_for_stu`, which decides which the
+/// app's end cut off).
+pub(crate) fn open_inputs(scope:&StatusToolScope,role:&str)->Result<std::collections::BTreeMap<u64,bool>,String> {
     let cursor=cursor_state(&inbox(scope,role)?)?;
     Ok(cursor["active"].as_object().into_iter().flatten().filter(|(_,entry)| entry["session_id"].is_string()
-        && entry["delivered"]!=true && entry["stopped"]!=true)
-        .filter_map(|(input,_)| input.strip_prefix("peer:")?.parse().ok()).collect())
+        && entry["stopped"]!=true)
+        .filter_map(|(input,entry)| Some((input.strip_prefix("peer:")?.parse().ok()?, entry["delivered"]==true))).collect())
 }
 
 /// The session's own record holds this input, as `received_handoffs` finds at a launch.

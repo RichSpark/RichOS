@@ -85,6 +85,8 @@ struct Inner {
     open: BTreeSet<(String, String)>,
     /// Chats where work the app's end cut off was asked for and held ([`TurnGate::cut_off`]).
     cut_off: HashSet<String>,
+    /// Chats whose listeners were told of his words ([`TurnGate::user_acted`]).
+    told_words: HashSet<String>,
 }
 
 impl TurnGate {
@@ -131,9 +133,18 @@ impl TurnGate {
     }
 
     /// **The user pressed something of his own in this chat** (answered a question, stopped
-    /// a job): it is open from now on.
+    /// a job), or wrote in it (`Spine::deliver`): it is open from now on. Work the app's end cut
+    /// off waits for his words alone, so the listeners are told again the first time his words
+    /// are seen there, even after a press.
     pub fn user_acted(&self, binding: &ThreadBinding) {
-        let first = self.inner.lock().unwrap().pressed.insert(binding.thread_id().to_string());
+        let thread = binding.thread_id();
+        let first = {
+            let mut inner = self.inner.lock().unwrap();
+            let pressed = inner.pressed.insert(thread.to_string());
+            self.read_ledger(&mut inner);
+            let wrote = inner.asked.contains(thread) && inner.told_words.insert(thread.to_string());
+            pressed || wrote
+        };
         self.may_start(binding, Origin::Now);
         if first {
             let listeners = self.opened.lock().unwrap().clone();
@@ -150,13 +161,15 @@ impl TurnGate {
     }
 
     /// **THE RULE. May the app start this model turn?** The user's own input and input that
-    /// arrived while the app is open: yes. Anything saved from before, and work the app's end
-    /// cut off: only once the user has acted in its chat during this run. An unreadable ledger
+    /// arrived while the app is open: yes. Anything saved from before: only once the user has
+    /// acted in its chat during this run. Work the app's end cut off: only once he has written
+    /// there (a Stop on another job is not his word to carry this one on). An unreadable ledger
     /// answers no: what waits can still be given later, a model turn cannot be taken back.
     pub fn may_start(&self, binding: &ThreadBinding, origin: Origin) -> bool {
         let thread = binding.thread_id();
         let mut inner = self.inner.lock().unwrap();
-        if origin != Origin::Now && !inner.pressed.contains(thread) && !inner.asked.contains(thread) {
+        let pressed = origin == Origin::FromBefore && inner.pressed.contains(thread);
+        if origin != Origin::Now && !pressed && !inner.asked.contains(thread) {
             self.read_ledger(&mut inner);
             if !inner.asked.contains(thread) {
                 if origin == Origin::CarriesOn {
@@ -185,14 +198,24 @@ impl TurnGate {
         !inner.asked.contains(thread)
     }
 
+    /// **Has the user written in this chat since the app opened?** What the app's end cut off
+    /// there carries on only then ([`Origin::CarriesOn`]).
+    pub fn written(&self, thread: &str) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        if !inner.asked.contains(thread) {
+            self.read_ledger(&mut inner);
+        }
+        inner.asked.contains(thread)
+    }
+
     /// **Is work the app's end cut off paused in this chat?** Yes from the moment it was asked
-    /// for and held ([`Origin::CarriesOn`]) until the user acts there: the chat shows it as
+    /// for and held ([`Origin::CarriesOn`]) until the user writes there: the chat shows it as
     /// paused, not working, because nothing runs.
     pub fn cut_off(&self, thread: &str) -> bool {
         if !self.inner.lock().unwrap().cut_off.contains(thread) {
             return false;
         }
-        self.waits(thread)
+        !self.written(thread)
     }
 
     /// Read what was appended to the ledger since the last look: a look costs one `stat`
@@ -334,6 +357,11 @@ mod tests {
         assert!(gate.cut_off(two.thread_id()), "the chat does not show its cut-off work as paused");
         assert!(!gate.cut_off(one.thread_id()));
         assert_eq!(record(&root)["open"].as_array().unwrap().len(), 1);
+        // His press there (a Stop on another job) opens it to what was saved before, not to this.
+        gate.user_acted(&two);
+        assert!(gate.may_start(&two, Origin::FromBefore));
+        assert!(!gate.may_start(&two, Origin::CarriesOn), "a press carried the cut-off work on");
+        assert!(gate.cut_off(two.thread_id()));
         said(&root, &two, Source::Text);
         assert!(!gate.cut_off(two.thread_id()), "his words did not end the pause");
         assert!(gate.may_start(&two, Origin::CarriesOn), "after his words the cut-off work did not carry on");

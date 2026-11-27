@@ -1147,16 +1147,20 @@ impl WorkHost {
         released: &mut Vec<u64>, given: &std::collections::HashSet<u64>) -> Result<Option<(crate::session_tools::Message, u64)>, String> {
         let scope = self.message_scope(binding);
         // WORK THE APP'S END CUT OFF (the CEO's standing default: paused until he writes in this
-        // chat, then it carries on). An input given to a session by an earlier run whose turn
-        // never ended, read at this back end's first selection, before this process begins any
-        // attempt. That session's record usually holds it already, so it reads as given; but a
-        // resumed session does not carry on by itself, so once he has acted here it is given
-        // again, naming the cut attempt (`run_message`'s `previous_delivery_attempt`), once.
-        // Only where the one rule is set, which is the app.
+        // chat, then it carries on). An input given to a session by an earlier run, read at this
+        // back end's first selection, before this process begins any attempt: one whose turn
+        // never ended, or a handoff whose turn ended while its job still read as starting or
+        // running (a teammate still at work when the app ended). That session's record usually
+        // holds it already, so it reads as given; but a resumed session does not carry on by
+        // itself, so once he has written here it is given again, naming the earlier attempt
+        // (`run_message`'s `previous_delivery_attempt`), once. Only where the one rule is set,
+        // which is the app.
         let cut_off: Vec<u64> = match self.turn_gate.get() {
             None => Vec::new(),
             Some(_) => backend.cut_off.lock().unwrap()
-                .get_or_insert_with(|| crate::session_tools::cut_off_inputs(&scope, "stu").unwrap_or_default())
+                .get_or_insert_with(|| crate::session_tools::open_inputs(&scope, "stu").unwrap_or_default().into_iter()
+                    .filter(|(through, delivered)| !delivered || self.handoff_job_was_running(&scope, *through))
+                    .map(|(through, _)| through).collect())
                 .iter().copied().collect(),
         };
         for &through in &cut_off {
@@ -1215,6 +1219,17 @@ impl WorkHost {
             }
             after = through;
         }
+    }
+
+    /// **Is the inbox row at `through` a handoff whose job still reads as starting or running?**
+    /// A job waiting for the screen, for an allowance or for him has its own way on and is not
+    /// work the app's end cut off.
+    fn handoff_job_was_running(&self, scope: &crate::status_tools::StatusToolScope, through: u64) -> bool {
+        let Ok(message) = crate::session_tools::saved_input(scope, "stu", through) else { return false };
+        let Some(work) = message.handoff.then(|| crate::session_tools::work_reference(scope, &message).ok().flatten()).flatten()
+        else { return false };
+        assignment::read(&self.state, &scope.entity_id, &scope.thread_id, &work.assignment_id).is_ok_and(|job|
+            matches!(job.reported_state(), Some(AssignmentState::Registered | AssignmentState::Preparing | AssignmentState::Running)))
     }
 
     pub fn remember_binding(self: &Arc<Self>, binding: &ThreadBinding) {
@@ -3422,6 +3437,58 @@ mod tests {
         std::fs::remove_dir_all(&h.root).unwrap();
     }
 
+    /// His words in the harness's chat, as the ledger files them.
+    fn said(h: &Harness) {
+        use std::io::Write;
+        let line = serde_json::json!({"event":"PromptReceived","entity_id":"depot","thread_id":"thread-one",
+            "turn_id":format!("turn-{}", uuid::Uuid::new_v4()),"source":"text","text":"carry on","at":crate::util::now_millis()}).to_string() + "\n";
+        std::fs::OpenOptions::new().append(true).open(h.root.join("conversation-ledger.jsonl")).unwrap()
+            .write_all(line.as_bytes()).unwrap();
+    }
+
+    /// **A team job still running when the app ended carries on after his words, not after a
+    /// press** (review rv-20261127T020027Z-5e9ff3e9-1d7e, findings 1 and 2). Stu's turn that took
+    /// the handoff had ended (a teammate was at work), so its receipt says delivered and his
+    /// record holds it: nothing gave Stu a turn for the job. A Stop or an answer in that chat is
+    /// not his word to carry it on: a report written after the press goes alone. His words give
+    /// Stu the handoff again, naming the earlier attempt.
+    #[test]
+    fn a_team_job_still_running_when_the_app_ended_carries_on_after_his_words_and_not_after_a_press() {
+        let h = harness(0);
+        let record = assignment::register(&h.state, &registration(&h)).unwrap();
+        assignment::advance(&h.state, "depot", "thread-one", &record.id, AssignmentState::Running, "a teammate works").unwrap();
+        let scope = h.host.message_scope(&h.binding);
+        let path = h.root.join("peer-status.json");
+        crate::session_tools::bind(&path, &scope, "front-session", "rich", Some(crate::ecs::UserInstruction {
+            ledger_ref: registration(&h).instruction_ledger_ref, sha256: registration(&h).instruction_sha256, text: None })).unwrap();
+        crate::session_tools::delegate(&path, &scope, serde_json::json!({"text":"Build the quarterly report"})).unwrap();
+        let through = crate::session_tools::pending(&scope, "stu").unwrap().unwrap().1;
+        let input = format!("peer:{through}");
+        crate::session_tools::begin_attempt(&scope, "stu", &input, "prior-session").unwrap();
+        crate::session_tools::acknowledge(&scope, "stu", through).unwrap();
+        crate::session_tools::mark_received(&scope, "stu", &input).unwrap();
+        assert_eq!(crate::session_tools::previous_attempt(&scope, "stu", &input).unwrap().unwrap()["delivered"], true);
+        // load-bound: this only moves the millisecond clock past what was saved; host load makes the gap larger, never smaller.
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        let gate = Arc::new(crate::turn_gate::TurnGate::at_launch(&h.state));
+        h.host.set_turn_gate(Arc::clone(&gate));
+        h.host.wake_messages(&h.binding);
+
+        gate.user_acted(&h.binding);
+        crate::session_tools::observe_stall(&scope, "a report written after his press").unwrap();
+        h.host.wake_messages(&h.binding);
+        until("the report written after the press never reached Stu", || handed_over(&h, "written after his press") == 1);
+        assert_eq!(handed_over(&h, "Build the quarterly report"), 0, "a press carried the cut-off job on");
+
+        said(&h);
+        gate.user_acted(&h.binding);
+        until("after his words the cut-off job never carried on", || handed_over(&h, "Build the quarterly report") == 1);
+        let prompt = h.work_prompts.lock().unwrap().iter().find(|prompt| prompt.contains("Build the quarterly report")).cloned().unwrap();
+        assert!(prompt.contains("prior-session"), "the carried-on handoff does not name the earlier attempt: {prompt}");
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
     /// **A delivery cut off by the app's end stays paused after reopening until the user acts
     /// in that chat, and then it carries on** (the CEO's standing default: a team job cut off by
     /// a terminate signal had shown "Working" with nothing running).
@@ -3459,8 +3526,9 @@ mod tests {
             assert_eq!(gate.cut_off(h.binding.thread_id()), !stopped, "stopped={stopped}: the chat's pause is not what is true");
 
             if !stopped {
-                // His press in that chat (or his words: the same opening of it). Nothing else
-                // wakes Stu.
+                // His words in that chat, as `Spine::deliver` files and announces them. Nothing
+                // else wakes Stu.
+                said(&h);
                 let acted = std::time::Instant::now();
                 gate.user_acted(&h.binding);
                 until("after the user acted the cut-off work never carried on", || handed_over(&h, "cut off by the quit") == 1);
