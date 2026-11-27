@@ -401,6 +401,59 @@ else:
         self.assertNotIn(second, prompt)
         self.assertNotIn("Private second task", prompt)
 
+    def test_interrupted_dispatch_can_retry_before_launch(self):
+        for stage in ("codex_binary", "check_codex_quota"):
+            for resume in (False, True):
+                with self.subTest(stage=stage, resume=resume):
+                    pair = self.connect(self.a)
+                    with mock.patch.object(c, "codex_binary", return_value="fixture"), \
+                         mock.patch.object(c, stage, side_effect=KeyboardInterrupt), \
+                         mock.patch.object(c, "run_codex") as launch:
+                        with self.assertRaises(KeyboardInterrupt):
+                            c.dispatch(pair)
+                        launch.assert_not_called()
+                    self.retry_initial_dispatch(pair, resume)
+
+    def test_dispatch_recovers_old_cursor_only_marker(self):
+        for resume in (False, True):
+            with self.subTest(resume=resume):
+                pair = self.connect(self.a)
+                path = Path(pair)
+                c.save(path / "dispatch.json", {"source_identity": c.identity(path / "to-codex.jsonl"),
+                                               "through": 0})
+                self.retry_initial_dispatch(pair, resume)
+
+    def retry_initial_dispatch(self, pair, resume):
+        def run(binary, path, marker, state, prompt, watch):
+            self.assertNotIn("session_id", state)
+            self.assertEqual(prompt.count("Exact user task"), 1)
+            self.assertIn(pair, prompt)
+            self.assertEqual(c.load(marker)["attempt_id"], state["attempt_id"])
+            state["session_id"] = "fixture-session"
+            return 0, False
+
+        with mock.patch.object(c, "codex_binary", return_value="fixture"), \
+             mock.patch.object(c, "check_codex_quota", return_value=(None, "unavailable")), \
+             mock.patch.object(c, "run_codex", side_effect=run) as launch:
+            self.assertEqual(c.dispatch(pair, resume=resume), 0)
+            with self.assertRaisesRegex(ValueError, "already dispatched"):
+                c.dispatch(pair)
+            launch.assert_called_once()
+        self.assertEqual(c.load(Path(pair) / "dispatch.json")["session_id"], "fixture-session")
+
+    def test_dispatch_refuses_to_replace_an_unconfirmed_launch(self):
+        pair = self.connect(self.a)
+        with mock.patch.object(c, "codex_binary", return_value="fixture"), \
+             mock.patch.object(c, "check_codex_quota", return_value=(None, "unavailable")), \
+             mock.patch.object(c, "run_codex", side_effect=KeyboardInterrupt) as launch:
+            with self.assertRaises(KeyboardInterrupt):
+                c.dispatch(pair)
+            with self.assertRaisesRegex(ValueError, "already dispatched"):
+                c.dispatch(pair)
+            with self.assertRaisesRegex(ValueError, "did not report a session ID"):
+                c.dispatch(pair, resume=True)
+            launch.assert_called_once()
+
     def test_followup_resumes_same_id_and_reconciles_after_restart(self):
         p = self.connect(self.a)
         binary = self.root / "codex"
