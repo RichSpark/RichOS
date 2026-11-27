@@ -3446,11 +3446,49 @@ mod tests {
             .write_all(line.as_bytes()).unwrap();
     }
 
+    /// **A Stop never starts work** (review rv-20261127T020027Z-5e9ff3e9-1d7e, finding 2, still
+    /// open in rv-20261127T025408Z-0159fa0b-818a: "handoff awaiting first delivery, Stop another
+    /// job" counted one handoff and zero user messages). A job's handoff saved before the app
+    /// opened, never begun, waits. The Stop button on another job in that chat is WorkHost's
+    /// Stop and nothing else (`main.rs` `stop_assignment`, pinned by richos-core
+    /// `tests/turn_gate_callers.rs`): its notice reaches Stu by itself, the saved handoff stays
+    /// where it is and the chat stays shut to what was saved before. His words give it to Stu.
+    #[test]
+    fn a_stop_on_another_job_starts_no_handoff_saved_before_the_app_opened() {
+        let h = harness(0);
+        assignment::register(&h.state, &registration(&h)).unwrap();
+        let other = assignment::register(&h.state, &Registration { obligation_id: "obligation-8".into(),
+            instruction_ledger_ref: "ledger:thread-one:turn-8".into(), title: "another job".into(), ..registration(&h) }).unwrap();
+        let scope = h.host.message_scope(&h.binding);
+        let path = h.root.join("peer-status.json");
+        crate::session_tools::bind(&path, &scope, "front-session", "rich", Some(crate::ecs::UserInstruction {
+            ledger_ref: registration(&h).instruction_ledger_ref, sha256: registration(&h).instruction_sha256, text: None })).unwrap();
+        crate::session_tools::delegate(&path, &scope, serde_json::json!({"text":"Build the quarterly report"})).unwrap();
+        // load-bound: this only moves the millisecond clock past what was saved; host load makes the gap larger, never smaller.
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        let gate = Arc::new(crate::turn_gate::TurnGate::at_launch(&h.state));
+        h.host.set_turn_gate(Arc::clone(&gate));
+        h.host.wake_messages(&h.binding);
+
+        h.host.stop_assignment("depot", "thread-one", &other.id).unwrap();
+        until("the Stop never reached Stu", || handed_over(&h, "user_stop") == 1);
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(30)), "the Stop's turn did not end");
+        assert_eq!(handed_over(&h, "Build the quarterly report"), 0, "a Stop on another job started the job saved before");
+        assert!(gate.waits(h.binding.thread_id()), "a Stop opened the chat to what was saved before");
+
+        said(&h);
+        gate.user_acted(&h.binding);
+        until("after his words the saved handoff never reached Stu", || handed_over(&h, "Build the quarterly report") == 1);
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
     /// **A team job still running when the app ended carries on after his words, not after a
     /// press** (review rv-20261127T020027Z-5e9ff3e9-1d7e, findings 1 and 2). Stu's turn that took
     /// the handoff had ended (a teammate was at work), so its receipt says delivered and his
-    /// record holds it: nothing gave Stu a turn for the job. A Stop or an answer in that chat is
-    /// not his word to carry it on: a report written after the press goes alone. His words give
+    /// record holds it: nothing gave Stu a turn for the job. An answer in that chat is not his
+    /// word to carry it on (nor is a Stop, which opens nothing): a report written after the
+    /// press goes alone. His words give
     /// Stu the handoff again, naming the earlier attempt.
     #[test]
     fn a_team_job_still_running_when_the_app_ended_carries_on_after_his_words_and_not_after_a_press() {

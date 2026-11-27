@@ -23,8 +23,9 @@
 //! What counts as the user acting in a chat: his own words in it since launch (a
 //! `PromptReceived` row in the conversation ledger whose source is `text` or `jam`, by
 //! whichever road: the composer, the phone, voice), or one of his own presses there
-//! ([`TurnGate::user_acted`]: answering a question, stopping a job). An agent's message, an
-//! internal re-prime and Rich speaking unprompted are not his acting. Once a chat is open it
+//! ([`TurnGate::user_acted`]: answering a question). An agent's message, an internal re-prime
+//! and Rich speaking unprompted are not his acting. Nor is a Stop: a Stop never starts work, so
+//! it opens nothing here, and its notice to Stu is input written now. Once a chat is open it
 //! stays open until the app quits.
 //!
 //! "Keep chat alive", the user's own setting, is not asked here: it fires only for a kept chat
@@ -132,8 +133,9 @@ impl TurnGate {
         through > self.inboxes.get(inbox).copied().unwrap_or(0)
     }
 
-    /// **The user pressed something of his own in this chat** (answered a question, stopped
-    /// a job), or wrote in it (`Spine::deliver`): it is open from now on. Work the app's end cut
+    /// **The user pressed something of his own in this chat** (answered a question; never a
+    /// Stop, which starts no work), or wrote in it (`Spine::deliver`): it is open from now on.
+    /// Work the app's end cut
     /// off waits for his words alone, so the listeners are told again the first time his words
     /// are seen there, even after a press.
     pub fn user_acted(&self, binding: &ThreadBinding) {
@@ -163,7 +165,7 @@ impl TurnGate {
     /// **THE RULE. May the app start this model turn?** The user's own input and input that
     /// arrived while the app is open: yes. Anything saved from before: only once the user has
     /// acted in its chat during this run. Work the app's end cut off: only once he has written
-    /// there (a Stop on another job is not his word to carry this one on). An unreadable ledger
+    /// there (an answer to a question is not his word to carry this one on). An unreadable ledger
     /// answers no: what waits can still be given later, a model turn cannot be taken back.
     pub fn may_start(&self, binding: &ThreadBinding, origin: Origin) -> bool {
         let thread = binding.thread_id();
@@ -357,7 +359,7 @@ mod tests {
         assert!(gate.cut_off(two.thread_id()), "the chat does not show its cut-off work as paused");
         assert!(!gate.cut_off(one.thread_id()));
         assert_eq!(record(&root)["open"].as_array().unwrap().len(), 1);
-        // His press there (a Stop on another job) opens it to what was saved before, not to this.
+        // His press there (an answer to a question) opens it to what was saved before, not to this.
         gate.user_acted(&two);
         assert!(gate.may_start(&two, Origin::FromBefore));
         assert!(!gate.may_start(&two, Origin::CarriesOn), "a press carried the cut-off work on");

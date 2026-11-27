@@ -5519,11 +5519,9 @@ fn dispatch_incoming_messages(app: &AppHandle, _thread_id: &str) -> Result<(), S
 #[richos_command::command]
 fn stop_assignment(state: State<AppState>, thread_id: String, assignment_id: String) -> Result<(), String> {
     let entity = assignment_scope(&state, &thread_id)?;
-    // His own press: the chat is open to the one rule from now on (richos-core `turn_gate`),
-    // so the Stop reaches Stu at once.
-    if let Ok(binding) = state.reader.snapshot().ledger().thread_binding(&thread_id) {
-        state.turn_gate.user_acted(&binding);
-    }
+    // A Stop never starts work, so it opens nothing to the one rule (richos-core `turn_gate`):
+    // what waits in this chat keeps waiting (review rv-20261127T020027Z-5e9ff3e9-1d7e,
+    // finding 2). Its notice is written to Stu now, so it reaches him by itself.
     let front_desk = state.control.for_thread(&thread_id).front_desk();
     state.work.stop_assignment_and_front_desk(entity.as_str(), &thread_id, &assignment_id, front_desk)
 }
