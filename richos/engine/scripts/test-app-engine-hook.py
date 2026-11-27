@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ENGINE = Path(__file__).resolve().parents[1]
 
@@ -81,6 +82,40 @@ class DesktopHooks(unittest.TestCase):
         self.assertNotIn("HELD BY RICH", context)
         again = self.hook("UserPromptSubmit", prompt="And now?")
         self.assertEqual((again.returncode, again.stdout.strip()), (0, ""))
+
+    def test_due_work_retries_after_a_failed_prompt_output_flush(self):
+        hook = self._hook_in_process("app_engine_hook_due_retry")
+        ws = hook.load("workspaces_due_fixture", ENGINE / "mega-lander/workspaces.py")
+        hook.load("work_fixture", ENGINE / "mega-lander/app.py").W = ws
+        session = "fictional-session"
+        payload = {"hook_event_name": "UserPromptSubmit", "session_id": session,
+                   "cwd": str(self.coordination), "prompt": "What is due?"}
+        milestone = self.root / "state" / "home-stage-notice.json"
+        milestone.parent.mkdir()
+        milestone.write_text(json.dumps({"stage": 4, "name": "The River", "count": 1312}))
+
+        class FailedFlush(io.StringIO):
+            def flush(self):
+                raise BrokenPipeError("fixture desktop output failed")
+
+        with patch.object(ws, "now", return_value=1800000000), \
+                patch.object(ws, "_monitor_health", return_value=(False, "stall-watch: inactive")):
+            ws.hold("expired-timer", "Expired timer", "at:2020-01-01T00:00:00Z", "Due now", session)
+            with self.assertRaises(BrokenPipeError):
+                hook.main(io.StringIO(json.dumps(payload)), FailedFlush())
+            after_failure = ws.load_session(session) or {}
+
+            out = io.StringIO()
+            hook.main(io.StringIO(json.dumps(payload)), out)
+            context = json.loads(out.getvalue())["hookSpecificOutput"]["additionalContext"]
+            self.assertIn("expired-timer", context)
+            self.assertIn("HOME PICTURE STAGE REACHED", context)
+            self.assertNotIn("fallback_notice", after_failure)
+            self.assertEqual(ws.load_session(session)["fallback_kind"], "due")
+
+            quiet = io.StringIO()
+            hook.main(io.StringIO(json.dumps(payload)), quiet)
+            self.assertEqual(quiet.getvalue(), "")
 
     def test_richs_next_turn_opens_with_a_home_picture_stage_reached_once_and_stus_never(self):
         """CEO 2026-11-14: a hook notifies Rich when a milestone is reached. The app writes the
@@ -451,7 +486,7 @@ class DesktopHooks(unittest.TestCase):
             browser_reader=lambda tool: None,  # app.py's function the hook reads
             validate_shell_target=lambda payload: None, worker_context=lambda active, payload: None,
             dispatch_intent=lambda *args, **kwargs: None,
-            W=types.SimpleNamespace(fallback_notice=lambda *args: "", _recovery_adapter=lambda: (
+            W=types.SimpleNamespace(fallback_notice=lambda *args, **kwargs: "", _recovery_adapter=lambda: (
                 types.SimpleNamespace(cancellation_notice=lambda host, session: None), None)))
         real_load = hook.load
         def load(module, path):

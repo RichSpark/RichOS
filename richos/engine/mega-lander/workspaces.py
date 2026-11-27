@@ -61,6 +61,7 @@ import fcntl
 import glob
 import hashlib
 import json
+import math
 import os
 import re
 import shlex
@@ -3571,15 +3572,18 @@ def _review_at_ended(repo_name, prefix):
             "state", "review-watch")
     quiet = None
     for path in sorted(glob.glob(os.path.join(watch, "locks", "*.lock"))):
-        try:
-            with open(path, encoding="utf-8") as f:
-                lock = json.load(f)
-        except (OSError, ValueError):
-            continue
-        if (os.path.basename(str(lock.get("repo") or "").rstrip("/")) != repo_name
+        lock = read_json(path)
+        if (not lock or os.path.basename(str(lock.get("repo") or "").rstrip("/")) != repo_name
                 or not str(lock.get("tip") or "").startswith(prefix)):
             continue
-        age = now() - float(lock.get("started_at") or os.path.getmtime(path))
+        started = lock.get("started_at")
+        try:
+            started = os.path.getmtime(path) if started in (None, "", 0) else float(started)
+        except (OSError, OverflowError, TypeError, ValueError):
+            continue
+        if not math.isfinite(started):
+            continue
+        age = now() - started
         if age <= REVIEW_RUN_SECONDS:
             return None
         quiet = "review %s wrote nothing for %d min and has no verdict" % (ref, age // 60)
@@ -7516,22 +7520,23 @@ def _keep_ignored(rec, chain, deadline=None):
     plan = [x for x in plan if not _is_ack(x[3])]
     if not plan and not acks:
         return ""
-    # A MOVE, NEVER A COPY: inside a gate's budget only a rename is bounded.
-    # A workspace on another volume than the registry keeps the old answer
-    # (the land waits, and pending() now says why).
-    try:
-        here = os.stat(state_dir()).st_dev
-        if any(os.stat(p).st_dev != here for _k, _l, p, _r in plan):
+    root = ""
+    if plan:
+        # Only files being moved require an archive on the same volume.
+        # A rename keeps the move within the gate's budget.
+        try:
+            here = os.stat(state_dir()).st_dev
+            if any(os.stat(p).st_dev != here for _k, _l, p, _r in plan):
+                return ""
+        except OSError:
             return ""
-    except OSError:
-        return ""
-    archive = _p("kept")
-    try:
-        os.makedirs(archive, exist_ok=True)
-        root = tempfile.mkdtemp(prefix="%s-%d-" % (_key_segment(rec["key"]), int(now())), dir=archive)
-    except OSError as e:
-        raise SpecError("cannot land %s: the ignored-file archive %s could not be opened (%s)"
-                        % (rec["name"], archive, e)) from e
+        archive = _p("kept")
+        try:
+            os.makedirs(archive, exist_ok=True)
+            root = tempfile.mkdtemp(prefix="%s-%d-" % (_key_segment(rec["key"]), int(now())), dir=archive)
+        except OSError as e:
+            raise SpecError("cannot land %s: the ignored-file archive %s could not be opened (%s)"
+                            % (rec["name"], archive, e)) from e
     moved, dropped = [], []
     # An entry that holds the ack directory (a `.claude/` the main checkout
     # lacks) loses the acks first, so they are not kept inside it.
@@ -8196,8 +8201,8 @@ def _delete(rec, workspaces, branches, why, processes=None, deadline=None, memo=
     `deadline` is the caller's budget (hunt part 4, finding 15). The second
     landing proof below used to run without it, so a gate or a retry with a
     stated budget could spend any amount of time comparing files. Running out
-    is not a failure and not a change of eligibility: the deletion is simply
-    deferred to the next retry, with nothing deleted and no attempt counted.
+    is not a failure and not a change of eligibility: unfinished cleanup is
+    deferred to the next retry without counting an attempt for the expiry.
 
     THE BUDGET BOUNDS EVERY STAGE, NOT ONLY THE PROOF (hunt part 4 v2, V2-03).
     Process shutdown, container cleanup, test-instance collection, each
@@ -8323,12 +8328,15 @@ def _delete(rec, workspaces, branches, why, processes=None, deadline=None, memo=
             # the directory here — the record survives the directory.
             if held:
                 break
-            if _past(deadline):
-                deferred = "the budget ran out before %s was deleted" % w.get("path")
-                held = True
+            if out_of_time("%s was deleted" % w.get("path")):
                 break
             caches = workspace_build_caches(w.get("path"))
-            ok, err = remove_workspace(w, deadline=deadline)
+            try:
+                ok, err = remove_workspace(w, deadline=deadline)
+            except Deadline as e:
+                deferred = str(e)
+                held = True
+                break
             if ok:
                 w["deleted_at"] = iso()
                 discard_build_caches(rec["key"], w.get("path"), caches)
@@ -8387,6 +8395,7 @@ def _delete(rec, workspaces, branches, why, processes=None, deadline=None, memo=
             d["next_at"] = now()
             d["branches"] = bool(branches)
             fresh["deletion"] = d
+            outcome = "deletion-deferred"
         elif failures:
             d = fresh.get("deletion") or {"attempts": 0, "first_failed_at": now()}
             d["attempts"] = d.get("attempts", 0) + 1
@@ -8394,8 +8403,10 @@ def _delete(rec, workspaces, branches, why, processes=None, deadline=None, memo=
             d["next_at"] = now() + min(RETRY_CAP_SECONDS, RETRY_BASE_SECONDS * (2 ** (d["attempts"] - 1)))
             d["branches"] = bool(branches)
             fresh["deletion"] = d
+            outcome = "deletion-failed"
         else:
             fresh["deletion"] = None
+            outcome = "deleted"
         save_agent(fresh)
         done = not failures and fresh.get("disposition") and fresh["disposition"].get("kind") != "continued"
         if done and not fresh["created_branches"] \
@@ -8404,8 +8415,8 @@ def _delete(rec, workspaces, branches, why, processes=None, deadline=None, memo=
             write_json(done_path(fresh["key"]), fresh)
             os.unlink(agent_path(fresh["key"]))
             _drop_snapshots(fresh["key"])
-    event("deleted" if not failures else "deletion-failed", key=rec["key"], why=why,
-          failures=failures or None, stopped=processes.get("stopped") or None)
+    event(outcome, key=rec["key"], why=why, failures=failures or None,
+          stopped=processes.get("stopped") or None)
     return not failures
 
 
@@ -8485,19 +8496,26 @@ def discard_build_caches(key, path, caches):
 
 
 def remove_workspace(w, deadline=None):
-    """Deletes one workspace. With a `deadline` (V2-03) its `git worktree
-    remove` is bounded by what is left of it rather than by its own 300 s; a
-    removal cut short leaves the directory, which is reported and retried."""
+    """Delete one workspace and confirm its registration is gone.
+    With a `deadline`, every Git call uses the remaining time and expiry
+    raises Deadline so the caller can defer unfinished cleanup."""
     path, repo = w.get("path"), w.get("repo")
-    main = main_checkout(repo) if repo and os.path.isdir(repo) else ""
-    if not main:
+
+    def timeout(cap=60):
+        if _past(deadline):
+            raise Deadline("the budget ran out during deletion of worktree %s" % path)
+        return _bounded(deadline, cap)
+
+    wl = worktree_list(repo, timeout=timeout()) if repo and os.path.isdir(repo) else None
+    timeout()
+    if not wl:
         return False, "%s: its repository %s cannot be read" % (path, repo)
-    wl = worktree_list(main) or []
+    main = wl[0]["path"]
     entry = None
     for e in wl:
         if e["path"] == path:
             entry = e
-    if entry and wl and entry is wl[0]:
+    if entry is wl[0]:
         return False, "%s is the main checkout of %s and is never deleted" % (path, main)
     if entry and entry["branch"].startswith(CODEX_PREFIX):
         return False, "%s is now on %s; codex/ is never touched (point 2)" % (path, entry["branch"])
@@ -8513,35 +8531,46 @@ def remove_workspace(w, deadline=None):
             if os.path.isfile(gitfile):
                 with open(gitfile, encoding="utf-8", errors="replace") as f:
                     pointer = f.read()
-                common = _common_dir(main)
+                common = _common_dir(main, timeout=timeout())
+                timeout()
                 if not common or (os.path.join(common, "worktrees") + os.sep) not in realpath(
                         pointer.replace("gitdir:", "").strip()) + os.sep:
                     return False, "%s is not a workspace of %s; not deleted" % (path, main)
+            timeout()
             shutil.rmtree(path, ignore_errors=True)
         else:
-            rc, _o, err = git(main, "worktree", "remove", "--force", "--force", path, timeout=_bounded(deadline, 300))
+            rc, _o, err = git(main, "worktree", "remove", "--force", "--force", path, timeout=timeout(300))
+            timeout()
             if rc != 0 and os.path.lexists(path):
                 return False, "git worktree remove %s failed: %s" % (path, err.strip()[:300])
     # A registration whose directory is gone: remove exactly its own admin entry.
-    wl = worktree_list(main) or []
+    wl = worktree_list(main, timeout=timeout())
+    timeout()
+    if not wl:
+        return False, "%s: worktree removal could not be confirmed in %s" % (path, main)
     if any(e["path"] == path for e in wl):
-        admin = _admin_dir_for(main, path)
+        admin = _admin_dir_for(main, path, timeout=timeout())
+        timeout()
         if admin:
             shutil.rmtree(admin, ignore_errors=True)
     if os.path.lexists(path):
         return False, "%s still exists after deletion" % path
-    if any(e["path"] == path for e in (worktree_list(main) or [])):
+    wl = worktree_list(main, timeout=timeout())
+    timeout()
+    if not wl:
+        return False, "%s: worktree removal could not be confirmed in %s" % (path, main)
+    if any(e["path"] == path for e in wl):
         return False, "%s is still registered with git after deletion" % path
     return True, ""
 
 
-def _common_dir(main):
-    rc, out, _ = git(main, "rev-parse", "--path-format=absolute", "--git-common-dir")
+def _common_dir(main, timeout=60):
+    rc, out, _ = git(main, "rev-parse", "--path-format=absolute", "--git-common-dir", timeout=timeout)
     return realpath(out.strip()) if rc == 0 else ""
 
 
-def _admin_dir_for(main, path):
-    common = _common_dir(main)
+def _admin_dir_for(main, path, timeout=60):
+    common = _common_dir(main, timeout=timeout)
     base = os.path.join(common, "worktrees") if common else ""
     if not base or not os.path.isdir(base):
         return ""
@@ -9362,12 +9391,13 @@ def _monitor_health(sid):
         return False, "stall-watch could not be read (%s: %s)" % (e.__class__.__name__, str(e)[:160])
 
 
-def fallback_notice(sid, items=None):
+def fallback_notice(sid, items=None, *, emit=None):
     """THE STOP/STARTUP FALLBACK (orchestration reliability R5): while no healthy
     watcher evaluates this session, the lead hears the watcher's failure and the due
     work (due_set) here, once per material change: the watcher's state and each due
     item's work, state and end. '' while a watcher is healthy, or when nothing changed.
-    It refuses nothing and asks for no acknowledgement."""
+    It refuses nothing and asks for no acknowledgement. If given an emit callback,
+    record the notice only after the callback successfully writes and flushes it."""
     if not sid:
         return ""
     healthy, line = _monitor_health(sid)
@@ -9403,14 +9433,15 @@ def fallback_notice(sid, items=None):
         rec = load_session(sid) or {}
         if rec.get("fallback_notice") == key:
             return ""
-        prev_kind = rec.get("fallback_kind")
+        # Silence an empty set, except to report recovery from an unread list.
+        if kind == "empty" and rec.get("fallback_kind") != "unread":
+            text = ""
+        if text and emit is not None:
+            # Keep selection, delivery and receipt under one lock so concurrent
+            # callbacks cannot both deliver the same change.
+            emit(text)
         rec.update(fallback_notice=key, fallback_kind=kind)
         write_json(session_path(sid), rec)
-    # Nothing due is nothing to act on, so nothing is said (a message here costs the lead a model
-    # turn that does nothing; in a chat-only app conversation it was every first turn end). The
-    # one exception: right after a read that failed, the recovered read is told once.
-    if kind == "empty" and prev_kind != "unread":
-        return ""
     return text
 
 

@@ -299,14 +299,23 @@ def held_work_context(work, payload, also=""):
     The old every-turn hold lines are gone (R6). Only the conversation lease: Stu's turns
     carry none. The registry is this conversation's own partition (RICHOS_WORKSPACES_DIR)."""
     session = str(payload.get("session_id") or "")
-    try:
-        text = work.W.fallback_notice(session)
-    except Exception as error:  # noqa: BLE001 -- an unread list is said, never silence
-        text = f"DUE WORK NOT READ this turn ({type(error).__name__}: {str(error)[:160]})"
-    text = "\n\n".join(part for part in (text, also) if part)
-    if text:
+    started_output = False
+
+    def emit(text):
+        nonlocal started_output
+        started_output = True
+        context = "\n\n".join(part for part in (text, also) if part)
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
-                                                 "additionalContext": text}}), flush=True)
+                                                 "additionalContext": context}}), flush=True)
+
+    try:
+        work.W.fallback_notice(session, emit=emit)
+    except Exception as error:  # noqa: BLE001 -- an unread list is said, never silence
+        if started_output:
+            raise
+        emit(f"DUE WORK NOT READ this turn ({type(error).__name__}: {str(error)[:160]})")
+    if also and not started_output:
+        emit("")
 
 
 def lease_role(root, payload):

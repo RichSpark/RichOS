@@ -234,10 +234,24 @@ sub "H3.1 the lead is told what continued" "grep -q 'RELEASE zach-opus-high-hold
 WAITCMD="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import pause_protocol as p; print(p.WAIT_COMMAND.replace("~/.claude/richos-engine", sys.argv[2]))' "$LIB" "$ENGINE")"
 agent_call "$AID" "toolu_wait1" "$WAITCMD" wait1
 wait_file "$T/wait1.rc" 1200
-sub "H3.2 the held worker finished with the correct result" "[ \"\$(cat $T/w1 2>/dev/null)\" = '$EXPECTED' ]"
-wait_file "$T/w1.rc" 100
-sub "H3.3 the wait returns RESUMED and delivers native output and failure status without a Read" \
-    "grep -q '^RESUMED at' '$T/wait1.stdout' && grep -q 'native-result' '$T/wait1.stdout' && grep -q 'EXIT STATUS 7' '$T/wait1.stdout' && [ \"\$(cat $T/w1.rc)\" = 7 ] && [ \"\$(cat $T/wait1.rc)\" = 7 ]" "$(cat "$T/wait1.stdout" "$T/w1.stdout" 2>/dev/null)"
+result_wait=wait1
+# The first wait reports RESUMED immediately. If the same work is still running,
+# collect its eventual native result through a second wait.
+if grep -q '^NOT FINISHED YET: tool toolu_work1 ' "$T/wait1.stdout"; then
+    result_wait=wait1_result
+    # The launcher writes this receipt after the native result is complete.
+    wait_file "$T/w1.rc" 1200
+    agent_call "$AID" "toolu_wait1_result" "$WAITCMD" "$result_wait"
+    wait_file "$T/$result_wait.rc" 1200
+else
+    wait_file "$T/w1.rc" 100
+fi
+sub "H3.2 the held worker finished with the correct result" "[ \"\$(cat '$T/w1' 2>/dev/null)\" = '$EXPECTED' ]"
+sub "H3.3 the first wait reports RESUMED and native output and failure status arrive without a Read" \
+    "grep -q '^RESUMED at' '$T/wait1.stdout' && { [ '$result_wait' = wait1 ] || [ \"\$(cat '$T/wait1.rc')\" = 0 ]; } &&
+        grep -qx 'native-result' '$T/$result_wait.stdout' && grep -q '^TASK .* (tool toolu_work1) EXIT STATUS 7$' '$T/$result_wait.stdout' &&
+        [ \"\$(cat '$T/w1.rc')\" = 7 ] && [ \"\$(cat '$T/$result_wait.rc')\" = 7 ]" \
+    "$(cat "$T/wait1.stdout" "$T/$result_wait.stdout" 2>/dev/null)"
 
 unpaused() { python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("pause") is None else 1)' "$(ls "$STORE"/agents/*--"$1".json)"; }
 sub "H3.4 the registry records the resume and no hold is left" "[ -z \"\$(ls $HOLD_STATE/held 2>/dev/null)\" ] && unpaused zach-opus-high-hold1" \
@@ -368,10 +382,11 @@ sub "H9.1 held while its lead lives" "is_stopped $W9" "$(cat "$T/pause9.out")"
 T9="$(python3 -c 'import time; print(time.time())')"
 kill -9 "$LEADPID"
 # The release continues the work FIRST and removes its record only after its last
-# scan for self-suspended shells (hunt part 5, P5-01), so the wait covers both.
-i=0
-while { is_stopped "$W9" || [ -n "$(ls "$HOLD_STATE/held" 2>/dev/null)" ]; } && [ $i -lt 300 ]; do
-    sleep 0.1; i=$((i + 1))
+# scan for self-suspended shells (hunt part 5, P5-01). These two facts decide
+# the result. The 120 s hang guard allows for a busy Mac's delayed scans.
+h9_deadline=$((SECONDS + 120))
+while { is_stopped "$W9" || [ -n "$(ls "$HOLD_STATE/held" 2>/dev/null)" ]; } && [ "$SECONDS" -lt "$h9_deadline" ]; do
+    sleep 0.1
 done
 sub "H9.2 with no hook at all, the watchdog continued it after the lead died ($(python3 -c "import time; print('%.1f s' % (time.time() - $T9))"))" \
     "! is_stopped $W9 && [ -z \"\$(ls $HOLD_STATE/held 2>/dev/null)\" ]"
