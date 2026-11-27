@@ -124,3 +124,23 @@ elif [ -n "$_hp_stub_on_path" ]; then
 fi
 unset _hp_root _hp_stubs _hp_lib _hp_engine _hp_py _hp_ifs _hp_d _hp_link _hp_first _hp_dir _hp_stub_on_path
 unset -f _hp_is_stub
+
+# The terminal monitor leaves a short-lived record only when it emits a keep-alive.
+# In that window the native hook payload still has to match the actual task
+# notification. Replay ordinary hook input and keep its original enforcement.
+if [[ ${CLAUDE_CODE_SESSION_ID:-} =~ ^[a-zA-Z0-9_-]+$ ]] &&
+   [ "${CLAUDE_PID:-}" = "$PPID" ] && { [ -p /dev/stdin ] || [ -S /dev/stdin ]; }; then
+    _hp_pending="${STALL_WATCH_STATE_DIR:-$HOME/.claude/state/stall-watch}/$CLAUDE_CODE_SESSION_ID/keep-alive-pending.json"
+    if [ -f "$_hp_pending" ]; then
+        _hp_payload="$(cat)"
+        if python3 -B "${BASH_SOURCE[0]%/*}/terminal_keep_alive.py" "$_hp_pending" "$CLAUDE_CODE_SESSION_ID" <<< "$_hp_payload"; then
+            exit 0
+        elif [ "$?" -eq 2 ]; then
+            printf '%s\n' 'The cache keep-alive only needs an ok reply.' >&2
+            exit 2
+        fi
+        exec <<< "$_hp_payload"
+        unset _hp_payload
+    fi
+    unset _hp_pending
+fi

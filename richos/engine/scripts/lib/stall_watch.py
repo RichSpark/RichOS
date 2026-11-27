@@ -179,6 +179,7 @@ if HERE not in sys.path:
 import host_child  # noqa: E402  (sibling in scripts/lib: the app host's child)
 import resource_waits  # noqa: E402  (sibling in scripts/lib)
 import escalations  # noqa: E402  (sibling in scripts/lib)
+import terminal_keep_alive  # noqa: E402  (sibling in scripts/lib)
 
 POLL_SECONDS = 60
 SILENT_MINUTES = 20
@@ -264,11 +265,13 @@ def _write_json(path, data):
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(data, fh)
         os.replace(tmp, path)
+        return True
     except OSError:
         try:
             os.unlink(tmp)
         except OSError:
             pass
+        return False
 
 
 def _load(name, path):
@@ -1746,18 +1749,7 @@ def lead_is_idle(src, sid):
         return hosted
     path = lead_transcript(src, sid)
     try:
-        with open(path, "rb") as fh:
-            size = fh.seek(0, os.SEEK_END)
-            start = max(0, size - 256 * 1024)
-            fh.seek(start)
-            tail = fh.read()
-        if not tail.endswith(b"\n"):
-            return False
-        rows = tail.splitlines()[1 if start else 0:]
-        for raw in reversed(rows):
-            row = json.loads(raw)
-            if not isinstance(row, dict):
-                return False
+        for row in terminal_keep_alive.transcript_tail(path):
             if row.get("isSidechain"):
                 continue
             if row.get("type") in ("user", "assistant"):
@@ -1766,7 +1758,7 @@ def lead_is_idle(src, sid):
                 return True
             if (row.get("attachment") or {}).get("type") == "queued_command":
                 return False
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError, AttributeError):
         pass
     return False
 
@@ -1862,11 +1854,12 @@ def session_alive_check(pid):
     return alive
 
 
-def tick(src, sd, sid, now=None, out=None, json_lines=False):
+def tick(src, sd, sid, now=None, out=None, json_lines=False, keep_alive=False):
     """One look against the session's state: prints what is due, returns the
     number of lines printed. A look that raises is announced once as a stall
     of the watcher and changes nothing else."""
     out = out or sys.stdout
+    controlled_now = now
     now = clock() if now is None else now
     th = thresholds()
     path = os.path.join(sd, "announced.json")
@@ -1916,12 +1909,37 @@ def tick(src, sd, sid, now=None, out=None, json_lines=False):
         # told the lead only when its <event> body starts with ESCALATION-WATCH
         # (escalations.monitor_event_keys).
         lines = esc_lines + idle_lines + lines
+        if keep_alive:
+            observe_keep_alive(src, sd, sid, lines, controlled_now)
         if lines:
             text = "\n".join(lines)
             out.write((json.dumps({"text": text}) if json_lines else text) + "\n")
             out.flush()
         _write_json(path, state)
     return len(lines), len(state.get("open") or {})
+
+
+def observe_keep_alive(src, sd, sid, lines, now=None):
+    path = os.path.join(sd, terminal_keep_alive.STATE_NAME)
+    pending = os.path.join(sd, terminal_keep_alive.PENDING_NAME)
+    previous = _read_json(path)
+    now = clock() if now is None else now
+    observation = terminal_keep_alive.observe(lead_transcript(src, sid), now, previous, bool(lines))
+    if observation["status"] == "emitted":
+        # The REPL can move to a running turn before its transcript records a user row.
+        active = src.ws.platform_session(sid) or {}
+        if active.get("status") not in (None, "shell", "idle"):
+            observation.update(status="busy", attempt=previous.get("attempt", 0))
+        elif _write_json(pending, {"attempt": now}):
+            lines.append(terminal_keep_alive.KEEP_ALIVE_TEXT)
+        else:
+            observation.update(status="state_unavailable", attempt=previous.get("attempt", 0))
+    if observation["status"] == "waiting" or now - observation["attempt"] >= terminal_keep_alive.RETRY_AFTER:
+        try:
+            os.unlink(pending)
+        except OSError:
+            pass
+    _write_json(path, observation)
 
 
 # ---------------------------------------------------------------------------
@@ -1937,7 +1955,7 @@ def tick(src, sd, sid, now=None, out=None, json_lines=False):
 # timeout is a watcher failure, told once per failing streak, and the beat's
 # last_look does not move, so --alive and the Stop fallback see it.
 EVALUATOR_SOURCES = ("scripts/lib/stall_watch.py", "mega-lander/workspaces.py", "scripts/lib/resource_waits.py",
-                     "scripts/lib/escalations.py", "scripts/lib/host_child.py")
+                     "scripts/lib/escalations.py", "scripts/lib/host_child.py", "scripts/lib/terminal_keep_alive.py")
 
 
 def source_identity(engine_root):
@@ -1955,11 +1973,13 @@ def source_identity(engine_root):
     return h.hexdigest()[:16], newest
 
 
-def _child_look(a, src, sid, sd, poll):
+def _child_look(a, src, sid, sd, poll, keep_alive=False):
     """(ok, lines printed, why). One look in a fresh child of this same script."""
     timeout = max(5.0, min(poll - 5.0, 0.75 * poll))
     cmd = [sys.executable, "-B", os.path.abspath(__file__), "--tick", "--engine-root", src.engine_root,
            "--config", a.config, "--command", a.command] + (["--jsonl"] if a.jsonl else [])
+    if keep_alive:
+        cmd.append("--terminal-keep-alive")
     started = time.time()
     # The source on disk when the child STARTS. The child hashes it again after its look; a
     # difference means it changed while the child was loading or looking, so which version
@@ -2028,10 +2048,14 @@ def run_loop(a, src, exit_on_notice=False):
             "scope": os.path.realpath(os.environ["RICHOS_WORKSPACES_DIR"])
                      if (os.environ.get("RICHOS_WORKSPACES_DIR") or "").strip() else "",
             "mode": "watch" if exit_on_notice else "monitor", "last_look": None, "open": 0}
+    # Claude's plugin monitor names its own session. The app uses --jsonl and
+    # the shell fallback uses --watch, so neither sends terminal keep-alives.
+    keep_alive = bool(a.monitor and not a.jsonl and spid and sid
+                      and os.environ.get("CLAUDE_CODE_SESSION_ID") == sid)
     failing = ""
     try:
         while alive is None or alive():
-            ok, printed, why = _child_look(a, src, sid, sd, poll)
+            ok, printed, why = _child_look(a, src, sid, sd, poll, keep_alive)
             if ok:
                 beat["last_look"] = time.time()
                 beat["open"] = len(_read_json(os.path.join(sd, "announced.json")).get("open") or {})
@@ -2171,6 +2195,9 @@ def mode_alive(a, src):
         return 2
     code, line = alive_status(sid or "no-session", src.engine_root, a.command)
     print(line)
+    status = terminal_keep_alive.diagnostic(os.path.join(state_root(), sid or "no-session"))
+    if status:
+        print(status)
     return code
 
 
@@ -2229,6 +2256,7 @@ def main(argv):
     ap.add_argument("--jsonl", action="store_true", help="frame monitor/watch/tick output as one JSON line per complete block")
     ap.add_argument("--host-json", action="store_true",
                     help="with --monitor: the app host's child, for the lead it names; JSON lines")
+    ap.add_argument("--terminal-keep-alive", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--config", default="")
     ap.add_argument("--engine-root", default="")
     ap.add_argument("--command", default="stall-watch.sh")
@@ -2245,7 +2273,7 @@ def main(argv):
     if a.tick:
         sid, _spid = src.session()
         sd = session_dir(sid)
-        tick(src, sd, sid, json_lines=a.jsonl)
+        tick(src, sd, sid, json_lines=a.jsonl, keep_alive=a.terminal_keep_alive)
         # The source on disk AFTER the look; the parent compares it with the source when the
         # child started (_child_look) and records no version when they differ.
         ident, _newest = source_identity(src.engine_root)
