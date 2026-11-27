@@ -300,6 +300,10 @@ def append_land_marker(state_root, session_id, repo, branch, before, after, revi
                "land_marker": marker})
 
 
+def _land_row_key(row):
+    return row.get("path"), row.get("from"), row.get("commit")
+
+
 def append_land_rows(state_root, session_id, rows):
     """Witness (d), the land (Output side panel PRD §4.1 (d), slice S2b): one row per file a
     land wrote into the connected repository, appended to the back-end session's own
@@ -309,7 +313,7 @@ def append_land_rows(state_root, session_id, rows):
     `rows` are `{path, from, commit, worker: {name, agent_id}}`: `path` is the landed copy,
     `from` the worker's worktree copy it retires, `commit` the commit the ref moved to. Paths
     only, like every other row. A row that is not that shape refuses the whole call before
-    anything is written; the caller's posture is that a refusal never fails the land."""
+    anything is written. Retrying a partially written land adds only its missing rows."""
     out = []
     for row in rows:
         worker = row.get("worker") if isinstance(row, dict) else None
@@ -324,10 +328,30 @@ def append_land_rows(state_root, session_id, rows):
                     "at": now_ms(), "source": "land"})
     if not out:
         return 0
+    missing = {_land_row_key(row): row for row in out}
     with _session_folder(state_root, session_id) as folder:
-        for row in out:
-            append(folder / WRITES_FILE, row)
-    return len(out)
+        journal = folder / WRITES_FILE
+        fd = os.open(journal, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "a+b") as stream:
+            stream.seek(0)
+            line = b""
+            for line in stream:
+                try:
+                    prior = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(prior, dict) and prior.get("source") == "land":
+                    key = _land_row_key(prior)
+                    if all(isinstance(value, str) for value in key):
+                        missing.pop(key, None)
+            if line and not line.endswith(b"\n"):
+                # Keep any torn last record apart from the next valid append.
+                stream.write(b"\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+        for row in missing.values():
+            append(journal, row)
+    return len(missing)
 
 
 def capture(payload, state_root, app_data=None, worktrees=None):
