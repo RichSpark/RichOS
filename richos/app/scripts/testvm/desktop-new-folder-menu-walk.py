@@ -179,9 +179,9 @@ class Walk:
             if layout == 'Dvorak':
                 try:
                     row['physical_qwerty_n'] = self.dvorak_control(hid)
-                except RuntimeError as error:
+                except (RuntimeError, StopIteration) as error:
+                    row['physical_qwerty_n'] = {'pass': False, 'error': (str(error) or type(error).__name__)[:300]}
                     self.tool('shot.sh', str(out / 'dvorak-control.png'))
-                    row['physical_qwerty_n'] = {'pass': False, 'error': str(error)[:300]}
             print(layout, row, flush=True)
         return results
 
