@@ -309,7 +309,7 @@ func requireLocalFileURL(_ url: URL) throws {
 
 public struct FileSort: Equatable, Sendable {
     public enum Column: Equatable, Sendable {
-        case name, fileExtension, type, size, modified
+        case name, fileExtension, type, size, modified, created
     }
 
     public var column: Column
@@ -347,6 +347,9 @@ public struct FileSort: Equatable, Sendable {
         case .modified:
             if (left.modified == nil) != (right.modified == nil) { return left.modified != nil }
             order = compare(left.modified ?? .distantPast, right.modified ?? .distantPast)
+        case .created:
+            if (left.created == nil) != (right.created == nil) { return left.created != nil }
+            order = compare(left.created ?? .distantPast, right.created ?? .distantPast)
         }
         if order != .orderedSame { return order == (ascending ? .orderedAscending : .orderedDescending) }
         if column != .name {
