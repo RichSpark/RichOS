@@ -608,6 +608,7 @@ struct RichFilesSettings: View {
         case .type: name = "Kind"
         case .size: name = "Size"
         case .modified: name = "Date modified"
+        case .created: name = "Date created"
         }
         let group = sort.groupByType && sort.column != .type ? "Type groups, then " : ""
         return group + name + (sort.ascending ? ", ascending" : ", descending")

@@ -91,6 +91,28 @@ final class DirectoryReaderTests: XCTestCase {
         }
     }
 
+    func testSortByDateCreatedUsesBirthTimeAndBreaksTiesByName() throws {
+        try fixture { root in
+            let fixtures = [("B.txt", 2, 3), ("A.txt", 2, 5), ("C.txt", 1, 4)]
+            let entries = try fixtures.map { name, created, modified in
+                let url = root.appendingPathComponent(name)
+                try write(name, in: root)
+                try FileManager.default.setAttributes([
+                    .creationDate: Date(timeIntervalSince1970: 1_700_000_000 + Double(created)),
+                    .modificationDate: Date(timeIntervalSince1970: 1_700_000_000 + Double(modified)),
+                ], ofItemAtPath: url.path)
+                return try FileEntry(url: url)
+            }
+
+            let byCreation = FileSort(column: .created)
+            let byCreationDescending = FileSort(column: .created, ascending: false)
+            let byModification = FileSort(column: .modified)
+            XCTAssertEqual(entries.sorted(by: byCreation.precedes).map(\.name), ["C.txt", "A.txt", "B.txt"])
+            XCTAssertEqual(entries.sorted(by: byCreationDescending.precedes).map(\.name), ["A.txt", "B.txt", "C.txt"])
+            XCTAssertEqual(entries.sorted(by: byModification.precedes).map(\.name), ["B.txt", "C.txt", "A.txt"])
+        }
+    }
+
     func testDiskUsageCountsNestedFilesAndHiddenItemsWithoutFollowingLinks() throws {
         try fixture { root in
             let folder = root.appendingPathComponent("Measure", isDirectory: true)
