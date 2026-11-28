@@ -163,10 +163,10 @@ struct BrowserView: View {
         .onChange(of: model.showHidden) { _ in configureQuickInfo() }
         .onChange(of: model.tabs.map(\.folder)) { _ in sessionChanged() }
         .onChange(of: model.currentTabID) { _ in sessionChanged() }
-        .onChange(of: actions.mutationRevision) { _ in
+        .onReceive(actions.mutations) { arrival in
             // Undo Rename (and Redo) keep the sidebar's open branches open, as the rename did.
             for move in actions.mutationMoves { folderTree.move(from: move.from, to: move.to) }
-            model.refresh()
+            model.refresh(revealing: arrival)
             treeRevision = UUID()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -180,19 +180,6 @@ struct BrowserView: View {
             feedback = ""
             renaming.end()
             quickInfo.hide()
-        }
-        .onChange(of: actions.lastDuplicates) { duplicates in
-            // Catalog entry 1: the new copy takes its sorted place, is selected and scrolled into view.
-            guard let duplicates, activePane,
-                  duplicates.folder.resolvingSymlinksInPath().standardizedFileURL.path
-                    == model.folder.resolvingSymlinksInPath().standardizedFileURL.path else { return }
-            model.selectCreatedItems(duplicates.items)
-            if let last = duplicates.items.last {
-                model.selection.rangeAnchor = last.url
-                model.selection.moveCursor(to: last.url, scrolling: true)
-                model.selection.flash(duplicates.items.map(\.url))
-            }
-            focusItems()
         }
         .background {
             observeSelection { selection in
@@ -950,6 +937,11 @@ struct BrowserView: View {
                     }.frame(minWidth: geometry.size.width, maxHeight: .infinity)
                 }
                 .onAppear { columns.scrollTo(ColumnScrollTarget.currentDivider, anchor: .trailing) }
+                .background {
+                    selectionScroll {
+                        if $0 != nil { columns.scrollTo(ColumnScrollTarget.currentDivider, anchor: .trailing) }
+                    }
+                }
                 .onChange(of: model.folder) { _ in
                     columns.scrollTo(ColumnScrollTarget.currentDivider, anchor: .trailing)
                 }
@@ -1215,7 +1207,7 @@ struct BrowserView: View {
 
     private func selectionScroll(_ action: @escaping (URL?) -> Void) -> some View {
         observeSelection { selection in
-            Color.clear.onChange(of: selection.scrollToItem, perform: action)
+            Color.clear.onChange(of: selection.scrollRequest) { action($0?.item) }
         }
     }
 
@@ -1922,7 +1914,8 @@ struct BrowserView: View {
             feedback = "The destination folder is unavailable. Refresh this folder and try again."
             return
         }
-        actions.paste(into: destination.url, conflict: conflict, destination: destination)
+        actions.paste(into: destination.url, conflict: conflict, destination: destination,
+                      revealIn: model.transferVisit)
     }
 
     private var currentDropDestination: BrowserTransferDestination? {
@@ -1953,6 +1946,7 @@ struct BrowserView: View {
         guard let destination = currentDropDestination, !fileProviders.isEmpty else { return false }
         let option = NSEvent.modifierFlags.contains(.option)
         let local = BrowserDragSurface.pasteboardToken
+        let visit = model.transferVisit
         Task {
             do {
                 var urls: [URL] = []
@@ -1976,10 +1970,12 @@ struct BrowserView: View {
                         return
                     }
                     let move = proposedOperation == .move && drag.moves(to: destination, option: option)
-                    actions.transfer(drag.sources, into: destination.url, move: move, destination: destination)
+                    actions.transfer(drag.sources, into: destination.url, move: move, destination: destination,
+                                     revealIn: visit)
                 } else {
                     let sources = try await Task.detached { try urls.map { try FileReference(url: $0) } }.value
-                    actions.transfer(sources, into: destination.url, move: false, destination: destination)
+                    actions.transfer(sources, into: destination.url, move: false, destination: destination,
+                                     revealIn: visit)
                 }
             } catch { feedback = error.localizedDescription }
         }
@@ -2187,7 +2183,7 @@ private struct RowHighlight: NSViewRepresentable {
             CATransaction.commit()
         }
 
-        /// A pasted duplicate flashes once (catalog entry 1): its fill fades from the deeper
+        /// A selected transfer arrival flashes once: its fill fades from the deeper
         /// pointed-at tone to the plain selected tone.
         private func flashIfNew(_ selection: BrowserSelection, _ url: URL) {
             let flashed = selection.flashed

@@ -601,16 +601,21 @@ final class BrowserActionsTests: XCTestCase {
         try await withFixture { _, folder, board in
             let file = try write("original", named: "yet another test file.txt", in: folder)
             let actions = BrowserActions(pasteboard: board)
+            let visit = UUID()
+            var arrival: BrowserTransferArrival?
+            let observation = actions.mutations.sink { arrival = $0 }
+            defer { observation.cancel() }
             actions.copy([file])
 
-            try await perform(actions) { actions.paste(into: folder) }
+            try await perform(actions) { actions.paste(into: folder, revealIn: visit) }
             let first = folder.appendingPathComponent("yet another test file - Copy.txt")
             XCTAssertEqual(try contents(first), "original")
             XCTAssertEqual(actions.status, "Copied as “yet another test file - Copy.txt”.")
-            XCTAssertEqual(actions.lastDuplicates?.items.map(\.url.lastPathComponent), ["yet another test file - Copy.txt"])
+            XCTAssertEqual(arrival?.items.map(\.url.lastPathComponent), ["yet another test file - Copy.txt"])
+            XCTAssertEqual(arrival?.visit, visit)
             XCTAssertEqual(actions.undoName, "Duplicate")
 
-            try await perform(actions) { actions.paste(into: folder) }
+            try await perform(actions) { actions.paste(into: folder, revealIn: visit) }
             let second = folder.appendingPathComponent("yet another test file - Copy (2).txt")
             XCTAssertEqual(try contents(second), "original")
             XCTAssertEqual(try contents(file.url), "original")
@@ -620,9 +625,46 @@ final class BrowserActionsTests: XCTestCase {
             let plans = try FileOperations.createFolder(in: folder, named: "Plans")
             _ = try write("inside", named: "inside.txt", in: plans.url)
             actions.copy([plans])
-            try await perform(actions) { actions.paste(into: folder) }
+            try await perform(actions) { actions.paste(into: folder, revealIn: visit) }
             XCTAssertEqual(try contents(folder.appendingPathComponent("Plans - Copy/inside.txt")), "inside")
-            XCTAssertEqual(actions.lastDuplicates?.items.map(\.url.lastPathComponent), ["Plans - Copy"])
+            XCTAssertEqual(arrival?.items.map(\.url.lastPathComponent), ["Plans - Copy"])
+        }
+    }
+
+    @MainActor
+    func testTransferArrivalsUseSuccessfulDestinationReceiptsIncludingKeepBoth() async throws {
+        try await withFixture { root, folder, board in
+            let first = try write("copied", named: "First.txt", in: root)
+            let colliding = try write("incoming", named: "Collision.txt", in: root)
+            let occupant = try write("existing", named: "Collision.txt", in: folder)
+            let actions = BrowserActions(pasteboard: board)
+            let visit = UUID()
+            var arrival: BrowserTransferArrival?
+            let observation = actions.mutations.sink { arrival = $0 }
+            defer { observation.cancel() }
+
+            actions.copy([first, colliding])
+            try await perform(actions) { actions.paste(into: folder, revealIn: visit) }
+            XCTAssertEqual(arrival?.visit, visit)
+            XCTAssertEqual(arrival?.id, actions.transfer?.id)
+            let copied = try XCTUnwrap(arrival?.items.first)
+            XCTAssertEqual(arrival?.items.count, 1)
+            XCTAssertEqual(copied.url.path, folder.appendingPathComponent("First.txt").path)
+            XCTAssertEqual(try contents(copied.url), "copied")
+            XCTAssertNotEqual(copied.identity, first.identity)
+
+            try await perform(actions) { actions.retryTransfer(conflict: .keepBoth) }
+            XCTAssertEqual(arrival?.visit, visit)
+            let kept = try XCTUnwrap(arrival?.items.first)
+            XCTAssertNotEqual(kept.url, occupant.url)
+            XCTAssertEqual(try contents(kept.url), "incoming")
+            XCTAssertEqual(try contents(occupant.url), "existing")
+
+            let moving = try write("moved", named: "Moved.txt", in: root)
+            try await perform(actions) { actions.transfer([moving], into: folder, move: true, revealIn: visit) }
+            XCTAssertEqual(arrival?.items.first?.url.path, folder.appendingPathComponent("Moved.txt").path)
+            XCTAssertEqual(arrival?.items.first?.identity, moving.identity)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: moving.url.path))
         }
     }
 

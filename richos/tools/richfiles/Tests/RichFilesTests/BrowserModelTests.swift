@@ -390,6 +390,51 @@ final class BrowserModelTests: XCTestCase {
     }
 
     @MainActor
+    func testTransferRefreshSelectsOnlyMatchingArrivalsInTheReceivingVisit() async throws {
+        let temporary = try XCTUnwrap(ProcessInfo.processInfo.environment["TMPDIR"])
+        let root = URL(fileURLWithPath: temporary, isDirectory: true).resolvingSymlinksInPath()
+            .appendingPathComponent("RichFilesTransferSelection-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let original = try FileOperations.createItem(in: root, named: "Middle.txt", directory: false,
+                                                     expectedFolder: nil, useAvailableName: false)
+        let receiver = BrowserModel(start: root)
+        let otherPane = BrowserModel(start: root)
+        for model in [receiver, otherPane] {
+            try await waitForListing(model, at: root)
+            model.selected = [try XCTUnwrap(model.entries.first?.url)]
+        }
+
+        let items = try ["A first.txt", "Z last.txt", "Replaced.txt"].map {
+            try FileOperations.createItem(in: root, named: $0, directory: false,
+                                          expectedFolder: nil, useAvailableName: false)
+        }
+        let replaced = try XCTUnwrap(items.last)
+        let parked = root.appendingPathComponent("Parked.txt")
+        try FileManager.default.moveItem(at: replaced.url, to: parked)
+        try Data("different".utf8).write(to: replaced.url)
+        let arrival = BrowserTransferArrival(visit: receiver.transferVisit, id: UUID(),
+            started: ProcessInfo.processInfo.systemUptime, items: items)
+        receiver.refresh(revealing: arrival)
+        otherPane.refresh(revealing: arrival)
+        try await waitForListing(receiver, at: root)
+        try await waitForListing(otherPane, at: root)
+
+        XCTAssertEqual(receiver.selectedEntries.map(\.identity), items.dropLast().map(\.identity))
+        XCTAssertEqual(receiver.selection.cursor?.path, items[1].url.path)
+        XCTAssertEqual(receiver.selection.rangeAnchor?.path, items[1].url.path)
+        XCTAssertEqual(receiver.scrollAnchor?.path, items[1].url.path)
+        XCTAssertEqual(receiver.selection.scrollRequest?.item.path, items[1].url.path)
+        XCTAssertEqual(otherPane.selectedEntries.map(\.identity), [original.identity])
+
+        receiver.newTab(root)
+        try await waitForListing(receiver, at: root)
+        receiver.refresh(revealing: arrival)
+        try await waitForListing(receiver, at: root)
+        XCTAssertTrue(receiver.selected.isEmpty)
+    }
+
+    @MainActor
     func testRefreshAndSessionDoNotSelectAnItemThatReusedTheSamePath() async throws {
         let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
             .appendingPathComponent("RichFilesSelectionIdentity-\(UUID().uuidString)", isDirectory: true)
