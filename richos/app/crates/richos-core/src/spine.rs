@@ -562,7 +562,7 @@ pub enum KeptAlive {
 fn keep_front_desk_alive_with(state:&mut impl PreparationState,thread:&str)->KeptAlive {
     let begun=state.state(|s| {
         if s.thread_is_running(thread) {return Err(KeptAlive::Busy)}
-        if s.control.pending_intake().iter().any(|record|s.intake_is_for(record,thread)) {return Err(KeptAlive::Busy)}
+        if s.control.pending_intake().iter().any(|record|s.intake_holds_desk(record,thread)) {return Err(KeptAlive::Busy)}
         let binding=s.ledger.thread_binding(thread).map_err(|e|KeptAlive::NotSent(e.to_string()))?;
         let plan=s.select_connection(&binding).map_err(|e|KeptAlive::NotSent(e.to_string()))?;
         plan.control.begin_front_desk_prime();
@@ -1466,7 +1466,7 @@ impl Spine {
         if control.active_turn().is_some() || control.front_desk_priming().is_some() { return false; }
         // A delivery or a priming call holds a clone of the slot while it uses it.
         if std::sync::Arc::strong_count(&desk.lease) != 1 { return false; }
-        if pending.iter().any(|record| self.intake_is_for(record, thread)) { return false; }
+        if pending.iter().any(|record| self.intake_holds_desk(record, thread)) { return false; }
         let Ok(binding) = self.ledger.thread_binding(thread) else { return false };
         // An empty slot has no child to end; it is left for the cap, as before.
         if !desk.lease.try_lock().is_ok_and(|slot| slot.is_some()) { return false; }
@@ -1486,11 +1486,22 @@ impl Spine {
             || lease.worker_status().is_some_and(|view| !crate::work_gate::workers(&view).0.permits_action())
     }
 
-    fn intake_is_for(&self, record: &IntakeRecord, thread: &str) -> bool {
+    fn intake_holds_desk(&self, record: &IntakeRecord, thread: &str) -> bool {
         match record {
-            IntakeRecord::Steer { thread_id, .. }
-            | IntakeRecord::Channel { thread_id, .. }
-            | IntakeRecord::Desk { thread_id, .. } => thread_id == thread,
+            IntakeRecord::Steer { id, thread_id, .. }
+            | IntakeRecord::Channel { id, thread_id, .. }
+            | IntakeRecord::Desk { id, thread_id, .. } => {
+                // A held earlier record pins the shared drain mark. Later input can
+                // already be finished in the ledger even while its intake row stays.
+                // A replay keeps the intake ID and follows its prior attempt in
+                // ledger order. Judge the latest attempt, which may still be queued.
+                thread_id == thread && !self.ledger.turns().iter()
+                    .rfind(|turn| turn.thread_id == thread && turn.intake_id == Some(*id))
+                    .is_some_and(|turn| !turn.quarantined && matches!(turn.state,
+                        crate::ledger::TurnState::Completed
+                        | crate::ledger::TurnState::Interrupted
+                        | crate::ledger::TurnState::Stopped))
+            }
             // A Stop names a turn; a turn the ledger cannot place keeps every desk.
             IntakeRecord::Stop { turn_id, .. } => self.ledger.turn(turn_id).is_none_or(|turn| turn.thread_id == thread),
             IntakeRecord::Drained { .. } => false,

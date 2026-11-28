@@ -2,7 +2,7 @@
 use crate::{AppState, NavigationTree, ThreadRow};
 use richos_core::{
     assignment::{self, AssignmentState, NoticeKind},
-    ledger::{AttentionTier, Source, TurnState},
+    ledger::{AttentionTier, Source, Turn, TurnState},
     questions::{Question, State},
     quota::{self, holds::Hold},
     read_view::SpineView,
@@ -76,7 +76,7 @@ const CUT_OFF_DETAIL: &str = "Continues when you write";
 
 #[allow(clippy::too_many_arguments)]
 fn facts(
-    view: &dyn SpineView,
+    turns: &[&Turn],
     state_root: &std::path::Path,
     work: &richos_core::work_host::WorkHost,
     gate: &richos_core::turn_gate::TurnGate,
@@ -96,59 +96,57 @@ fn facts(
     // The team's input the app's end cut off, held by the one rule until he acts here.
     let mut cut_off = gate.cut_off(&row.id);
     let cut_off_tag = richos_core::interruption::InterruptionCause::CutOffByAppEnd.tag();
-    if let Ok(turns) = view.ledger().thread_turns(&row.id) {
-        let restart_successors: std::collections::HashSet<_> = turns
-            .iter()
-            .filter(|turn| turn.ended_at.is_none())
-            .filter_map(|turn| turn.superseded_by.as_deref())
-            .collect();
-        for turn in turns
-            .iter()
-            .copied()
-            .filter(|turn| turn.source != Source::Internal && turn.superseded_by.is_none())
-        {
-            if matches!(turn.source, Source::Text | Source::Jam) {
-                latest(&mut result.input_at, turn.created_at);
+    let restart_successors: std::collections::HashSet<_> = turns
+        .iter()
+        .filter(|turn| turn.ended_at.is_none())
+        .filter_map(|turn| turn.superseded_by.as_deref())
+        .collect();
+    for turn in turns
+        .iter()
+        .copied()
+        .filter(|turn| turn.source != Source::Internal && turn.superseded_by.is_none())
+    {
+        if matches!(turn.source, Source::Text | Source::Jam) {
+            latest(&mut result.input_at, turn.created_at);
+        }
+        if turn.source == Source::Proactive {
+            if turn.tier != Some(AttentionTier::Silent) {
+                latest(&mut result.result_at, turn.created_at);
             }
-            if turn.source == Source::Proactive {
-                if turn.tier != Some(AttentionTier::Silent) {
-                    latest(&mut result.result_at, turn.created_at);
-                }
-                continue;
+            continue;
+        }
+        newest_progress = newest_progress.max(turn.created_at);
+        match turn.state {
+            TurnState::Received | TurnState::InFlight => {
+                earliest(
+                    &mut result.working_since,
+                    turn.started_at.unwrap_or(turn.created_at),
+                );
+                result.recovering |= restart_successors.contains(turn.id.as_str());
+                work_detail = Some("Rich".to_owned());
             }
-            newest_progress = newest_progress.max(turn.created_at);
-            match turn.state {
-                TurnState::Received | TurnState::InFlight => {
-                    earliest(
-                        &mut result.working_since,
-                        turn.started_at.unwrap_or(turn.created_at),
-                    );
-                    result.recovering |= restart_successors.contains(turn.id.as_str());
-                    work_detail = Some("Rich".to_owned());
-                }
-                TurnState::Completed => {
-                    if let Some(at) = turn.ended_at {
-                        latest(&mut result.result_at, at);
-                        if is_long(turn.started_at.unwrap_or(turn.created_at), at) {
-                            latest(&mut result.long_finish_at, at);
-                        }
+            TurnState::Completed => {
+                if let Some(at) = turn.ended_at {
+                    latest(&mut result.result_at, at);
+                    if is_long(turn.started_at.unwrap_or(turn.created_at), at) {
+                        latest(&mut result.long_finish_at, at);
                     }
                 }
-                // Rich's answer the app's end cut off is paused, not stopped: his next message
-                // here carries it on, and that newer turn then reads as progress.
-                TurnState::Interrupted if turn.interruption.as_ref().is_some_and(|record| record.cause == cut_off_tag) => {
-                    cut_off = true;
-                }
-                TurnState::Interrupted | TurnState::Stopped => {
-                    let at = turn
-                        .ended_at
-                        .or(turn.stop_requested_at)
-                        .unwrap_or(turn.created_at);
-                    if result.stopped_at.is_none_or(|old| at >= old) {
-                        result.stopped_at = Some(at);
-                        stopped_independently = turn.state == TurnState::Interrupted;
-                        stop_detail = turn.stop_reason.clone();
-                    }
+            }
+            // Rich's answer the app's end cut off is paused, not stopped: his next message
+            // here carries it on, and that newer turn then reads as progress.
+            TurnState::Interrupted if turn.interruption.as_ref().is_some_and(|record| record.cause == cut_off_tag) => {
+                cut_off = true;
+            }
+            TurnState::Interrupted | TurnState::Stopped => {
+                let at = turn
+                    .ended_at
+                    .or(turn.stop_requested_at)
+                    .unwrap_or(turn.created_at);
+                if result.stopped_at.is_none_or(|old| at >= old) {
+                    result.stopped_at = Some(at);
+                    stopped_independently = turn.state == TurnState::Interrupted;
+                    stop_detail = turn.stop_reason.clone();
                 }
             }
         }
@@ -321,10 +319,11 @@ pub(crate) fn snapshot(state: &AppState, view: &dyn SpineView, tree: &mut Naviga
         }
     }
     let reset = quota_reset(&state.quota.view());
+    let turns_by_thread = view.ledger().turns_by_thread();
     let facts: Vec<_> = rows(tree)
         .map(|row| {
             facts(
-                view,
+                turns_by_thread.get(row.id.as_str()).map_or(&[], Vec::as_slice),
                 &state_root,
                 &state.work,
                 &state.turn_gate,

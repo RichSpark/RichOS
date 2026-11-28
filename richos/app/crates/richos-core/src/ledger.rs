@@ -2280,6 +2280,37 @@ impl Ledger {
             .collect())
     }
 
+    /// The scoped view of every bound thread, grouped in ledger order in one pass.
+    /// Use this for projections that need many threads from the same snapshot.
+    pub fn turns_by_thread(&self) -> std::collections::HashMap<&str, Vec<&Turn>> {
+        let mut bindings = std::collections::HashMap::with_capacity(self.threads.len());
+        for thread in &self.threads {
+            // Use the first record for a thread ID, as thread_ref does.
+            bindings.entry(thread.id.as_str()).or_insert_with(|| {
+                let ThreadEntity::Bound { person_id, entity_id, binding_revision } = &thread.entity else {
+                    return None;
+                };
+                Some(ThreadBinding::new(
+                    person_id.clone(),
+                    entity_id.clone(),
+                    &thread.id,
+                    *binding_revision,
+                ))
+            });
+        }
+        let mut grouped = std::collections::HashMap::<_, Vec<_>>::new();
+        for turn in &self.turns {
+            let thread_id = turn.thread_id.as_str();
+            let Some(Some(binding)) = bindings.get(thread_id) else {
+                continue;
+            };
+            if Self::turn_in_scope(turn, binding) {
+                grouped.entry(thread_id).or_default().push(turn);
+            }
+        }
+        grouped
+    }
+
     /// Same view, but verifying a binding the caller already holds first (so a caller
     /// operating under a stale or foreign context is refused rather than served).
     pub fn thread_turns_scoped(&self, binding: &ThreadBinding) -> Result<Vec<&Turn>, LedgerError> {
