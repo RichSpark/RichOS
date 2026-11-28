@@ -904,7 +904,7 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64, gestures: bo
         } else {
             matches!(operation, "listing" | "listingVisible" | "copy" | "move" | "recovery" | "gitHistory" | "gitComparison" | "railVideoFrame"
                 | "suiteRestartRunning" | "richFilesSuiteRestart" | "richGlanceSuiteRestart" | "captureHelperSuiteRestart" | "gesturesSuiteRestart"
-                | "windowPlacement" | "transferStall" | "cleanupScan" | "cleanupDuplicates" | "cleanupTrash" | "cleanupDelete"
+                | "windowPlacement" | "transferStall" | "transferSelection" | "cleanupScan" | "cleanupDuplicates" | "cleanupTrash" | "cleanupDelete"
                 | "openWithDiscovery"
                 | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata" | "glanceViewerEdit"
                 | "glanceCaptureFrame" | "glanceCaptureOutput" | "glanceCaptureSession" | "glanceScrollCapture" | "glanceCompare" | "glanceOCR" | "glanceSearch" | "glancePin" | "glanceRedactedCopy" | "glanceShare"
@@ -1333,6 +1333,7 @@ mod tests {
             "railVideoFrame",
             "windowPlacement",
             "transferStall",
+            "transferSelection",
             "openWithDiscovery",
             "listingVisible",
         ]
@@ -1407,6 +1408,7 @@ mod tests {
         assert!(timing.text.contains("operation=railVideoFrame"));
         assert!(timing.text.contains("operation=windowPlacement"));
         assert!(timing.text.contains("operation=transferStall"));
+        assert!(timing.text.contains("operation=transferSelection"));
         assert!(timing.text.contains("operation=openWithDiscovery"));
         assert!(timing.text.contains("operation=listingVisible"));
         for stage in ["cleanupScan", "cleanupDuplicates", "cleanupTrash", "cleanupDelete"] {
