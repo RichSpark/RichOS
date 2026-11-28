@@ -830,6 +830,8 @@ class Walk:
             raise RuntimeError(detail)
         self.guest(f"defaults write {BUNDLE} richfiles.theme -string {theme}")
         self.guest("osascript -e 'set volume with output muted'")
+        _, audio = run([HERE / "guest-sound.sh", self.vm])
+        (self.out / f"{theme}-guest-sound.txt").write_text(audio + "\n")
         code, detail = self.guest(
             f"open -a /Applications/RichFiles.app {destination}")
         if code:
@@ -891,10 +893,26 @@ class Walk:
         self.shot(f"{theme}-transfer-01-before-paste")
         self.click(*self.center(item(paste_name)))
         self.keystroke("c", CONTROL)
-        wait_for("copy did not reach the file clipboard", lambda: self.node("Copied 1 item to the clipboard."))
+        clipboard = "ObjC.import('AppKit'); ObjC.unwrap($.NSPasteboard.generalPasteboard.stringForType('public.file-url'))"
+
+        def copied():
+            code, value = self.guest("osascript -l JavaScript -e " + shlex.quote(clipboard))
+            return code == 0 and value.endswith("/Z%20pasted.txt")
+
+        try:
+            wait_for("copy did not reach the guest file clipboard", copied)
+        except RuntimeError:
+            self.shot(f"{theme}-transfer-copy-failed")
+            raise
         self.click(*self.center(item(head)))
         self.keystroke("v", CONTROL)
-        pasted = wait_for("pasted file was not selected in the destination viewport", lambda: receive(paste_name))
+        try:
+            pasted = wait_for("pasted file was not selected in the destination viewport", lambda: receive(paste_name))
+        except RuntimeError:
+            self.shot(f"{theme}-transfer-paste-failed")
+            self.record(f"{theme}: paste file on disk", paste_name in self.ls(destination),
+                        json.dumps(self.nodes("--title", paste_name, "--role", "AXButton")))
+            raise
         self.record(f"{theme}: keyboard paste reveals and selects a copy at the far end",
                     paste_name in self.ls(source) and paste_name in self.ls(destination), json.dumps(pasted))
         self.shot(f"{theme}-transfer-02-paste")
