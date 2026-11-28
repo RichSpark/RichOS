@@ -57,6 +57,13 @@ def main():
     source = created[-1] if a.newest else created[0]
     thread = source['thread_id']
     turns = {r['turn_id'] for r in rows if r and r.get('event') == 'PromptReceived' and r.get('thread_id') == thread}
+    # A continuation (TurnReplayed, TurnSuperseded) names its new turn in by_turn_id and has no
+    # PromptReceived of its own: it belongs to the chat too, and so do its rows.
+    grew = True
+    while grew:
+        more = {r['by_turn_id'] for r in rows if r and r.get('turn_id') in turns and isinstance(r.get('by_turn_id'), str)}
+        grew = not more <= turns
+        turns |= more
     copied = [r for r in rows if r and r is not source
               and (r.get('thread_id') == thread or r.get('turn_id') in turns)]
     added = []
@@ -72,8 +79,9 @@ def main():
                 r = dict(r)
                 if r.get('thread_id') == thread:
                     r['thread_id'] = new_thread
-                if r.get('turn_id') in new_turns:
-                    r['turn_id'] = new_turns[r['turn_id']]
+                for key in ('turn_id', 'by_turn_id'):
+                    if r.get(key) in new_turns:
+                        r[key] = new_turns[r[key]]
                 if isinstance(r.get('session_id'), str):
                     r['session_id'] = sessions.setdefault(r['session_id'], str(uuid.uuid4()))
                 if isinstance(r.get('at'), int):

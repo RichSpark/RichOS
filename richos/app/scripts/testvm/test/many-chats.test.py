@@ -73,6 +73,19 @@ with tempfile.TemporaryDirectory() as tmp:
     check('--newest copies the last chat bound to a company', code == 0 and json.loads(out)['source_thread'] == 't2',
           (code, out, err))
 
+    replay = Path(tmp) / 'replay.jsonl'
+    replay.write_text(original + ''.join(json.dumps(r) + '\n' for r in [
+        {'event': 'TurnReplayed', 'turn_id': 'u1', 'by_turn_id': 'retry', 'at': 10_000_500},
+        {'event': 'AssistantDelta', 'turn_id': 'retry', 'text': 'Again', 'at': 10_000_600},
+        {'event': 'TurnCompleted', 'turn_id': 'retry', 'stop_reason': 'end_turn', 'at': 10_000_700}]))
+    code, out, err = run(replay, '--count', 2)
+    new = [json.loads(x) for x in replay.read_text().splitlines()][len(ROWS) + 3:]
+    replays = [r for r in new if r['event'] == 'TurnReplayed']
+    continued = {r['turn_id'] for r in new if r['event'] == 'TurnCompleted'}
+    check('a replayed turn is copied with its continuation: a fresh by_turn_id whose reply and completion follow it',
+          code == 0 and len(replays) == 2 and all(r['by_turn_id'] != 'retry' for r in replays)
+          and all(r['by_turn_id'] in continued for r in replays) and len(new) == 2 * (1 + 4 + 3), (code, err, new))
+
     code, out, err = run(Path(tmp) / 'missing.jsonl', '--count', 2)
     check('a missing ledger is refused with a sentence: exit 1', code == 1 and 'no ledger' in err, (code, err))
     lonely = Path(tmp) / 'lonely.jsonl'
