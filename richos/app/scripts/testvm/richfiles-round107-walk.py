@@ -108,9 +108,25 @@ def corner_verdict(point, menu, screen, window=None):
                                      or y + h > window["y"] + window["h"])
         return on_display and anchored, facts
     room_right, room_down = px + w <= width, py + h <= height
-    # Where the display leaves room on a side, the menu must not have moved away from it.
+    # Where the display leaves room on a side, the menu must not have moved away from it; where
+    # it does not, the menu's far edge sits at the pointer (flipped) or at the display's edge
+    # (slid to fit), never anywhere else around the pointer.
     natural = (not room_right or abs(x - px) <= 12) and (not room_down or abs(y - py) <= 24)
-    return on_display and touching and natural, facts
+    fitted = ((room_right or abs(x + w - px) <= 12 or width - (x + w) <= 12)
+              and (room_down or abs(y + h - py) <= 24 or height - (y + h) <= 12))
+    return on_display and touching and natural and fitted, facts
+
+
+def menu_target(items):
+    """Which kind of item a RichFiles right-click menu belongs to, read from its items: a
+    folder's offers Open in New Tab, a file's Open With, empty space's begins with New Folder."""
+    if "Open in New Tab" in items:
+        return "folder"
+    if "Open With" in items:
+        return "file"
+    if items[:1] == ["New Folder"]:
+        return "empty"
+    return None
 
 
 def run(argv, timeout=60):
@@ -429,7 +445,9 @@ class Walk:
                 time.sleep(0.5)
             else:
                 raise RuntimeError(f"RichFiles did not open {kinds[kind]}")
-            for title, match in [("File view", []), ("List", ["--role", "AXMenuItem"])]:
+            # Details: one full-width row per item, so a corner of the list is on a file or a
+            # folder; List wraps into columns and its last column can leave a corner empty.
+            for title, match in [("File view", []), ("Details", ["--role", "AXMenuItem"])]:
                 run([HERE / "ax.sh", self.vm, "click", "--app", APP, "--title", title, *match, "--first", "--json"])
             time.sleep(0.5)
 
@@ -473,6 +491,10 @@ class Walk:
                 ok, facts = corner_verdict(point, menu, screen, window_rule)
                 facts["items"] = items[:6]
                 self.record(label, code == 0 and ok, json.dumps(facts))
+                # Placement is judged above; whether the click landed on the kind of item meant
+                # (a file, a folder, empty space) is its own check, so a miss is never read as one.
+                hit = menu_target(items)
+                self.record(label + " (target)", hit == label.rsplit("-", 1)[1], f"menu of: {hit}")
             finally:
                 self.key(53)
                 time.sleep(0.4)
