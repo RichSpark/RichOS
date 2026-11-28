@@ -2083,6 +2083,10 @@ t "many-chats: copies of a company chat with new ids and repeated turns, the sou
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/many-chats.test.py" >"$TMP/many-chats.log" 2>&1; ok $? "$(cat "$TMP/many-chats.log")"
 t_done
 
+t "richfiles-menu-corners: a right-click menu at the pointer or fitted at the display edge passes; off the display or away from the pointer with room fails"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/richfiles-menu-corners.test.py" >"$TMP/richfiles-menu-corners.log" 2>&1; ok $? "$(cat "$TMP/richfiles-menu-corners.log")"
+t_done
+
 t "hid-key: a key as a hardware keyboard sends it (flags, character), each refusal, and nothing posted outside a virtual machine"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/hid-key.test.py" >"$TMP/hid-key.log" 2>&1; ok $? "$(cat "$TMP/hid-key.log")"
 t_done
