@@ -2079,6 +2079,10 @@ t "window-gestures-update-walk: an unknown stage, a missing or unchecked steps l
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/window-gestures-update-walk.test.py" >"$TMP/window-gestures-update-walk.log" 2>&1; ok $? "$(cat "$TMP/window-gestures-update-walk.log")"
 t_done
 
+t "many-chats: copies of a company chat with new ids and repeated turns, the source untouched, and each refusal"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/many-chats.test.py" >"$TMP/many-chats.log" 2>&1; ok $? "$(cat "$TMP/many-chats.log")"
+t_done
+
 t "hid-key: a key as a hardware keyboard sends it (flags, character), each refusal, and nothing posted outside a virtual machine"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/hid-key.test.py" >"$TMP/hid-key.log" 2>&1; ok $? "$(cat "$TMP/hid-key.log")"
 t_done
