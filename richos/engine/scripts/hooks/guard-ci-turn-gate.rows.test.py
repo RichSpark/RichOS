@@ -7,6 +7,7 @@ Each test is red on the code before the fix and green after. Run:
 import importlib.util
 import json
 import os
+import shlex
 import subprocess
 from unittest.mock import patch
 import sys
@@ -40,6 +41,18 @@ class Rows(unittest.TestCase):
                     "git push origin main > /tmp/out", "git push origin main &>/dev/null"):
             self.assertEqual([p["branch"] for p in push_cmd(cmd)], ["main"], cmd)
         self.assertEqual([p["branch"] for p in push_cmd("git push 2>&1")], [""])
+
+    def test_reported_destination_matches_git_userinfo_removal(self):
+        for configured, reported in (
+            ("git@github.com:fixture/repo.git", "github.com:fixture/repo.git"),
+            ("ssh://git@github.com/fixture/repo.git", "ssh://github.com/fixture/repo.git"),
+            ("git+ssh://git@github.com/fixture/repo.git", "git+ssh://github.com/fixture/repo.git"),
+            ("https://user:secret@github.com/fixture/repo.git", "https://github.com/fixture/repo.git"),
+            ("ssh://github.com/fixture/user@repo.git", "ssh://github.com/fixture/user@repo.git"),
+            ("/repos/user@fixture:repo.git", "/repos/user@fixture:repo.git"),
+        ):
+            with self.subTest(configured=configured):
+                self.assertEqual(gate.reported_destination(configured), reported)
 
     def test_p3_16_every_pushed_ref(self):
         got = push_cmd("git push origin main release")
@@ -254,10 +267,131 @@ class G3(unittest.TestCase):
             self.git(repo, "config", key, value)
         self.git(repo, "commit", "--allow-empty", "-qm", "initial")
         self.git(repo, "remote", "add", "origin", bare)
+        self.original_slug_of = gate.slug_of
+        self.enterContext(patch.object(gate, "slug_of",
+                                      lambda url: "fixture/repo" if url == bare else self.original_slug_of(url)))
+        return repo, bare
+
+    def test_combined_ssh_push_holds_on_successful_red_side_of_rejection(self):
+        repo, bare = self.repo()
+        mirror = os.path.join(self.root, "mirror.git")
+        self.git(self.root, "init", "--bare", "-q", mirror)
+        ssh = os.path.join(self.root, "ssh")
+        # Feed the actual Git SSH transport two local bare repositories.
+        # Refuse any unexpected host or command instead of running it.
+        with open(ssh, "w") as script:
+            script.write("""#!/bin/sh
+[ "$#" = 2 ] && [ "$1" = git@github.com ] || exit 2
+case "$2" in
+  "git-receive-pack 'fixture/repo.git'") exec git-receive-pack "$G10_SSH_ROOT/remote.git" ;;
+  "git-receive-pack 'fixture/mirror.git'") exec git-receive-pack "$G10_SSH_ROOT/mirror.git" ;;
+esac
+exit 2
+""")
+        os.chmod(ssh, 0o700)
+        self.enterContext(patch.dict(os.environ, {"GIT_SSH_COMMAND": shlex.quote(ssh),
+                                                 "GIT_SSH_VARIANT": "simple",
+                                                 "G10_SSH_ROOT": self.root,
+                                                 "GIT_ALLOW_PROTOCOL": "file:ssh"}))
+        self.git(repo, "remote", "set-url", "origin", "git@github.com:fixture/repo.git")
+        self.git(repo, "remote", "add", "mirror", "git@github.com:fixture/mirror.git")
+        self.git(repo, "push", "-q", "origin", "main")
+        self.git(repo, "checkout", "--orphan", "diverged")
+        self.git(repo, "commit", "--allow-empty", "-qm", "diverged mirror")
+        self.git(repo, "push", "-q", "mirror", "HEAD:main")
+        mirror_head = self.git(mirror, "rev-parse", "main").stdout.strip()
+        self.git(repo, "checkout", "main")
+        self.git(repo, "commit", "--allow-empty", "-qm", "origin update")
+        red = self.git(repo, "rev-parse", "HEAD").stdout.strip()
+
+        self.call("git push origin main; git push mirror main", repo)
+        first = self.git(repo, "push", "origin", "main")
+        second = self.git(repo, "push", "mirror", "main", check=False)
+        self.assertNotEqual(second.returncode, 0, second)
+        self.assertIn("To github.com:fixture/repo.git", first.stderr)
+        self.assertIn("[rejected]", second.stderr)
+        self.result(first.stderr + second.stderr, error=True)
+        self.assertEqual(self.git(bare, "rev-parse", "main").stdout.strip(), red)
+        self.assertEqual(self.git(mirror, "rev-parse", "main").stdout.strip(), mirror_head)
+        self.assertEqual(self.git(repo, "reflog", "-1", "--format=%H%x09%gs",
+                                  "refs/remotes/origin/main").stdout.strip(),
+                         red + "\tupdate by push")
+
+        with patch.object(gate, "verdict_for", return_value={"state": "red"}) as verdict:
+            rc, out, err = gate.evaluate(self.payload, gate.Budget(5))
+            self.assertEqual([call.args[:2] for call in verdict.call_args_list], [("fixture/repo", red)])
+            self.assertEqual(rc, 2, (out, err))
+            self.assertIn(red, err)
+
+    def test_v7_62_verdict_uses_push_destination(self):
+        repo, bare = self.repo()
+        self.git(repo, "remote", "set-url", "origin", "https://github.com/fixture/fetch-only.git")
+        self.git(repo, "remote", "set-url", "--push", "origin", bare)
+        self.call("git push origin main", repo)
+        self.result(self.git(repo, "push", "origin", "main").stderr)
+        sha = self.git(bare, "rev-parse", "main").stdout.strip()
+        self.assertEqual(sha, self.git(repo, "rev-parse", "HEAD").stdout.strip())
+
+        with patch.object(gate, "slug_of", side_effect=self.original_slug_of):
+            with patch.object(gate, "verdict_for", return_value={"state": "green"}) as verdict:
+                rc, out, _ = gate.evaluate(dict(self.payload, session_id="local-url"), gate.Budget(5))
+                self.assertEqual(rc, 0)
+                verdict.assert_not_called()
+                self.assertIn("is not a GitHub remote", out)
+
+        # Label the actual local destination to exercise the positive lookup.
+        with patch.object(gate, "verdict_for", return_value={"state": "green"}) as verdict:
+            self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 0)
+            self.assertEqual([call.args[:2] for call in verdict.call_args_list],
+                             [("fixture/repo", sha)])
+
+    def test_combined_noops_create_no_observations(self):
+        repo, bare = self.repo()
+        self.git(repo, "remote", "add", "mirror", bare)
+        for remote in ("origin", "mirror"):
+            self.git(repo, "push", "-q", remote, "main")
+
+        self.call("git push origin main && git push mirror main", repo)
+        first = self.git(repo, "push", "origin", "main")
+        second = self.git(repo, "push", "mirror", "main")
+        self.assertIn("Everything up-to-date", first.stderr)
+        self.assertIn("Everything up-to-date", second.stderr)
+        self.result(first.stderr + second.stderr)
+        seen, why = gate.observe_pushes(self.transcript, {}, gate.Budget(5))
+        self.assertEqual(why, "")
+        self.assertEqual(seen, [])
+
+    def test_v7_61_combined_push_keeps_both_remote_tips(self):
+        repo, bare = self.repo()
+        mirror = os.path.join(self.root, "mirror.git")
+        self.git(self.root, "init", "--bare", "-q", mirror)
+        self.git(repo, "remote", "add", "mirror", mirror)
+        for remote in ("origin", "mirror"):
+            self.git(repo, "push", "-q", remote, "main")
+        self.git(repo, "commit", "--allow-empty", "-qm", "origin update")
+        red = self.git(repo, "rev-parse", "HEAD").stdout.strip()
+        self.git(repo, "branch", "origin-update")
+        self.git(repo, "commit", "--allow-empty", "-qm", "mirror update")
+        green = self.git(repo, "rev-parse", "HEAD").stdout.strip()
+
+        self.call("git push origin origin-update:main && git push --porcelain mirror main", repo)
+        first = self.git(repo, "push", "origin", "origin-update:main")
+        second = self.git(repo, "push", "--porcelain", "mirror", "main")
+        self.result(first.stderr + second.stdout + second.stderr)
+        self.assertEqual(self.git(bare, "rev-parse", "main").stdout.strip(), red)
+        self.assertEqual(self.git(mirror, "rev-parse", "main").stdout.strip(), green)
+
         slug_of = gate.slug_of
         self.enterContext(patch.object(gate, "slug_of",
-                                      lambda url: "fixture/repo" if url == bare else slug_of(url)))
-        return repo, bare
+                                      lambda url: "fixture/mirror" if url == mirror else slug_of(url)))
+        with patch.object(gate, "verdict_for", side_effect=lambda slug, sha, _:
+                          {"state": "red" if sha == red else "green"}) as verdict:
+            rc, out, err = gate.evaluate(self.payload, gate.Budget(5))
+            self.assertCountEqual([call.args[:2] for call in verdict.call_args_list],
+                                  [("fixture/repo", red), ("fixture/mirror", green)])
+            self.assertEqual(rc, 2, (out, err))
+            self.assertIn(red, err)
+            self.assertNotIn("no unambiguous successful push", out)
 
     def test_p3_19_refusal_across_scans_never_creates_obligation(self):
         repo, _ = self.repo()

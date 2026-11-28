@@ -110,8 +110,8 @@
 # ===========================================================================
 # ZERO FALSE POSITIVES — WHY THAT IS ACHIEVABLE HERE AND NOT MERELY HOPED FOR
 # ===========================================================================
-# The comparison is a recorded set of facts against a re-derived set of the same
-# facts, from the same file, through the same parser (registered_hook_rows).
+# The comparison uses the same parser (registered_hook_rows) for the recorded
+# and current inventory and for the host command order within each event.
 # There is no threshold, no heuristic, no prose, and nothing to tune. If a
 # design for this needed a threshold it had taken a wrong branch. A session in
 # which hooks/hooks.json did not change produces the empty delta and this hook
@@ -409,10 +409,10 @@ if [ -n "$BASE_ENGINE" ] && [ "$BASE_ENGINE" != "$ENGINE_ROOT" ]; then
     cannot_compare "the baseline was recorded against engine $BASE_ENGINE but this hook is running from $ENGINE_ROOT — two different engines, so any difference between them would be a difference of subject, not drift"
 fi
 
-if ! CUR_ROWS="$(registered_hook_rows "$SURFACE")"; then
+if ! CUR_INVENTORY="$(registered_hook_rows "$SURFACE" --with-host-order)"; then
     cannot_compare "could not derive the current enforcing set from $SURFACE (missing, unparseable, registering nothing, or no python3)"
 fi
-CUR_ROWS="$(printf '%s\n' "$CUR_ROWS" | grep -v '^$' | LC_ALL=C sort -u)"
+CUR_ROWS="$(printf '%s\n' "$CUR_INVENTORY" | grep -v '^#' | LC_ALL=C sort -u)"
 CUR_N="$(printf '%s\n' "$CUR_ROWS" | grep -c . || true)"
 [ "${CUR_N:-0}" -ge 1 ] || cannot_compare "$SURFACE currently has ZERO registration rows, so there is nothing to compare the baseline against"
 
@@ -481,12 +481,60 @@ done <<REM_EOF
 $REMOVED
 REM_EOF
 
+# Compare only surviving host registrations, so appending or removing a hook
+# reports inventory drift without implying the surviving hooks changed order.
+# Neither live dispatcher modules nor the order of event keys enters this check.
+ORDER_LINES=""
+LEGACY_KEYS=""
+LEGACY_TEXT=""
+if [ -n "$LEGACY_MODULES" ]; then
+    LEGACY_KEYS="missing-module-baseline"$'\n'
+    LEGACY_TEXT="This session-start snapshot predates plugin module tracking."
+fi
+if grep -q '^# host-order-count=' "$SNAP_PATH"; then
+    BASE_ORDER="$(sed -n $'s/^# host-order\t//p' "$SNAP_PATH")"
+    BASE_ORDER_N="$(printf '%s\n' "$BASE_ORDER" | grep -c . || true)"
+    BASE_ORDER_CLAIMED="$(sed -n 's/^# host-order-count=\([0-9][0-9]*\)$/\1/p' "$SNAP_PATH")"
+    [ -n "$BASE_ORDER_CLAIMED" ] && [ "$BASE_ORDER_CLAIMED" -eq "$BASE_ORDER_N" ] 2>/dev/null \
+        || cannot_compare "the session-start baseline host hook order is truncated or corrupt"
+    CUR_ORDER="$(printf '%s\n' "$CUR_INVENTORY" | sed -n $'s/^# host-order\t//p')"
+    ORDER_EVENTS=""
+    if [ "$BASE_ORDER" != "$CUR_ORDER" ] \
+        && ! ORDER_EVENTS="$(printf '%s\n\n%s' "$BASE_ORDER" "$CUR_ORDER" | python3 -c '
+import sys
+before, after = (part.splitlines() for part in sys.stdin.read().split("\n\n", 1))
+common = set(before) & set(after)
+sequences = []
+for rows in (before, after):
+    by_event = {}
+    for row in rows:
+        if row in common:
+            event = row.split("\t", 1)[0]
+            by_event.setdefault(event, []).append(row)
+    sequences.append(by_event)
+for event, rows in sequences[0].items():
+    if rows != sequences[1][event]:
+        print(event)
+')"; then
+        cannot_compare "could not compare the session-start and current host hook order"
+    fi
+    while IFS= read -r event; do
+        [ -n "$event" ] || continue
+        ORDER_LINES="$ORDER_LINES    $event"$'\n'
+        KEYS="$KEYS$(printf 'ORDER\t%s' "$event")"$'\n'
+    done <<<"$ORDER_EVENTS"
+else
+    LEGACY_KEYS="${LEGACY_KEYS}missing-order-baseline"$'\n'
+    LEGACY_TEXT="${LEGACY_TEXT:+$LEGACY_TEXT$'\n'}This session-start snapshot predates host hook order tracking."
+fi
+if [ -n "$LEGACY_KEYS" ]; then
+    LEGACY_TEXT="$LEGACY_TEXT
+RESTART THIS SESSION to record a complete hook inventory baseline."
+fi
+
 # THE QUIET PATH. A complete baseline with no drift needs no notice.
 if [ -z "$KEYS" ]; then
-    if [ -n "$LEGACY_MODULES" ]; then
-        announce_once "missing-module-baseline" \
-            "RichOS engine: this session-start snapshot predates plugin module tracking. RESTART THIS SESSION to record a baseline for plugin module registrations. $HOOK_TAG"
-    fi
+    [ -z "$LEGACY_KEYS" ] || announce_once "$LEGACY_KEYS" "RichOS engine: $LEGACY_TEXT $HOOK_TAG"
     exit 0
 fi
 
@@ -516,6 +564,13 @@ if [ "${N_DROPPED:-0}" -gt 0 ]; then
 ${DROPPED_LINES%$'\n'}"
 fi
 
+if [ -n "$ORDER_LINES" ]; then
+    MSG="$MSG
+  Host hook order changed for:
+${ORDER_LINES%$'\n'}
+RESTART THIS SESSION (or use /reload-plugins) to load the current order."
+fi
+
 if [ "${N_INERT:-0}" -gt 0 ]; then
     MSG="$MSG
 
@@ -531,11 +586,10 @@ Host registrations removed from hooks.json still require a session restart or
 call through the dispatcher. The old expanded snapshot does not distinguish
 the two origins, so removed inventory rows alone cannot prove stale enforcement."
 fi
-if [ -n "$LEGACY_MODULES" ]; then
-    KEYS="${KEYS}missing-module-baseline"$'\n'
+if [ -n "$LEGACY_KEYS" ]; then
+    KEYS="$KEYS$LEGACY_KEYS"
     MSG="$MSG
-This session-start snapshot predates plugin module tracking.
-RESTART THIS SESSION to record a baseline for plugin module registrations."
+$LEGACY_TEXT"
 fi
 MSG="$MSG
 

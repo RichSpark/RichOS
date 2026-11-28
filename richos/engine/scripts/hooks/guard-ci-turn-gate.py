@@ -474,6 +474,65 @@ def push_updates(output):
     return updates
 
 
+def push_result(output):
+    return {
+        "updates": push_updates(output),
+        "unchanged": re.findall(r"^=\t[^\t:]+:refs/heads/([^\t]+)\t", output, re.MULTILINE),
+        "all_unchanged": "Everything up-to-date" in output,
+    }
+
+
+def push_observations(push, result, failed):
+    updates = result.get("updates", {})
+    unchanged = result.get("unchanged", [])
+    for branch in ([push["branch"]] if push["branch"] else updates or [""]):
+        if branch not in updates:
+            # A failed command can still have updated refs named in its output.
+            if failed or result.get("all_unchanged") or branch in unchanged or (not branch and unchanged):
+                continue
+        observation = dict(push, branch=branch)
+        if updates.get(branch):
+            observation["tip"] = updates[branch]
+        yield observation
+
+
+def reported_destination(url):
+    """Return the configured URL as Git's transport prints it in a To line."""
+    scheme, marker, address = url.partition("://")
+    if marker:
+        # Git strips user info before the path for any valid scheme.
+        userinfo, at, host_and_path = address.partition("@")
+        if at and "/" not in userinfo and re.fullmatch(r"[A-Za-z0-9+.-]*", scheme):
+            return scheme + marker + host_and_path
+    else:
+        # An scp-style URL has its colon before the first slash. A local
+        # path containing an at sign must keep that character.
+        _, at, host_and_path = url.partition("@")
+        if at and ":" in host_and_path and "/" not in url.partition(":")[0]:
+            return host_and_path
+    return url
+
+
+def completed_pushes(calls, output, failed, completed_at):
+    if not calls:
+        return
+    result = push_result(output)
+    if result["updates"] and len({(p["dir"], p["remote"]) for p in calls}) > 1:
+        # A tool result can contain reports from several pushes. A same-named
+        # branch in another destination's report is no evidence for this one.
+        sections = re.split(r"^To ([^\r\n]+)\r?\n", output, flags=re.MULTILINE)
+        by_url = {}
+        for url, section in zip(sections[1::2], sections[2::2]):
+            by_url.setdefault(url, []).append(section)
+        results = {url: push_result("\n".join(parts)) for url, parts in by_url.items()}
+        if results or not failed:
+            for push in calls:
+                yield dict(push, completed_at=completed_at, results_by_url=results, failed=failed)
+        return
+    for push in calls:
+        yield from push_observations(dict(push, completed_at=completed_at), result, failed)
+
+
 def observe_pushes(transcript_path, state, budget):
     """Walk the new bytes of the transcript and record every push seen.
 
@@ -537,28 +596,7 @@ def observe_pushes(transcript_path, state, budget):
                             output = "\n".join(str(c.get("text") or "") for c in output
                                                if isinstance(c, dict))
                         output = str(output)
-                        updates = push_updates(output)
-                        unchanged = set(re.findall(r"^=\t[^\t:]+:refs/heads/([^\t]+)\t",
-                                                  output, re.MULTILINE))
-                        all_unchanged = "Everything up-to-date" in output
-                        expanded = []
-                        for p in calls:
-                            if not p.get("branch") and updates:
-                                expanded.extend(dict(p, branch=branch) for branch in updates)
-                            else:
-                                expanded.append(p)
-                        for p in expanded:
-                            branch = p.get("branch")
-                            if block.get("is_error") is True and branch not in updates:
-                                # An error may still have updated some refs.
-                                continue
-                            if branch not in updates and (all_unchanged or branch in unchanged
-                                                          or (not branch and unchanged)):
-                                continue  # keep the existing obligation
-                            if updates.get(branch):
-                                p["tip"] = updates[branch]
-                            p["completed_at"] = ts
-                            seen.append(p)
+                        seen.extend(completed_pushes(calls, output, block.get("is_error") is True, ts))
                         continue
                     if not isinstance(block, dict) or block.get("type") != "tool_use":
                         continue
@@ -613,14 +651,16 @@ def repo_facts(directory, remote, budget, cache):
         cache[key] = res
         return res
     root = out.strip()
-    rc, out, err = run(["git", "-C", root, "remote", "get-url", remote], budget)
+    rc, out, err = run(["git", "-C", root, "remote", "get-url", "--push", remote], budget)
     if rc == TIMEOUT_RC:
         return (root, "", TRANSIENT + err)
     if rc != 0:
         res = (root, "", "it has no `%s` remote (%s)" % (remote, err))
         cache[key] = res
         return res
-    slug = slug_of(out.strip())
+    push_url = out.strip()
+    cache[("push-url", root, remote)] = push_url
+    slug = slug_of(push_url)
     if not slug:
         res = (root, "", "its `%s` is not a GitHub remote: %s" % (remote, out.strip()))
         cache[key] = res
@@ -1057,13 +1097,27 @@ def evaluate(payload, budget):
             order = state["push_order"] = int(state.get("push_order") or 0) + 1
             pushes["pending\t%d" % order] = dict(push, order=order)
 
-        for key, push in list(pushes.items()):
+        queued = list(pushes.items())
+        for key, push in queued:
             slug, branch, sha = (push.get(field) for field in ("slug", "branch", "sha"))
             if not (slug and branch and sha):
                 if budget.left() <= 0.05:  # run() needs this much time to start
                     continue
                 remote = push.get("remote") or "origin"
                 root, slug, err = repo_facts(push["dir"], remote, budget, facts_cache)
+                push_url = facts_cache.get(("push-url", root, remote))
+                if "results_by_url" in push and push_url:
+                    # Consume the selected report before resolving the reflog.
+                    # An unreported destination may have been pushed quietly.
+                    push = dict(push)
+                    result = push.pop("results_by_url").get(reported_destination(push_url), {})
+                    failed = push.pop("failed")
+                    pushes.pop(key)
+                    for index, observation in enumerate(push_observations(push, result, failed)):
+                        pending_key = "%s\t%d" % (key, index)
+                        pushes[pending_key] = observation
+                        queued.append((pending_key, observation))
+                    continue
                 if slug and pause_for(slug):
                     continue
                 if err:
