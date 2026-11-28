@@ -2,6 +2,21 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.3.9-nightly.20261128.123
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.9-nightly.20261128.123)
+
+- Changed RichFiles' right-click menu to open right where you click instead of beside the item's name; near the right edge of the screen it stays under the pointer instead of jumping to its left
+- Improved how quickly the sidebar updates when you have hundreds of conversations
+- Fixed Forward Delete not moving a folder you just made with File, New Folder on your Mac desktop to the Trash before you named it when your menu bar hides automatically; the same now works for Shift-Command-N on a keyboard layout such as Dvorak
+- Fixed Keep chat alive skipping a conversation while something left from while RichOS was closed was still waiting in another conversation; idle conversations also stayed open in the background then, using memory
+- Fixed work sent to your team waiting until you next wrote in that conversation when the team's connection dropped while it was being delivered; it is now delivered again by itself
+- Fixed work left from while RichOS was closed not carrying on when you wrote in that conversation, after an entry in RichOS's conversation history was damaged
+- Fixed work you asked Rich to do once something else happened sometimes starting by itself right after RichOS opened, using your usage, when its first check after opening failed; it now waits until you next write in that conversation
+- Fixed RichOS sometimes skipping the review of work a Codex task handed back or reviewing a different commit than the one Codex named; when no review can start, Codex and your team are now told why
+- [technical] Fixed a teammate's finished work never finishing its cleanup when bringing it into your project had to be tried again; the files it changed were also sometimes missing from the Output panel
+- [technical] Fixed the American spelling check refusing some shell scripts a teammate wrote that have a case statement inside a command substitution
+
 ## 1.3.9-nightly.20261127.122
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.9-nightly.20261127.122)
