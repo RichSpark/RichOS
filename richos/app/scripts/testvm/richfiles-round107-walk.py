@@ -36,6 +36,9 @@ each menu as File Explorer on Windows places it: where there is room it opens at
 (it may cross the window's edge); at the display's edge it stays wholly on the display with the
 pointer at its edge (added with the nightly 123 walk; judged by corner_verdict, tested in
 test/richfiles-menu-corners.test.py).
+
+--transfers copies and pastes a file into a wide List pane, then drags an item
+from the other RichFiles pane. It checks receipt, selection, viewport and refresh.
 """
 import argparse
 import json
@@ -810,6 +813,130 @@ class Walk:
         pixels = list(picture.crop(tuple(round(v) for v in box)).getdata())
         return tuple(round(median(channel)) for channel in zip(*pixels))
 
+    def transfers(self, theme):
+        root = f"{REMOTE}/transfers"
+        source, destination = f"{root}/Source", f"{root}/Destination"
+        paste_name, drag_name = "Z pasted.txt", "A dragged.txt"
+        head, tail = "Middle entry 000.txt", "Middle entry 179.txt"
+        timing = "/Users/admin/Library/Logs/RichOS/richfiles-timing.jsonl"
+        setup = (
+            f"rm -rf {root} && mkdir -p {source} {destination} && "
+            f"printf paste > {shlex.quote(source + '/' + paste_name)} && "
+            f"printf drag > {shlex.quote(source + '/' + drag_name)} && "
+            f"cd {destination} && for i in $(jot -w %03d 180 0); do touch \"Middle entry $i.txt\"; done"
+        )
+        code, detail = self.guest(setup)
+        if code:
+            raise RuntimeError(detail)
+        self.guest(f"defaults write {BUNDLE} richfiles.theme -string {theme}")
+        self.guest("osascript -e 'set volume with output muted'")
+        code, detail = self.guest(
+            f"open -a /Applications/RichFiles.app {destination}")
+        if code:
+            raise RuntimeError(detail)
+
+        def wait_for(label, read):
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                result = read()
+                if result:
+                    return result
+                time.sleep(0.25)
+            raise RuntimeError(label)
+
+        def item(name):
+            return self.node(name, "--role", "AXButton")
+
+        wait_for("destination did not open", lambda: item(head))
+        code, detail = self.guest("osascript -e " + shlex.quote(
+            'tell application "System Events" to tell process "RichFiles" to '
+            'set position of window 1 to {0, 25}') + " -e " + shlex.quote(
+            'tell application "System Events" to tell process "RichFiles" to set size of window 1 to {1600, 960}'))
+        if code:
+            raise RuntimeError(detail)
+
+        split = wait_for("the Split View control is missing", lambda: self.node("Split View", "--role", "AXButton"))
+        self.click(*self.center(split))
+        wait_for("the split pane did not open", lambda: self.node("Close Split View", "--role", "AXButton"))
+        def split_rows():
+            nodes = self.nodes("--title", head, "--role", "AXButton")
+            return sorted(nodes, key=lambda node: node["x"]) if len(nodes) == 2 else None
+
+        items = wait_for("the destination folder is missing from one of the two panes", split_rows)
+        self.click(*self.center(items[0]))
+        up = wait_for("the Up control is missing", lambda: self.node("Up", "--role", "AXButton"))
+        self.click(*self.center(up))
+        source_row = wait_for("the parent listing does not show Source", lambda: item("Source"))
+        self.double(*self.center(source_row))
+        wait_for("the left pane did not navigate to Source", lambda: item(paste_name))
+
+        def panes():
+            nodes = self.nodes("--title", "List view, filenames and extensions")
+            return sorted(nodes, key=lambda node: node["x"]) if len(nodes) == 2 else None
+
+        _, right = wait_for("the two List viewport frames are missing", panes)
+
+        def in_right(node):
+            if not node:
+                return False
+            x, y = self.center(node)
+            return right["x"] <= x < right["x"] + right["w"] and right["y"] <= y < right["y"] + right["h"]
+
+        def receive(name):
+            return next((node for node in self.nodes("--title", name, "--role", "AXButton")
+                         if in_right(node) and node["selected"] is True), None)
+
+        self.record(f"{theme}: paste target starts beyond the visible List columns",
+                    in_right(item(head)) and not in_right(item(tail)))
+        self.shot(f"{theme}-transfer-01-before-paste")
+        self.click(*self.center(item(paste_name)))
+        self.keystroke("c", CONTROL)
+        wait_for("copy did not reach the file clipboard", lambda: self.node("Copied 1 item to the clipboard."))
+        self.click(*self.center(item(head)))
+        self.keystroke("v", CONTROL)
+        pasted = wait_for("pasted file was not selected in the destination viewport", lambda: receive(paste_name))
+        self.record(f"{theme}: keyboard paste reveals and selects a copy at the far end",
+                    paste_name in self.ls(source) and paste_name in self.ls(destination), json.dumps(pasted))
+        self.shot(f"{theme}-transfer-02-paste")
+
+        self.record(f"{theme}: drag target starts beyond the visible List columns",
+                    not in_right(item(head)) and in_right(pasted))
+        moving = wait_for("drag source is missing", lambda: item(drag_name))
+        start_x, start_y = self.center(moving)
+        end_x = round(right["x"] + right["w"] * 0.75)
+        end_y = round(right["y"] + right["h"] * 0.5)
+        code, detail = self.pointer(f"{start_x},{start_y}", f"{end_x},{end_y}", "--rest", "0.5")
+        if code:
+            raise RuntimeError(detail)
+        moved = wait_for("dragged file was not selected in the destination viewport", lambda: receive(drag_name))
+        self.record(f"{theme}: real mouse drag moves, selects and reveals the file at the start of name order",
+                    drag_name not in self.ls(source) and drag_name in self.ls(destination) and in_right(item(head)),
+                    json.dumps(moved))
+        self.shot(f"{theme}-transfer-03-drag")
+        def samples():
+            code, raw = self.guest(f"tail -n 80 {timing}")
+            return [json.loads(line) for line in raw.splitlines() if line.startswith("{")] if code == 0 else []
+
+        # A click in the pane heading activates it without selecting a file.
+        self.click(end_x, round(right["y"] - 10))
+        refresh = wait_for("Refresh is missing", lambda: self.node("Refresh", "--role", "AXButton"))
+        previous = {row["id"] for row in samples() if row["operation"] == "listing"}
+        self.click(*self.center(refresh))
+        wait_for("Refresh did not finish a new listing", lambda: any(
+            row["operation"] == "listing" and row["id"] not in previous for row in samples()))
+        refreshed = wait_for("refresh lost the drag's selection or viewport", lambda: receive(drag_name))
+        self.record(f"{theme}: refresh keeps the moved item selected and visible", in_right(refreshed), json.dumps(refreshed))
+        self.shot(f"{theme}-transfer-04-refresh")
+
+        records = samples()
+        selections = [row for row in records if row.get("operation") == "transferSelection"]
+        (self.out / f"{theme}-transfer-timing.json").write_text(json.dumps(selections, indent=2) + "\n")
+        operations = {row["id"]: row["operation"] for row in records if row.get("operation") in {"copy", "move"}}
+        completed = {operations.get(row["id"]) for row in selections
+                     if row.get("outcome") == "complete" and row.get("confirmed") == row.get("total") == 1}
+        self.record(f"{theme}: transfer diagnostics correlate both selections with their worker receipts",
+                    {"copy", "move"} <= completed, json.dumps(selections[-2:]))
+
     def selected_copy(self):
         """Ctrl+C, Ctrl+V duplicates whatever is selected: the new copy's name says which item that is."""
         before = {n for n in self.ls() if " - Copy" in n}
@@ -1178,6 +1305,7 @@ def main():
     parser.add_argument("--themes", default="daybreak,sovereign", help="RichFiles themes to walk, in order")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--fixes", action="store_true", help="walk only the handover review's fixes")
+    mode.add_argument("--transfers", action="store_true", help="walk real paste and drag selection between two panes")
     mode.add_argument("--sheets", action="store_true", help="open every sheet with a default button and measure it")
     mode.add_argument("--menu-position", action="store_true", help="check context menu placement")
     mode.add_argument("--menu-corners", action="store_true",
@@ -1189,7 +1317,10 @@ def main():
         walk.prepare(args.standalone_zip)
         for theme in args.themes.split(","):
             try:
-                if args.menu_position:
+                if args.transfers:
+                    walk.transfers(theme)
+                    walk.quit()
+                elif args.menu_position:
                     walk.menu_position(theme)
                 elif args.menu_corners:
                     walk.menu_corners(theme)
