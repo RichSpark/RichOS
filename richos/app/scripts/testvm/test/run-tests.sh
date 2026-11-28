@@ -2075,7 +2075,7 @@ t "trash-diff: Desktop items told by inode in the Trash, a wrong expectation fai
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/trash-diff.test.py" >"$TMP/trash-diff.log" 2>&1; ok $? "$(cat "$TMP/trash-diff.log")"
 t_done
 
-t "window-gestures-update-walk: an unknown stage, a missing or unchecked steps list and a missing engine archive are refused before a guest"
+t "window-gestures-update-walk: an unknown stage, a missing or unchecked steps list and a missing engine archive are refused before a guest; a bundle not at --from-version stops the walk"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/window-gestures-update-walk.test.py" >"$TMP/window-gestures-update-walk.log" 2>&1; ok $? "$(cat "$TMP/window-gestures-update-walk.log")"
 t_done
 

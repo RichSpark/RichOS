@@ -8,6 +8,9 @@ it on a user's Mac, so companies and settings exist to be carried across the upd
 before-download (the update offered, nothing downloaded), after-update (the new version running),
 cycle (after each cycle's gesture checks, its record under cycle-N-steps) and end (after the
 last cycle). A walker's own checks are data, not more code here (added with the nightly 122 walk).
+--from-version V is the version --bundle holds (default 1.3.8): the update a user meets can start
+from the previous nightly as well as from the published stable (added with the nightly 123 walk,
+whose update starts from nightly 122). Another version found installed stops the walk.
 """
 import argparse
 import importlib.util
@@ -27,7 +30,8 @@ p.add_argument('--signature', type=Path, required=True)
 p.add_argument('--update-version', required=True)
 p.add_argument('--out', type=Path, required=True)
 p.add_argument('--cycles', type=int, default=3, help='number of restarts after cycle zero (default 3)')
-p.add_argument('--engine', type=Path, help='engine release archive installed before v1.3.8 first opens')
+p.add_argument('--engine', type=Path, help='engine release archive installed before the --bundle build first opens')
+p.add_argument('--from-version', default='1.3.8', help='the version --bundle holds (default 1.3.8)')
 STAGES = ('before-download', 'after-update', 'cycle', 'end')
 p.add_argument('--steps', action='append', default=[], metavar='STAGE=FILE',
                help='a steps-walk.py list run at STAGE: ' + ', '.join(STAGES))
@@ -306,6 +310,12 @@ def walker_steps(stage, label):
     if stage in steps_at:
         record(label + '-steps', lambda: w.steps(stage, label + '-steps'), False)
 
+def installed_version():
+    version = w.version()
+    if version != a.from_version:
+        raise RuntimeError(f'--bundle holds {version}, not --from-version {a.from_version}')
+    return version
+
 def same_helper():
     pid = w.helper_ready()
     if pid != report['updated-helper']['result']:
@@ -316,7 +326,7 @@ try:
     record('serve', w.serve)
     record('fixture', w.prepare_inputs)
     record('install', w.install)
-    assert w.version() == '1.3.8'
+    record('installed-version', installed_version)
     record('stable-helper', w.grant_existing_permission)
     record('ready', w.ready)
     walker_steps('before-download', 'before-download')

@@ -52,6 +52,7 @@ class Walk:
     def wait(self, check, *_args): return check()
     def pull(self, *_args): pass
     def cleanup(self): pass
+    def shot(self, *_args): pass
 """)
     (harness / 'steps-walk.py').write_text("""
 from pathlib import Path
@@ -88,6 +89,17 @@ if sys.argv[1] != '--check':
     check('zero restarts still runs cycle zero and its selected steps',
           code == 0 and report.get('cycle-0-steps', {}).get('result', {}).get('steps') == 1
           and 'cycle-1-steps' not in report, (code, out))
+
+    code, out = walk(*cycle, '--cycles', '0', '--from-version', '1.3.9-nightly.1', '--out', str(root / 'other'))
+    report = json.loads((root / 'other' / 'report.json').read_text())
+    check('a --bundle holding another version than --from-version stops the walk before the update: exit 1',
+          code == 1 and report.get('installed-version', {}).get('pass') is False
+          and 'not --from-version 1.3.9-nightly.1' in report['installed-version'].get('detail', '')
+          and 'download' not in report, (code, out))
+    code, out = walk(*cycle, '--cycles', '0', '--from-version', '1.3.8', '--out', str(root / 'named'))
+    report = json.loads((root / 'named' / 'report.json').read_text())
+    check('the version named by --from-version is accepted and the walk goes on',
+          code == 0 and report.get('installed-version', {}).get('result') == '1.3.8', (code, out))
 
 print('window-gestures-update-walk.test.py: %d failed' % len(failures))
 sys.exit(1 if failures else 0)
