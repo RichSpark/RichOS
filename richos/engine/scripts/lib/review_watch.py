@@ -193,7 +193,9 @@ HANDOVER_KINDS = ("handover", "manual")
 CONTINUES_RE = re.compile(r"(?<![\w-])continues:")   # a recorded wait naming the job that continues the work
 DEFAULT_TO_RICH = "~/.richos-coordination/rich-codex/to-rich.md"
 DEFAULT_TO_CODEX = "~/.richos-coordination/rich-codex/to-codex.md"
-SHA_RE = re.compile(r"\b[0-9a-f]{40}\b")
+SHA_VALUE = re.compile(r"^[ `\t]*([0-9a-f]{7,40})\b", re.IGNORECASE)
+TIP_LABEL = re.compile(r"^\s*(?:[-*]\s+)?(?:\*\*)?(Commit|(?:Branch )?Tip|(?:Branch )?Head):(?:\*\*)?",
+                       re.IGNORECASE)
 CODEX_BRANCH_RE = re.compile(r"\bcodex/[A-Za-z0-9._/-]*[A-Za-z0-9_]")
 
 
@@ -617,8 +619,8 @@ class World(object):
     def channel_repositories(self, endpoint):
         return {name: self.repo_named(name) for name in self.repos or [] if self.repo_named(name)}
 
-    def codex_items(self, now, codex_state):
-        """(items, problems, notes). codex_state is the shared reading state
+    def codex_items(self, now, codex_state, reviewed=()):
+        """(items, problems). codex_state is the shared reading state
         (offset in to-rich.md and the pending handovers), updated in place."""
         to_rich = os.path.expanduser(os.environ.get("REVIEW_WATCH_TO_RICH") or DEFAULT_TO_RICH)
         to_codex = os.path.expanduser(os.environ.get("REVIEW_WATCH_TO_CODEX") or DEFAULT_TO_CODEX)
@@ -626,7 +628,7 @@ class World(object):
         # still comes from the project's existing review configuration.
         sid = MONITOR["session"]
         project = os.path.dirname(os.path.abspath(self.config)) if self.config else None
-        dedicated, problems = self.channel_items(now, codex_state, channels.rich_connections(project, sid))
+        dedicated, problems = self.channel_items(now, codex_state, channels.rich_connections(project, sid), reviewed)
         folder = os.path.dirname(to_rich)
         if channels.legacy_associated(folder) and not channels.legacy_live(folder):
             return dedicated, problems
@@ -690,6 +692,8 @@ class World(object):
             keep.append(p)
             base = self.merge_base_for(p["repo"], p["tip"])
             if not base or base == p["tip"]:
+                if (p["repo"], p["tip"], p["work"]) not in reviewed:
+                    problems.append(codex_range_problem(p, base))
                 continue
             items.append(Item(p["work"], "codex", p["repo"], p["tip"], base, "ended", branch=p["branch"],
                               source="codex", words=p.get("words") or [], claims=p.get("claims") or [],
@@ -732,14 +736,15 @@ class World(object):
             for bullet in lines[i + 1:]:
                 if not re.match(r"\s*[-*]\s", bullet):
                     break
-                label = bullet.split(":", 1)[0]
-                tipm = SHA_RE.search(bullet)
+                label, _, value = bullet.partition(":")
+                # In a repository list, a leading hash is that repository's declared tip.
+                tipm = SHA_VALUE.match(value)
                 for n in re.findall(r"[A-Za-z0-9._-]+", label):
                     n = n.strip(".")
                     if n in allowed or self.repo_named(n):
                         listed.append(n)
                         if tipm:
-                            line_tips.setdefault(n, tipm.group(0))
+                            line_tips.setdefault(n, tipm.group(1).lower())
         names = [n for n in listed if n in allowed]
         if repo_map is not None and listed and not names:
             return "Codex's handover %r names no uniquely connected repository for this company; no review started" % header[:90]
@@ -757,13 +762,28 @@ class World(object):
         work = "branch:%s:%s" % (repo, branch)
         if work in skip_work:
             return None
-        cm = re.search(r"Commit:\s*`?([0-9a-f]{40})", text) or SHA_RE.search(text)
-        tip = line_tips.get(names[0]) or (cm.group(1) if cm and cm.groups() else (cm.group(0) if cm else ""))
-        if not tip:
+        declared = line_tips.get(names[0])
+        if not declared:
+            labels = [m for line in lines if (m := TIP_LABEL.match(line))]
+            label = next((m for m in labels if m.group(1).lower() == "commit"), None)
+            if label is None and labels:
+                label = labels[0]
+            if label:
+                sha = SHA_VALUE.match(label.string[label.end():])
+                if not sha:
+                    return ("Codex's handover %r has no commit ID after %s, so no review of it started"
+                            % (header[:90], label.group(1)))
+                declared = sha.group(1).lower()
+        if declared:
+            tip = git(repo, "rev-parse", "--verify", "-q", declared + "^{commit}") or ""
+            if not tip.startswith(declared):
+                tip = ""
+        else:
+            # A hash in prose may name main, a proof base or a different repository.
             tip = git(repo, "rev-parse", "--verify", "-q", "refs/heads/%s^{commit}" % branch) or ""
-        if not tip or git(repo, "cat-file", "-e", tip + "^{commit}") is None:
+        if not tip:
             return ("Codex's handover %r names %s, whose commit %s is not in %s, so no review of it started"
-                    % (header[:90], branch, tip[:12] or "(none)", repo))
+                    % (header[:90], branch, declared or "(branch head unavailable)", repo))
         words = codex_words(to_codex, to_rich, branch) if words is None else words
         if not words:
             return NoWords("Codex's handover %r: no entry in %s names %s or comes before Codex first named it, so "
@@ -792,19 +812,19 @@ class World(object):
         """May a review of `item` start now? The terminal's watcher: always."""
         return True
 
-    def channel_items(self, now, codex_state, connections):
+    def channel_items(self, now, codex_state, connections, reviewed=()):
         """The shared READY handler, with its own advisory reading position.
 
         The terminal shares its review state with replacement sessions.
         """
         pending = codex_state.setdefault("channel_pending", [])
         positions = codex_state.setdefault("channels", {})
-        owned = set()
+        owned = {}
         for path, endpoint in connections:
             if endpoint.get("legacy_folder") or endpoint["entity_id"] == channels.AUTOMATIC:
                 continue
             locator = str(path)
-            owned.add(locator)
+            owned[locator] = endpoint
             try:
                 source = path / "to-rich.jsonl"
                 identity = channels.identity(source)
@@ -835,20 +855,24 @@ class World(object):
                             words.append(("Source excerpt (%s; %s)" % (direction, row.get("provenance", "explicit task amendment")), row["text"]))
                 for _, end, row in channels.records(source, offset):
                     if row.get("kind", "message") == "message":
+                        channel = {"locator": locator, "message_id": row["message_id"]}
+                        # Re-reading the journal must keep the tip already queued for this READY.
+                        queued = {p["work"] for p in pending if p["channel"] == channel}
                         text = row["text"]
                         first = text.lstrip().split("\n", 1)[0]
                         if first.startswith("READY TO LAND:"):
                             text = "## " + text.lstrip()
                         for header, body in split_entries(text):
                             got = self.codex_handover(header, body, str(source), str(path / "to-codex.jsonl"), now,
-                                                      words=words, repo_map=repos, origin=endpoint["connection_id"])
+                                                      words=words, repo_map=repos, origin=endpoint["connection_id"],
+                                                      skip_work=queued)
                             if isinstance(got, str):
                                 channel_reply(path, row["message_id"], "review-held", got)
                             elif got:
-                                got["channel"] = {"locator": locator, "message_id": row["message_id"]}
+                                got["channel"] = channel
                                 got["chat"] = chat_partition(endpoint["entity_id"], endpoint["thread_id"])
-                                if not any(p["channel"] == got["channel"] and p["repo"] == got["repo"] and p["tip"] == got["tip"] for p in pending):
-                                    pending.append(got)
+                                pending.append(got)
+                                queued.add(got["work"])
                     positions[locator] = dict(source_identity=identity, through=end)
             except (OSError, ValueError, KeyError) as exc:
                 print("review-watch: connection held %s: %s" % (path, exc), file=sys.stderr)
@@ -857,10 +881,20 @@ class World(object):
         # Replaying a lost position cannot add a second due review for the tip.
         pending[:] = [p for p in pending if now - float(p.get("at") or now) <= KEEP_SECONDS]
         for p in pending:
-            if p["channel"]["locator"] not in owned:
+            channel = p["channel"]
+            endpoint = owned.get(channel["locator"])
+            if endpoint is None:
                 continue
             base = self.merge_base_for(p["repo"], p["tip"])
             if not base or base == p["tip"]:
+                if (not p.get("range_notified") and (p["repo"], p["tip"], p["work"]) not in reviewed
+                        and self.chat_open(endpoint)):
+                    try:
+                        channel_reply(channel["locator"], channel["message_id"], "review-held",
+                                      codex_range_problem(p, base))
+                        p["range_notified"] = True
+                    except (OSError, ValueError, KeyError) as exc:
+                        channels.diagnostic(channel["locator"], exc)
                 continue
             item = Item(p["work"], "codex", p["repo"], p["tip"], base, "ended", branch=p["branch"], source="codex",
                         words=p["words"], claims=p["claims"], title=p["title"])
@@ -977,11 +1011,11 @@ class AppWorld(World):
                 os.environ["RICHOS_WORKSPACES_DIR"] = before
         return items, problems
 
-    def codex_items(self, now, codex_state):
+    def codex_items(self, now, codex_state, reviewed=()):
         return self.channel_items(now, codex_state, (
             (path, endpoint) for path, endpoint in channels.registered()
             if endpoint["entity_id"] != channels.TERMINAL
-        ))
+        ), reviewed)
 
     def open_chats(self):
         """THE APP'S ONE RULE FOR A MODEL RUN IT STARTS BY ITSELF (the CEO, 2026-11-26: "there
@@ -1097,6 +1131,13 @@ class NoWords(str):
         problem = super().__new__(cls, message)
         problem.work = work
         return problem
+
+
+def codex_range_problem(handover, base):
+    branch, tip = handover["branch"], handover["tip"]
+    reason = ("the commit is already reachable from the integration branch" if base == tip
+              else "the watcher could not determine its merge base with the integration branch")
+    return "No review started for Codex's handover of %s at %s because %s." % (branch, tip, reason)
 
 
 def split_entries(text):
@@ -1722,7 +1763,9 @@ class Watcher(object):
         rows = read_jsonl(review_ledger())
         running = self.reconcile(now, rows)
         items, problems = self.world.registry_items(now, seen)
-        citems, cproblems = self.world.codex_items(now, codex_state)
+        reviewed = {(os.path.realpath(r["repo"]), r.get("tip"), r.get("work")) for r in rows
+                    if r.get("repo") and r.get("verdict") and r.get("trigger") in HANDOVER_KINDS}
+        citems, cproblems = self.world.codex_items(now, codex_state, reviewed)
         items += citems
         problems += cproblems
         # App integration requires a verdict for every implementation worker, including

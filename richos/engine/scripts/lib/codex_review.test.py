@@ -235,13 +235,104 @@ class Reviews(unittest.TestCase):
         self.assertEqual(state["channel_pending"], [])
         self.assertEqual(len(c.read(path)["records"]), 1, "no review result or held notice was generated")
 
-    def test_world_uses_same_handler_but_managed_terminal_does_not_compete(self):
+    def test_base_first_handover_reviews_the_branch_tip(self):
+        path = Path(c.connect("Review the workspace change", "fixture source", terminal_session="fixture")["locator"])
+        c.send(path, "base-first", (
+            "READY TO LAND: codex/fixture\n"
+            f"Current main base: `{self.base}`.\n"
+            f"Delivered work at `{self.tip}`.\n"
+            "Repository: work only.\nProof passed."
+        ))
+        world = self.terminal_world()
+        state = {}
+        items, problems = world.channel_items(100, state, [c.connection(path)])
+        self.assertFalse(problems)
+        self.assertEqual([row["tip"] for row in state["channel_pending"]], [self.tip])
+        self.assertEqual([(item.tip, item.base) for item in items], [(self.tip, self.base)])
+        [(item, trigger, _)] = rw.due(items, rw.Book([], {}, []), 100, {}, 3600)
+        args = item.args(trigger)
+        self.assertEqual(args[args.index("--tip") + 1], self.tip)
+        self.git("update-ref", "refs/heads/codex/fixture", self.base)
+        state["channels"].clear()
+        replayed, problems = world.channel_items(101, state, [c.connection(path)])
+        self.assertFalse(problems)
+        self.assertEqual([item.tip for item in replayed], [self.tip])
+        self.assertEqual(len(state["channel_pending"]), 1)
+
+    def test_labelled_tip_stays_pinned_even_if_branch_moves(self):
+        self.git("update-ref", "refs/heads/codex/fixture", self.base)
+        for label, sha in (("Commit", self.tip), ("Tip", self.tip[:12]), ("Head", self.tip)):
+            with self.subTest(label=label):
+                path = Path(c.connect("Review the delivered change", "fixture source", scope=self.scope)["locator"])
+                c.send(path, "labelled", (
+                    "READY TO LAND: codex/fixture\n"
+                    f"Base: {self.base}\n"
+                    f"{label}: `{sha}`\n"
+                    "Repository: work"
+                ))
+                items, problems = self.world.channel_items(100, {}, [c.connection(path)])
+                self.assertFalse(problems)
+                self.assertEqual([item.tip for item in items], [self.tip])
+
+    def test_unreviewable_range_is_reported_once_to_rich(self):
+        for tip, base, reason in (
+            (self.base, self.base, "already reachable"),
+            (self.tip, None, "could not determine its merge base"),
+        ):
+            with self.subTest(reason=reason):
+                path = Path(c.connect("Review the change", "fixture source", terminal_session="fixture")["locator"])
+                c.send(path, "undue", f"READY TO LAND: codex/fixture\nCommit: {tip}\nRepository: work")
+                state = {}
+                world = self.terminal_world()
+                world.merge_base_for = lambda repo, tip: base
+                connection = [c.connection(path)]
+                self.assertEqual(world.channel_items(100, state, connection), ([], []))
+                state["channels"].clear()
+                self.assertEqual(world.channel_items(101, state, connection), ([], []))
+                self.assertEqual(state["channel_pending"][0]["tip"], tip)
+                for direction in ("to-rich", "to-codex"):
+                    [notice] = [row for row in c.read(path, direction)["records"] if row.get("kind") == "review_result"]
+                    self.assertEqual(notice["reply_to"], "undue")
+                    self.assertIn("codex/fixture", notice["text"])
+                    self.assertIn(tip, notice["text"])
+                    self.assertIn(reason, notice["text"])
+
+    def test_landing_an_already_reviewed_commit_sends_no_range_notice(self):
+        state = {}
+        connections = [c.connection(self.path)]
+        [item], _ = self.world.channel_items(100, state, connections)
+        self.world.integration_tip = lambda chain, repo: (self.tip, "")
+        reviewed = {(item.repo, item.tip, item.work)}
+        self.assertEqual(self.world.channel_items(101, state, connections, reviewed), ([], []))
+        self.assertFalse(any(row.get("kind") == "review_result" for row in c.read(self.path, "to-rich")["records"]))
+
+    def test_legacy_unreviewable_range_is_reported_as_a_problem(self):
+        world = self.terminal_world()
+        ready, words = self.root / "ready.md", self.root / "words.md"
+        ready.touch()
+        words.write_text("## Instructions for codex/fixture\nReview the change.\n")
+        state = {}
+        with mock.patch.dict(os.environ, REVIEW_WATCH_TO_RICH=str(ready), REVIEW_WATCH_TO_CODEX=str(words)):
+            world.codex_items(100, state)
+            ready.write_text(f"## READY TO LAND: codex/fixture\nCommit: {self.base}\nRepository: work\n")
+            world.codex_items(101, state)
+            items, problems = world.codex_items(102, state)
+        self.assertEqual(items, [])
+        [problem] = problems
+        self.assertIn(self.base, problem)
+        self.assertIn("already reachable", problem)
+
+    def terminal_world(self):
         world = rw.World.__new__(rw.World)
         world.config = ""
         world.repos = ["work"]
         world._merge_bases = {}
         world.repo_named = lambda name: str(self.repo) if name == "work" else ""
         world.integration_tip = lambda chain, repo: (self.base, "")
+        return world
+
+    def test_world_uses_same_handler_but_managed_terminal_does_not_compete(self):
+        world = self.terminal_world()
         state = {}
         items, problems = world.channel_items(100, state, [c.connection(self.path)])
         self.assertEqual(len(items), 1)

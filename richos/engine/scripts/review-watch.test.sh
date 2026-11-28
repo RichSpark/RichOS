@@ -245,7 +245,7 @@ class ReplayWorld(object):
                                  "ended" if t["end"] <= now else "running", started=t["start"], ref=t["name"],
                                  continued=t["name"] in continued))
         return items, []
-    def codex_items(self, now, codex_state):
+    def codex_items(self, now, codex_state, reviewed=()):
         return [], []
 
 class ReplayWatcher(rw.Watcher):
@@ -3149,7 +3149,7 @@ class World(rw.AppWorld):
     def registry_items(self, now, seen):
         return [], []
 
-    def codex_items(self, now, state):
+    def codex_items(self, now, state, reviewed=()):
         return [item], []
 
 
