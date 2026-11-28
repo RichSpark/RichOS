@@ -623,8 +623,18 @@ def dispatch(locator, resume=False):
     receipt = path / "dispatch-read.json"
     journal = path / "to-codex.jsonl"
     with locked(path / "dispatch.lock"):
-        if resume:
+        try:
             state = load(marker)
+        except FileNotFoundError:
+            state = None
+        # Older dispatchers saved a cursor before preflight. Only an attempt,
+        # launch result or session record makes this an existing dispatch.
+        if state is None or (state.keys() == {"source_identity", "through"} and state["through"] == 0):
+            state = {"source_identity": identity(journal), "through": 0}
+            offset = 0
+        elif not resume:
+            raise ValueError("This handoff was already dispatched; resume its existing Codex chat")
+        else:
             if not state.get("session_id") and not state.get("exit_code"):
                 raise ValueError("The initial Codex launch did not report a session ID")
             offset = position(journal, state)
@@ -632,12 +642,6 @@ def dispatch(locator, resume=False):
                 acknowledged = load(receipt)
                 if acknowledged.get("attempt_id") == state.get("attempt_id"):
                     offset = max(offset, position(journal, acknowledged))
-        else:
-            if marker.exists():
-                raise ValueError("This handoff was already dispatched; resume its existing Codex chat")
-            state = {"source_identity": identity(journal), "through": 0}
-            offset = 0
-
         pending = []
         through = offset
         size = 0
@@ -658,8 +662,6 @@ def dispatch(locator, resume=False):
             return 0
         state["through"] = offset
         recovering = resume and state.get("exit_code") != 0
-        if not resume:
-            save(marker, state)
         prompt = (handoff(path) + "\n\n" if offset else "") + "\n\n".join(pending)
 
         started = time.monotonic()

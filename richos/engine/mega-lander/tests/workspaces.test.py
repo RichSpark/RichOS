@@ -4605,6 +4605,66 @@ class HuntV2_03_TheBudgetBoundsEveryCleanupStage(Base):
         self.assertEqual([ok for _key, ok in ws.retry_due()], [True])
         self.assertNotIn(branch, branches(self.entity))
 
+    def test_worktree_cleanup_spends_only_its_budget_and_retries_without_a_failure(self):
+        for phase, expected in (
+            ("enumerate", ["enumerate"]),
+            ("remove", ["enumerate", "remove"]),
+            ("confirm", ["enumerate", "remove", "confirm"]),
+            ("admin", ["enumerate", "confirm", "admin"]),
+        ):
+            with self.subTest(expiry=phase):
+                rec, path = self._discarded("zach-opus-" + phase + "-budget")
+                branch = "worktree-agent-" + rec["agent_id"]
+                if phase == "admin":
+                    shutil.rmtree(path)
+                clock = [100.0]
+                calls = []
+                real_git = ws.git
+
+                def controlled_git(repo, *args, **kwargs):
+                    if args[:2] == ("worktree", "list"):
+                        step = "confirm" if calls else "enumerate"
+                    elif args[:2] == ("worktree", "remove"):
+                        step = "remove"
+                    elif args == ("rev-parse", "--path-format=absolute", "--git-common-dir"):
+                        step = "admin"
+                    else:
+                        return real_git(repo, *args, **kwargs)
+                    calls.append((step, clock[0], kwargs.get("timeout", 60)))
+                    if step == "remove" and (phase == "remove" or clock[0] >= 100.04):
+                        clock[0] = 101.0
+                        return 124, "", "controlled timeout before removal"
+                    # The fixture controls elapsed time independently of the host's load.
+                    reply = real_git(repo, *args)
+                    clock[0] = 101.0 if step == phase else clock[0] + 0.01
+                    return reply
+
+                with patch.object(ws, "stop_containers", return_value={}), \
+                        patch.object(ws, "stop_test_instances", return_value={}):
+                    with patch.object(ws, "now", side_effect=lambda: clock[0]), \
+                            patch.object(ws, "git", side_effect=controlled_git), \
+                            patch.object(ws, "event", wraps=ws.event) as events:
+                        result = ws._delete(rec, ws.live_workspaces(rec), branches=True, why="discarded",
+                                            processes={"stopped": [], "survivors": []}, deadline=100.04)
+                    self.assertFalse(result)
+                    self.assertEqual([step for step, _at, _timeout in calls], expected)
+                    for _step, at, timeout in calls:
+                        self.assertLess(at, 100.04)
+                        self.assertAlmostEqual(timeout, 100.04 - at)
+                    self.assertEqual(os.path.exists(path), phase in ("enumerate", "remove"))
+                    self.assertIn(branch, branches(self.entity))
+                    if phase == "admin":
+                        self.assertIn(path, [w["path"] for w in ws.worktree_list(self.entity)])
+                    deletion = self.rec(rec["name"])["deletion"]
+                    self.assertIn("budget ran out", deletion["deferred"])
+                    self.assertEqual(deletion["attempts"], 0)
+                    self.assertNotIn("last_error", deletion)
+                    self.assertEqual(events.call_args.args[0], "deletion-deferred")
+                    self.assertEqual(ws.retry_due(), [(rec["key"], True)])
+                self.assertFalse(os.path.exists(path))
+                self.assertNotIn(path, [w["path"] for w in ws.worktree_list(self.entity)])
+                self.assertNotIn(branch, branches(self.entity))
+
     def test_recovered_lock_does_not_admit_a_branch_retry_after_the_deadline(self):
         branch = "cc/zach-opus-recovered"
         run("git", "-C", self.other, "branch", branch)
@@ -8631,6 +8691,39 @@ class NoSilentHolds(Base):
             with self.assertRaises(ws.SpecError, msg=bad):
                 ws.hold_end(bad)
 
+    def test_damaged_app_review_locks_leave_unrelated_due_work_readable(self):
+        app = os.path.join(self.env.home, "fixture-app-state")
+        review = ws._import_path("fixture_app_review", os.path.join(ENGINE, "scripts", "lib", "app_review.py"))
+        paths = review.app_paths(app)
+        locks = os.path.join(paths["watch"], "locks")
+        os.makedirs(locks)
+        at = 1800000000
+        tip = "a" * 40
+        end = "review:%s@%s" % (os.path.basename(self.other), tip[:12])
+        matching = {"repo": self.other, "tip": tip}
+        with patch.dict(os.environ, {"RICHOS_APP_STATE": app, "REVIEW_WATCH_STATE_DIR": "",
+                                     "SECOND_REVIEW_STATE_DIR": paths["reviews"]}), \
+                patch.object(ws, "now", return_value=at), \
+                patch.object(ws, "_monitor_health", return_value=(False, "fixture watcher inactive")):
+            ws.hold("after-review", "After review", end, "Waiting for review", self.sid)
+            ws.hold("expired-timer", "Expired timer", "at:2020-01-01T00:00:00Z", "Due now", self.sid)
+            healthy = os.path.join(locks, "z-healthy.lock")
+            with open(healthy, "w") as f:
+                json.dump(matching, f)
+            os.utime(healthy, (at - 60, at - 60))  # Legacy locks use their mtime.
+            self.assertEqual([item["name"] for item in ws.due_set(self.sid)], ["expired-timer"])
+            for i, bad in enumerate(([], dict(matching, started_at=[]), dict(matching, started_at="NaN"),
+                                     dict(matching, started_at="Infinity"))):
+                with open(os.path.join(locks, "bad-%d.lock" % i), "w") as f:
+                    json.dump(bad, f)
+            self.assertEqual([item["name"] for item in ws.due_set(self.sid)], ["expired-timer"])
+            notice = ws.fallback_notice(self.sid, [])
+            self.assertIn("expired-timer", notice)
+            self.assertNotIn("could NOT be read", notice)
+            self.assertNotIn("after-review", notice)
+            os.unlink(healthy)
+            self.assertEqual(ws.hold_end_state(end)[0], "due")
+
     def test_holds_t5_the_work_running_ends_it_and_a_false_catch_is_shown_once(self):
         aid, _n = self.spawn("zach-opus-y")
         ws.hold("stream-c", "Stream C", "agent:zach-opus-y", "", self.sid)
@@ -9173,6 +9266,41 @@ class HuntV5_01_WorkspaceOwnership(Base):
 
 
 class HuntV5_03_PreservationRetries(Base):
+    def test_ack_only_cleanup_does_not_use_the_archive(self):
+        with open(os.path.join(self.other, ".gitignore"), "a") as f:
+            f.write(".claude/\n")
+        run("git", "-C", self.other, "commit", "-qam", "Ignore acknowledgment files")
+        os.makedirs(os.path.join(self.other, ".claude"))
+        archive = os.path.join(ws.state_dir(), "kept")
+        with open(archive, "w") as f:
+            f.write("archive unavailable")
+        for case in ("blocked", "missing"):
+            with self.subTest(archive=case):
+                if case == "missing" and os.path.isfile(archive):
+                    os.unlink(archive)
+                name = "zach-opus-ack-" + case
+                path = self.make_cc(name)
+                aid, _native = self.spawn(name, cc=path)
+                ack = ".claude/inflight-acks/abc123abc123." + name + ".ack"
+                os.makedirs(os.path.dirname(os.path.join(path, ack)))
+                with open(os.path.join(path, ack), "w") as f:
+                    f.write("fixture acknowledgment")
+                self.finish(aid)
+                self.assertEqual(ws.uncommitted(path), ([], [ack]))
+
+                with patch.object(ws, "now", return_value=1800000000):
+                    result = ws.land(name, self.sid, keep_ignored=True)
+                self.assertTrue(result["landed"])
+                self.assertFalse(result.get("cleanup_pending"))
+                self.assertFalse(result.get("kept_ignored"))
+                self.assertFalse(os.path.exists(path))
+                self.assertNotIn("cc/" + name, branches(self.other))
+                if case == "blocked":
+                    with open(archive) as f:
+                        self.assertEqual(f.read(), "archive unavailable")
+                else:
+                    self.assertFalse(os.path.exists(archive))
+
     def test_archive_unavailable_keeps_files_pending_and_the_gate_continues(self):
         blocked = "zach-opus-archive"
         aid, path = self.spawn(blocked)

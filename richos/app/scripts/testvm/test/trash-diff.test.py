@@ -87,6 +87,30 @@ with tempfile.TemporaryDirectory() as tmp:
     check('gone but not in the Trash fails, after waiting', code == 1 and out['removed'] == ['Keep.txt'] and out['moved'] == []
           and 'without reaching the Trash' in out['why'], out)
 
+    # A pre-existing link shares the Desktop inode even when the Desktop file goes elsewhere.
+    (desk / 'Linked.txt').write_text('linked')
+    os.link(desk / 'Linked.txt', trash / 'Old link.txt')
+    code, _, _ = tool('mark', 'hard-link')
+    check('mark captures both hard links', code == 0)
+    os.rename(desk / 'Linked.txt', root / 'Linked.txt')
+    code, out, _ = tool('check', 'hard-link', '--moved', 'Linked.txt')
+    check('an existing Trash hard link cannot prove a new move',
+          code == 1 and out['removed'] == ['Linked.txt'] and out['moved'] == [] and out['trashed'] == []
+          and 'without reaching the Trash' in out['why'], (code, out))
+    os.rename(trash / 'Old link.txt', trash / 'Renamed link.txt')
+    code, out, _ = tool('check', 'hard-link', '--moved', 'Linked.txt')
+    check('renaming the old Trash link cannot prove a new move either',
+          code == 1 and out['moved'] == [] and out['trashed'] == [], (code, out))
+
+    os.rename(root / 'Linked.txt', desk / 'Linked.txt')
+    code, _, _ = tool('mark', 'fresh-link')
+    check('mark captures the Desktop file and renamed Trash link', code == 0)
+    os.rename(desk / 'Linked.txt', trash / 'Moved link.txt')
+    code, out, _ = tool('check', 'fresh-link', '--moved', 'Linked.txt')
+    check('a genuinely added link proves the move even when its inode was already in the Trash',
+          code == 0 and out['moved_as'] == {'Linked.txt': 'Moved link.txt'} and out['trashed'] == ['Moved link.txt'],
+          (code, out))
+
     # --none watches its whole window: a move that lands after the first clean reading still fails.
     import threading
     (desk / 'Keep folder').mkdir()

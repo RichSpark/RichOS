@@ -16,12 +16,99 @@ import re
 import sys
 import time
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import quota_watch as watch
 
 
 class EndOfReplay(BaseException):
     """Not an Exception: the poll loop reports and survives any Exception."""
+
+
+def replay_local_deadline(work):
+    for provider_at, retry_at, expected in (
+        (1020, None, 1021),
+        (1025, None, 1025),
+        (None, None, 1030),
+        (1045, None, 1030),
+        (1045, 1028, 1028),
+        (None, 1040, 1030),
+    ):
+        reading = {"provider_next_at": provider_at * 1000} if provider_at else {}
+        status = {"resets": {"retryAt": retry_at * 1000}} if retry_at else {}
+        with patch.object(watch, "time", SimpleNamespace(time=lambda: 1020)), \
+                patch.object(watch, "app_state", return_value=None), \
+                patch.object(watch, "_nap") as nap:
+            watch._sleep_after_poll(1000, 30, 1015, status, reading, None)
+            nap.assert_called_once_with(expected - 1020, None)
+
+    # A hard local deadline also wins inside the ordinary alignment tolerance.
+    store = watch.quota_usage_store.Store(work, "fixture")
+    store.folder.mkdir(parents=True)
+    store.write(store.record, {"finishedAt": 730750})
+    now = 1020
+
+    def advance(seconds, _alive):
+        nonlocal now
+        now += seconds
+
+    with patch.object(watch, "time", SimpleNamespace(time=lambda: now)), \
+            patch.object(watch, "app_state", return_value=None), \
+            patch.object(watch, "_nap", side_effect=advance), \
+            patch.object(watch, "claude_binary", return_value="fixture"), \
+            patch.object(type(store), "for_account", return_value=store), \
+            patch.object(watch, "read_get_usage") as provider:
+        args = SimpleNamespace(usage_root=work)
+        reading = watch.shared_get_usage(args, now)
+        assert reading["provider_next_at"] == 1030750, reading
+        watch._sleep_after_poll(1000, 30, 1015, {}, reading, None, local_due=1030)
+        assert now == 1030, now
+        watch.shared_get_usage(args, now)
+        provider.assert_not_called()
+
+
+def replay_fable_notice_retry(work, engine):
+    work.mkdir(parents=True, exist_ok=True)
+    journal = work / "events.jsonl"
+    args = SimpleNamespace(engine_root=str(engine), usage_root=str(work))
+    reading = {"usage_account": "fixture-account", "state": "ok",
+               "windows": [{"id": "model:fable", "label": "Fable", "used": 99, "resets_at": 2000}]}
+    decisions = []
+
+    def core_decision(argv, *, input, **kwargs):
+        assert argv[-1] == "fable-watch-v1", argv
+        request = json.loads(input)
+        switched = request["now"] < 2000000
+        previous = request.get("state", {}).get("switched", False)
+        change = ("opus" if switched else "fable") if switched != previous else None
+        decisions.append(change)
+        return SimpleNamespace(stdout=json.dumps({
+            "state": {"switched": switched}, "onOpusUntil": 2000000 if switched else None,
+            "change": change, "refusedWorkers": [],
+        }))
+
+    def refuse_journal(path, *args, **kwargs):
+        if Path(path) == journal:
+            raise PermissionError("fixture journal temporarily unavailable")
+        return open(path, *args, **kwargs)
+
+    with patch.object(watch, "app_state", return_value=None), \
+            patch.object(watch, "terminal_worker_refusals", return_value={}), \
+            patch.object(watch.subprocess, "run", side_effect=core_decision):
+        for now, until, kind in ((1000, 2000000, "FABLE-OPUS"), (2000, None, "FABLE-READY")):
+            with patch.object(watch, "open", side_effect=refuse_journal, create=True):
+                assert watch.terminal_fable(args, reading, 95, watch.Out(sd=str(work)), now, "fixture") == until
+            restored = watch.Out(sd=str(work))
+            assert restored.fable["onOpusUntil"] == until, restored.fable
+            retry_reading = reading if until else {"state": "failed"}
+            watch.terminal_fable(args, retry_reading, 95, restored, now + 1, "fixture")
+            reopened = watch.Out(sd=str(work))
+            watch.terminal_fable(args, reading, 95, reopened, now + 2, "fixture")
+            reopened.wake("CONTROL", "journal restored", now + 3)
+            rows = [json.loads(row) for row in journal.read_text().splitlines()]
+            events = [(row["at"], row["kind"]) for row in rows if row["kind"] != "CONTROL"]
+            assert events.count((now, kind)) == 1, rows
+    assert decisions == ["opus", None, None, "fable", None], decisions
 
 
 def replay(case, payload, work, engine, fake):
@@ -352,6 +439,12 @@ def replay_outage(case, payload, work, engine, fake):
 
 if __name__ == "__main__":
     case, payload, work, engine, fake = sys.argv[1:]
+    if case == "fable-notice-retry":
+        replay_fable_notice_retry(Path(work), Path(engine))
+        raise SystemExit(0)
+    if case == "local-deadline":
+        replay_local_deadline(Path(work))
+        raise SystemExit(0)
     if case in ("n02", "n03", "n04", "n05", "n07", "n08"):
         print(json.dumps(replay_outage(case, Path(payload), Path(work), Path(engine), Path(fake))))
         raise SystemExit(0)

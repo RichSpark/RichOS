@@ -54,6 +54,95 @@ class SourceCacheConcurrencyTests(unittest.TestCase):
                 cached_fetch.assert_not_called()
 
 
+class LaunchPredecessorTests(unittest.TestCase):
+    @staticmethod
+    def release(id, version, *, prerelease=True, **fields):
+        return {"id": id, "tag_name": f"v{version}", "draft": False,
+                "published_at": "2026-11-27T12:00:00Z", "prerelease": prerelease, **fields}
+
+    @staticmethod
+    def zip_asset(version, digest="c" * 64):
+        return {"name": f"RichOS-{version}-macos-aarch64.zip", "state": "uploaded", "digest": f"sha256:{digest}"}
+
+    def test_chooses_the_highest_earlier_nightly_that_reached_its_update_channel(self):
+        base = "1.3.9-nightly.20261127."
+        release = self.release
+        pages = [[release(1, base + "9"), release(2, base + "11"), release(3, base + "12")],
+                 [release(4, base + "10"), release(5, base + "13"), release(6, "1.3.8", prerelease=False)]]
+        marker = {"name": "published.json", "state": "uploaded"}
+        by_id = {2: [self.zip_asset(base + "11")], 4: [self.zip_asset(base + "10"), marker]}
+
+        def read(*args):
+            if args[:2] == ("gh", "api"):
+                self.assertEqual(args[-1], f"repos/{n.REPO}/releases?per_page=100")
+                return json.dumps(pages)
+            self.assertEqual(args[0], "curl")
+            self.assertEqual(args[-1], n.ENDPOINT)
+            return json.dumps({"version": base + "13"})
+
+        with patch.object(n, "run", side_effect=read), patch.object(
+                n, "release_assets", side_effect=by_id.__getitem__) as inventory:
+            selected = n.published_predecessor("nightly", base + "12")
+        self.assertEqual(selected, {"tag": "v" + base + "10", "version": base + "10", "sha256": "c" * 64})
+        self.assertEqual([call.args for call in inventory.call_args_list], [(2,), (4,)])
+
+    def test_the_current_nightly_feed_can_prove_publication_before_a_receipt_exists(self):
+        version = "1.3.9-nightly.20261127.11"
+        pages = [[self.release(1, version)]]
+        with patch.object(n, "run", side_effect=[json.dumps(pages), json.dumps({"version": version})]), \
+                patch.object(n, "release_assets", return_value=[self.zip_asset(version)]):
+            self.assertEqual(n.published_predecessor("nightly", "1.3.9-nightly.20261127.12")["version"], version)
+
+    def test_stable_excludes_drafts_prereleases_and_equal_or_later_versions(self):
+        rows = [self.release(1, "1.3.8", prerelease=False), self.release(2, "1.3.9", prerelease=False, draft=True),
+                self.release(3, "1.3.10"), self.release(4, "1.3.11", prerelease=False),
+                self.release(5, "1.3.12", prerelease=False)]
+        with patch.object(n, "run", return_value=json.dumps([rows])), \
+                patch.object(n, "release_assets", return_value=[self.zip_asset("1.3.8")]) as inventory:
+            self.assertEqual(n.published_predecessor("stable", "1.3.11")["version"], "1.3.8")
+            self.assertIsNone(n.published_predecessor("stable", "1.3.8"))
+            inventory.assert_called_once_with(1)
+
+    def test_archive_must_match_the_selected_releases_published_bytes(self):
+        data = b"published archive"
+        version = "1.3.8"
+        digest = hashlib.sha256(data).hexdigest()
+        info = {"tag": "v" + version, "version": version, "sha256": digest}
+        name = self.zip_asset(version)["name"]
+        with tempfile.TemporaryDirectory() as tmp, patch.object(n, "published_predecessor", return_value=info):
+            state = Path(tmp)
+            staged = state / "releases" / info["tag"] / name
+            staged.parent.mkdir(parents=True)
+            staged.write_bytes(data)
+            with patch.object(n, "execute") as download:
+                self.assertEqual(n.launch_predecessor("stable", "1.3.9", state)["archive"], str(staged))
+                download.assert_not_called()
+
+            staged.write_bytes(b"different local archive")
+
+            def fetch(*args):
+                self.assertEqual(args[0], "curl")
+                self.assertTrue(args[-1].endswith(f"/{info['tag']}/{name}"))
+                Path(args[args.index("--output") + 1]).write_bytes(data)
+
+            with patch.object(n, "execute", side_effect=fetch) as download:
+                archive = Path(n.launch_predecessor("stable", "1.3.9", state)["archive"])
+                self.assertEqual(archive.read_bytes(), data)
+                self.assertNotEqual(archive, staged)
+                self.assertEqual(n.launch_predecessor("stable", "1.3.9", state)["archive"], str(archive))
+                download.assert_called_once()
+
+            archive.unlink()
+            def corrupt(*args):
+                Path(args[args.index("--output") + 1]).write_bytes(b"wrong download")
+
+            with patch.object(n, "execute", side_effect=corrupt), self.assertRaisesRegex(
+                    ValueError, "does not match the published SHA-256"):
+                n.launch_predecessor("stable", "1.3.9", state)
+            self.assertFalse(archive.exists())
+            self.assertEqual(list(archive.parent.iterdir()), [])
+
+
 class VersionTests(unittest.TestCase):
     def test_counter_continues_across_days_and_base_versions(self):
         tags = [f"v5.1.0-nightly.20260911.{i}" for i in range(1, 12)]

@@ -26,13 +26,15 @@ p.add_argument('--update', type=Path, required=True)
 p.add_argument('--signature', type=Path, required=True)
 p.add_argument('--update-version', required=True)
 p.add_argument('--out', type=Path, required=True)
-p.add_argument('--cycles', type=int, default=3)
+p.add_argument('--cycles', type=int, default=3, help='number of restarts after cycle zero (default 3)')
 p.add_argument('--engine', type=Path, help='engine release archive installed before v1.3.8 first opens')
 STAGES = ('before-download', 'after-update', 'cycle', 'end')
 p.add_argument('--steps', action='append', default=[], metavar='STAGE=FILE',
                help='a steps-walk.py list run at STAGE: ' + ', '.join(STAGES))
 p.set_defaults(suite='gestures', scenario='restart', within=125)
 a = p.parse_args()
+if a.cycles < 0:
+    p.error('--cycles must be 0 or more')
 steps_at = {}
 for item in a.steps:
     stage, _, file = item.partition('=')

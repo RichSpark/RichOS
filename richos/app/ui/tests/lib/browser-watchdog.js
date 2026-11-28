@@ -65,7 +65,9 @@ async function launchGuardedWebKit(webkit, run) {
   }
 
   function guardLocator(locator) {
-    guardCalls(locator, "locator", ["count", "allTextContents", "evaluate", "evaluateAll", "isDisabled"]);
+    guardCalls(locator, "locator", [
+      "count", "allTextContents", "evaluate", "evaluateAll", "getAttribute", "isDisabled", "textContent",
+    ]);
     guardCalls(locator, "locator", ["all"], (locators) => locators.map(guardLocator));
     guardLocatorFactories(locator, [...LOCATOR_FACTORIES, "filter", "first", "last", "nth", "and", "or"]);
     return locator;
@@ -75,7 +77,9 @@ async function launchGuardedWebKit(webkit, run) {
   function guardPage(page) {
     if (pages.has(page)) return page;
     pages.add(page);
-    guardCalls(page, "page", ["addInitScript", "addStyleTag", "close", "emulateMedia", "evaluate", "setViewportSize"]);
+    guardCalls(page, "page", [
+      "addInitScript", "addStyleTag", "close", "emulateMedia", "evaluate", "screenshot", "setViewportSize",
+    ]);
     // Playwright's waitForFunction timeout tries to cancel the poll in the page.
     // An unresponsive renderer can leave that cancellation waiting for a reply.
     guardCalls(page, "page", ["waitForFunction"]);
