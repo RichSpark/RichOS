@@ -905,7 +905,7 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64, gestures: bo
             matches!(operation, "listing" | "listingVisible" | "copy" | "move" | "recovery" | "gitHistory" | "gitComparison" | "railVideoFrame"
                 | "suiteRestartRunning" | "richFilesSuiteRestart" | "richGlanceSuiteRestart" | "captureHelperSuiteRestart" | "gesturesSuiteRestart"
                 | "windowPlacement" | "transferStall" | "cleanupScan" | "cleanupDuplicates" | "cleanupTrash" | "cleanupDelete"
-                | "openWithDiscovery"
+                | "openWithDiscovery" | "toolbarTooltip"
                 | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata" | "glanceViewerEdit"
                 | "glanceCaptureFrame" | "glanceCaptureOutput" | "glanceCaptureSession" | "glanceScrollCapture" | "glanceCompare" | "glanceOCR" | "glanceSearch" | "glancePin" | "glanceRedactedCopy" | "glanceShare"
                 | "glanceAnnotationDefaults"
@@ -1369,7 +1369,13 @@ mod tests {
         let mut gestures = record.clone();
         gestures["operation"] = serde_json::json!("windowGestureDockRestore");
         gestures["title"] = serde_json::json!("Private window title");
-        write(&scope.logs_root().join("richfiles-timing.jsonl"), &format!("{record}\n{glance}\n{defaults}\n{metadata}\n{captures}\n{cleanup}\n{suite}"));
+        let mut tooltip = record.clone();
+        tooltip["operation"] = serde_json::json!("toolbarTooltip");
+        tooltip["outcome"] = serde_json::json!("complete");
+        tooltip["workerMS"] = serde_json::json!(357);
+        tooltip["total"] = serde_json::json!(1);
+        tooltip["confirmed"] = serde_json::json!(1);
+        write(&scope.logs_root().join("richfiles-timing.jsonl"), &format!("{record}\n{glance}\n{defaults}\n{metadata}\n{captures}\n{cleanup}\n{suite}\n{tooltip}"));
         let mut desktop_delete = record.clone();
         desktop_delete["operation"] = serde_json::json!("desktopDeleteShortcut");
         desktop_delete["path"] = serde_json::json!("/Users/private/Desktop/test.txt");
@@ -1408,6 +1414,7 @@ mod tests {
         assert!(timing.text.contains("operation=windowPlacement"));
         assert!(timing.text.contains("operation=transferStall"));
         assert!(timing.text.contains("operation=openWithDiscovery"));
+        assert!(timing.text.contains("operation=toolbarTooltip outcome=complete worker=357ms"));
         assert!(timing.text.contains("operation=listingVisible"));
         for stage in ["cleanupScan", "cleanupDuplicates", "cleanupTrash", "cleanupDelete"] {
             assert!(timing.text.contains(&format!("operation={stage}")));

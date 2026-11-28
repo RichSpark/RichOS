@@ -59,6 +59,7 @@ struct BrowserView: View {
     // views that observe them, never the whole window.
     @State private var renaming = InlineRename()
     @State private var quickInfo = ItemQuickInfo()
+    @State private var toolbarTooltip = ToolbarTooltip()
     @StateObject private var folderTree = FolderTreeState()
     @StateObject private var paneKeyFocus = PaneKeyFocus()
     /// Changes on every file change made here, on Refresh and when RichFiles comes back to the
@@ -157,6 +158,7 @@ struct BrowserView: View {
         .onDisappear {
             workspace.clearCommands(for: side, owner: commandOwner)
             quickInfo.hide()
+            toolbarTooltip.hide()
         }
         .onChange(of: scheme) { _ in configureQuickInfo() }
         .onChange(of: textSize) { _ in configureQuickInfo() }
@@ -555,6 +557,7 @@ struct BrowserView: View {
             // Keep one menu control attached when selection updates or changes which toolbar fits.
             BrowserSortMenu(model: model, tint: NSColor(palette.signal))
                 .frame(width: 34, height: 24)
+                .background { toolbarTooltip.anchor("Sort and view options", scheme: scheme) }
         }
         .padding(.horizontal, 10).padding(.bottom, 6)
     }
@@ -565,9 +568,10 @@ struct BrowserView: View {
                 Menu { creationMenu } label: { barLabel("New", "plus", labeled) }
                     .accessibilityLabel("New")
                     .disabled(actions.busy || !writableFolder)
-                barButton("Cut", "scissors", showTitle: labeled) { _ = perform(.cut) }
+                    .background { toolbarTooltip.anchor("New", scheme: scheme) }
+                barButton("Cut", "scissors", showTitle: labeled, toolbarHelp: true) { _ = perform(.cut) }
                     .disabled(model.selected.isEmpty || actions.busy)
-                barButton("Copy", "doc.on.doc", showTitle: labeled) { _ = perform(.copy) }
+                barButton("Copy", "doc.on.doc", showTitle: labeled, toolbarHelp: true) { _ = perform(.copy) }
                     .disabled(model.selected.isEmpty)
                 Menu {
                     Button("Paste, Skip Conflicts") { paste() }
@@ -575,15 +579,20 @@ struct BrowserView: View {
                 } label: { barLabel("Paste", "clipboard", labeled) }
                     .accessibilityLabel("Paste")
                     .disabled(!actions.canScheduleTransfer || !writableFolder)
-                barButton("Rename", "pencil", showTitle: labeled) { _ = perform(.rename) }
+                    .background { toolbarTooltip.anchor("Paste", scheme: scheme) }
+                barButton("Rename", "pencil", showTitle: labeled, toolbarHelp: true) { _ = perform(.rename) }
                     .disabled(model.selected.count != 1 || actions.busy)
-                barButton("Move to Trash", "trash", showTitle: labeled, visibleTitle: "Trash") { _ = perform(.trash) }
+                barButton("Move to Trash", "trash", showTitle: labeled, visibleTitle: "Trash", toolbarHelp: true) {
+                    _ = perform(.trash)
+                }
                     .disabled(model.selected.isEmpty || actions.busy)
-                barButton("Git", "point.3.connected.trianglepath.dotted", showTitle: labeled, selected: git.open) {
+                barButton("Git", "point.3.connected.trianglepath.dotted", showTitle: labeled, selected: git.open,
+                          toolbarHelp: true) {
                     git.toggle(at: model.folder)
                 }
                 Menu { folderMenu } label: { barLabel("This Folder", "folder", labeled) }
                     .accessibilityLabel("Current folder actions")
+                    .background { toolbarTooltip.anchor("This Folder", scheme: scheme) }
                 Menu {
                     Button("New Window") { openFolderWindow(model.folder) }
                     Button("Workspaces…") { sheet = .workspaces }
@@ -594,16 +603,19 @@ struct BrowserView: View {
                     Button("Connect to Server…") { sheet = .connect }
                 } label: { barLabel("Tools", "ellipsis", labeled) }
                     .accessibilityLabel("Tools")
+                    .background { toolbarTooltip.anchor("Tools", scheme: scheme) }
             }
             .menuStyle(.borderlessButton)
             .fixedSize(horizontal: true, vertical: false)
             Spacer(minLength: 4)
             HStack(spacing: 2) {
-                barButton("Sidebar", "sidebar.left", selected: sidebarVisible) { sidebarVisible.toggle() }
+                barButton("Sidebar", "sidebar.left", selected: sidebarVisible, toolbarHelp: true) { sidebarVisible.toggle() }
                 barButton(workspace.isSplit ? "Close Split View" : "Split View", "rectangle.split.2x1",
-                          selected: workspace.isSplit) { workspace.toggleSplit() }
+                          selected: workspace.isSplit, toolbarHelp: true) { workspace.toggleSplit() }
                 if !workspace.isSplit {
-                    barButton("Preview Pane", "sidebar.right", selected: inspectorVisible) { inspectorVisible.toggle() }
+                    barButton("Preview Pane", "sidebar.right", selected: inspectorVisible, toolbarHelp: true) {
+                        inspectorVisible.toggle()
+                    }
                 }
                 if labeled {
                     viewButton(.list, "list.bullet", labeled: true)
@@ -621,8 +633,9 @@ struct BrowserView: View {
                     }
                 } label: { Image(systemName: "square.grid.2x2") }
                     .accessibilityLabel("File view")
+                    .background { toolbarTooltip.anchor("File view", scheme: scheme) }
                 if labeled || !workspace.isSplit {
-                    barButton("File Shelf", "tray") { _ = perform(.fileShelf) }
+                    barButton("File Shelf", "tray", toolbarHelp: true) { _ = perform(.fileShelf) }
                 }
             }
             .menuStyle(.borderlessButton)
@@ -631,7 +644,9 @@ struct BrowserView: View {
     }
 
     private func viewButton(_ mode: BrowserViewMode, _ symbol: String, labeled: Bool) -> some View {
-        barButton(mode.title, symbol, showTitle: labeled, selected: model.viewMode == mode) { model.viewMode = mode }
+        barButton(mode.title, symbol, showTitle: labeled, selected: model.viewMode == mode, toolbarHelp: true) {
+            model.viewMode = mode
+        }
             .accessibilityAddTraits(model.viewMode == mode ? .isSelected : [])
     }
 
@@ -642,12 +657,18 @@ struct BrowserView: View {
         }
     }
 
+    @ViewBuilder
     private func barButton(_ title: String, _ symbol: String, showTitle: Bool = false,
                            selected: Bool = false, bordered: Bool = false, visibleTitle: String? = nil,
-                           compact: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) { barLabel(visibleTitle ?? title, symbol, showTitle) }
+                           compact: Bool = false, toolbarHelp: Bool = false, action: @escaping () -> Void) -> some View {
+        let button = Button(action: action) { barLabel(visibleTitle ?? title, symbol, showTitle) }
             .buttonStyle(BrowserButtonStyle(selected: selected, bordered: bordered, compact: compact))
-            .accessibilityLabel(title).help(title)
+            .accessibilityLabel(title)
+        if toolbarHelp {
+            button.background { toolbarTooltip.anchor(title, scheme: scheme) }
+        } else {
+            button.help(title)
+        }
     }
 
     private var itemPaneContent: some View {
