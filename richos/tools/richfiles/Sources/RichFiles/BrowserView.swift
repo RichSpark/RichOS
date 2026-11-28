@@ -59,6 +59,7 @@ struct BrowserView: View {
     // views that observe them, never the whole window.
     @State private var renaming = InlineRename()
     @State private var quickInfo = ItemQuickInfo()
+    @State private var toolbarTooltip = ToolbarTooltip()
     @StateObject private var folderTree = FolderTreeState()
     @StateObject private var paneKeyFocus = PaneKeyFocus()
     /// Changes on every file change made here, on Refresh and when RichFiles comes back to the
@@ -101,7 +102,7 @@ struct BrowserView: View {
                     if editingAddress && !suggestions.isEmpty {
                         addressSuggestions.focusedValue(\.browserControl, true)
                     }
-                    observeSelection { _ in commandBar }.focusedValue(\.browserControl, true)
+                    commandBar.focusedValue(\.browserControl, true)
                     rule
                 }
                 .font(BrowserTypography.reading(16 * textSize.scale))
@@ -157,6 +158,7 @@ struct BrowserView: View {
         .onDisappear {
             workspace.clearCommands(for: side, owner: commandOwner)
             quickInfo.hide()
+            toolbarTooltip.hide()
         }
         .onChange(of: scheme) { _ in configureQuickInfo() }
         .onChange(of: textSize) { _ in configureQuickInfo() }
@@ -532,9 +534,17 @@ struct BrowserView: View {
     }
 
     private var commandBar: some View {
-        ViewThatFits(in: .horizontal) {
-            commandBar(labeled: true)
-            commandBar(labeled: false)
+        HStack(spacing: 2) {
+            observeSelection { _ in
+                ViewThatFits(in: .horizontal) {
+                    commandBar(labeled: true)
+                    commandBar(labeled: false)
+                }
+            }
+            // Keep one menu control attached when selection updates or changes which toolbar fits.
+            BrowserSortMenu(model: model, tint: NSColor(palette.signal))
+                .frame(width: 34, height: 24)
+                .background { toolbarTooltip.anchor("Sort and view options", scheme: scheme) }
         }
         .padding(.horizontal, 10).padding(.bottom, 6)
     }
@@ -545,9 +555,10 @@ struct BrowserView: View {
                 Menu { creationMenu } label: { barLabel("New", "plus", labeled) }
                     .accessibilityLabel("New")
                     .disabled(actions.busy || !writableFolder)
-                barButton("Cut", "scissors", showTitle: labeled) { _ = perform(.cut) }
+                    .background { toolbarTooltip.anchor("New", scheme: scheme) }
+                barButton("Cut", "scissors", showTitle: labeled, toolbarHelp: true) { _ = perform(.cut) }
                     .disabled(model.selected.isEmpty || actions.busy)
-                barButton("Copy", "doc.on.doc", showTitle: labeled) { _ = perform(.copy) }
+                barButton("Copy", "doc.on.doc", showTitle: labeled, toolbarHelp: true) { _ = perform(.copy) }
                     .disabled(model.selected.isEmpty)
                 Menu {
                     Button("Paste, Skip Conflicts") { paste() }
@@ -555,15 +566,20 @@ struct BrowserView: View {
                 } label: { barLabel("Paste", "clipboard", labeled) }
                     .accessibilityLabel("Paste")
                     .disabled(!actions.canScheduleTransfer || !writableFolder)
-                barButton("Rename", "pencil", showTitle: labeled) { _ = perform(.rename) }
+                    .background { toolbarTooltip.anchor("Paste", scheme: scheme) }
+                barButton("Rename", "pencil", showTitle: labeled, toolbarHelp: true) { _ = perform(.rename) }
                     .disabled(model.selected.count != 1 || actions.busy)
-                barButton("Move to Trash", "trash", showTitle: labeled, visibleTitle: "Trash") { _ = perform(.trash) }
+                barButton("Move to Trash", "trash", showTitle: labeled, visibleTitle: "Trash", toolbarHelp: true) {
+                    _ = perform(.trash)
+                }
                     .disabled(model.selected.isEmpty || actions.busy)
-                barButton("Git", "point.3.connected.trianglepath.dotted", showTitle: labeled, selected: git.open) {
+                barButton("Git", "point.3.connected.trianglepath.dotted", showTitle: labeled, selected: git.open,
+                          toolbarHelp: true) {
                     git.toggle(at: model.folder)
                 }
                 Menu { folderMenu } label: { barLabel("This Folder", "folder", labeled) }
                     .accessibilityLabel("Current folder actions")
+                    .background { toolbarTooltip.anchor("This Folder", scheme: scheme) }
                 Menu {
                     Button("New Window") { openFolderWindow(model.folder) }
                     Button("Workspaces…") { sheet = .workspaces }
@@ -574,16 +590,19 @@ struct BrowserView: View {
                     Button("Connect to Server…") { sheet = .connect }
                 } label: { barLabel("Tools", "ellipsis", labeled) }
                     .accessibilityLabel("Tools")
+                    .background { toolbarTooltip.anchor("Tools", scheme: scheme) }
             }
             .menuStyle(.borderlessButton)
             .fixedSize(horizontal: true, vertical: false)
             Spacer(minLength: 4)
             HStack(spacing: 2) {
-                barButton("Sidebar", "sidebar.left", selected: sidebarVisible) { sidebarVisible.toggle() }
+                barButton("Sidebar", "sidebar.left", selected: sidebarVisible, toolbarHelp: true) { sidebarVisible.toggle() }
                 barButton(workspace.isSplit ? "Close Split View" : "Split View", "rectangle.split.2x1",
-                          selected: workspace.isSplit) { workspace.toggleSplit() }
+                          selected: workspace.isSplit, toolbarHelp: true) { workspace.toggleSplit() }
                 if !workspace.isSplit {
-                    barButton("Preview Pane", "sidebar.right", selected: inspectorVisible) { inspectorVisible.toggle() }
+                    barButton("Preview Pane", "sidebar.right", selected: inspectorVisible, toolbarHelp: true) {
+                        inspectorVisible.toggle()
+                    }
                 }
                 if labeled {
                     viewButton(.list, "list.bullet", labeled: true)
@@ -601,10 +620,10 @@ struct BrowserView: View {
                     }
                 } label: { Image(systemName: "square.grid.2x2") }
                     .accessibilityLabel("File view")
+                    .background { toolbarTooltip.anchor("File view", scheme: scheme) }
                 if labeled || !workspace.isSplit {
-                    barButton("File Shelf", "tray") { _ = perform(.fileShelf) }
+                    barButton("File Shelf", "tray", toolbarHelp: true) { _ = perform(.fileShelf) }
                 }
-                sortMenu
             }
             .menuStyle(.borderlessButton)
             .fixedSize(horizontal: true, vertical: false)
@@ -612,33 +631,10 @@ struct BrowserView: View {
     }
 
     private func viewButton(_ mode: BrowserViewMode, _ symbol: String, labeled: Bool) -> some View {
-        barButton(mode.title, symbol, showTitle: labeled, selected: model.viewMode == mode) { model.viewMode = mode }
+        barButton(mode.title, symbol, showTitle: labeled, selected: model.viewMode == mode, toolbarHelp: true) {
+            model.viewMode = mode
+        }
             .accessibilityAddTraits(model.viewMode == mode ? .isSelected : [])
-    }
-
-    private var sortMenu: some View {
-        Menu {
-            sortButton("Name", .name)
-            sortButton("Extension", .fileExtension)
-            sortButton("Type", .type)
-            sortButton("Size", .size)
-            sortButton("Modified", .modified)
-            Divider()
-            Toggle("Ascending", isOn: $model.sort.ascending)
-            Toggle("Folders First", isOn: $model.sort.foldersFirst)
-            if model.sort.column != .type {
-                Toggle("Group by Type", isOn: $model.sort.groupByType)
-            }
-            Toggle("Show Hidden Files", isOn: $model.showHidden)
-            Toggle("Remember View for This Folder", isOn: Binding(get: { model.remembersFolderView }, set: {
-                model.setFolderViewOverride($0)
-            }))
-            if model.viewMode == .icons {
-                Button("Larger Thumbnails") { model.iconSize = min(model.iconSize + 12, 180) }
-                Button("Smaller Thumbnails") { model.iconSize = max(model.iconSize - 12, 48) }
-            }
-        } label: { Image(systemName: "arrow.up.arrow.down") }
-            .accessibilityLabel("Sort and view options")
     }
 
     private func barLabel(_ title: String, _ symbol: String, _ showTitle: Bool) -> some View {
@@ -648,23 +644,17 @@ struct BrowserView: View {
         }
     }
 
+    @ViewBuilder
     private func barButton(_ title: String, _ symbol: String, showTitle: Bool = false,
                            selected: Bool = false, bordered: Bool = false, visibleTitle: String? = nil,
-                           compact: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) { barLabel(visibleTitle ?? title, symbol, showTitle) }
+                           compact: Bool = false, toolbarHelp: Bool = false, action: @escaping () -> Void) -> some View {
+        let button = Button(action: action) { barLabel(visibleTitle ?? title, symbol, showTitle) }
             .buttonStyle(BrowserButtonStyle(selected: selected, bordered: bordered, compact: compact))
-            .accessibilityLabel(title).help(title)
-    }
-
-    private func sortButton(_ title: String, _ column: FileSort.Column) -> some View {
-        Button {
-            model.sort.column = column
-        } label: {
-            if model.sort.column == column {
-                Label(title, systemImage: "checkmark")
-            } else {
-                Text(title)
-            }
+            .accessibilityLabel(title)
+        if toolbarHelp {
+            button.background { toolbarTooltip.anchor(title, scheme: scheme) }
+        } else {
+            button.help(title)
         }
     }
 
@@ -2086,6 +2076,92 @@ struct BrowserView: View {
         case .newFolder: return !actions.busy && writableFolder
         case .switchPane: return workspace.isSplit
         default: return true
+        }
+    }
+}
+
+@MainActor
+private struct BrowserSortMenu: NSViewRepresentable {
+    let model: BrowserModel
+    let tint: NSColor
+
+    func makeCoordinator() -> Coordinator { Coordinator(model: model) }
+
+    func makeNSView(context: Context) -> NSPopUpButton {
+        let button = NSPopUpButton(frame: .zero, pullsDown: true)
+        button.isBordered = false
+        button.setAccessibilityLabel("Sort and view options")
+        let cell = button.cell as? NSPopUpButtonCell
+        cell?.altersStateOfSelectedItem = false
+        cell?.usesItemFromMenu = true
+        cell?.arrowPosition = .arrowAtBottom
+        button.addItem(withTitle: "")
+        button.item(at: 0)?.image = NSImage(systemSymbolName: "arrow.up.arrow.down", accessibilityDescription: nil)
+        if let menu = button.menu {
+            menu.autoenablesItems = false
+            menu.delegate = context.coordinator
+            context.coordinator.menuNeedsUpdate(menu)
+        }
+        return button
+    }
+
+    func updateNSView(_ button: NSPopUpButton, context: Context) {
+        context.coordinator.model = model
+        button.contentTintColor = tint
+    }
+
+    final class Coordinator: NSObject, NSMenuDelegate {
+        var model: BrowserModel
+        private let dot = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 6, weight: .regular))
+
+        init(model: BrowserModel) { self.model = model }
+
+        func menuNeedsUpdate(_ menu: NSMenu) {
+            guard let heading = menu.items.first else { return }
+            let model = self.model
+            let fields: [(String, FileSort.Column)] = [
+                ("Name", .name), ("Extension", .fileExtension), ("Type", .type), ("Size", .size),
+                ("Date modified", .modified), ("Date created", .created),
+            ]
+            var items = [heading] + fields.map { title, column in
+                let item = option(title, checked: model.sort.column == column) { model.sort.column = column }
+                item.onStateImage = dot
+                return item
+            }
+            items += [
+                .separator(),
+                option("Ascending", checked: model.sort.ascending) { model.sort.ascending.toggle() },
+                option("Folders First", checked: model.sort.foldersFirst) { model.sort.foldersFirst.toggle() },
+            ]
+            if model.sort.column != .type {
+                items.append(option("Group by Type", checked: model.sort.groupByType) { model.sort.groupByType.toggle() })
+            }
+            items += [
+                option("Show Hidden Files", checked: model.showHidden) { model.showHidden.toggle() },
+                option("Remember View for This Folder", checked: model.remembersFolderView) {
+                    model.setFolderViewOverride(!model.remembersFolderView)
+                },
+            ]
+            if model.viewMode == .icons {
+                items += [
+                    option("Larger Thumbnails") { model.iconSize = min(model.iconSize + 12, 180) },
+                    option("Smaller Thumbnails") { model.iconSize = max(model.iconSize - 12, 48) },
+                ]
+            }
+            menu.items = items
+        }
+
+        private func option(_ title: String, checked: Bool = false, action: @escaping () -> Void) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: #selector(choose(_:)), keyEquivalent: "")
+            item.target = self
+            item.state = checked ? .on : .off
+            item.representedObject = action
+            return item
+        }
+
+        @objc private func choose(_ item: NSMenuItem) {
+            (item.representedObject as? () -> Void)?()
         }
     }
 }

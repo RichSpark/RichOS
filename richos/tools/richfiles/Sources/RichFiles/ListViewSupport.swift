@@ -332,7 +332,7 @@ final class ItemQuickInfo {
     private func show(_ lines: [QuickInfo.Line], for url: URL) {
         pending = nil
         pendingFor = nil
-        let panel = self.panel ?? Self.makePanel()
+        let panel = self.panel ?? makeBrowserHoverPanel()
         self.panel = panel
         let palette = BrowserPalette(style.scheme)
         let hosting = NSHostingView(rootView: QuickInfoBox(lines: lines, palette: palette, size: style.size))
@@ -351,18 +351,150 @@ final class ItemQuickInfo {
         shownFor = url
     }
 
-    private static func makePanel() -> NSPanel {
-        let panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
-                            backing: .buffered, defer: true)
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.level = .popUpMenu
-        panel.ignoresMouseEvents = true
-        panel.hidesOnDeactivate = true
-        panel.isReleasedWhenClosed = false
-        panel.collectionBehavior = [.transient, .ignoresCycle]
-        return panel
+}
+
+@MainActor
+private func makeBrowserHoverPanel() -> NSPanel {
+    let panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
+                        backing: .buffered, defer: true)
+    panel.isOpaque = false
+    panel.backgroundColor = .clear
+    panel.hasShadow = true
+    panel.level = .popUpMenu
+    panel.ignoresMouseEvents = true
+    panel.hidesOnDeactivate = true
+    panel.isReleasedWhenClosed = false
+    panel.collectionBehavior = [.transient, .ignoresCycle]
+    return panel
+}
+
+@MainActor
+final class ToolbarTooltip {
+    private weak var target: TargetView?
+    private var point = NSPoint.zero
+    private var pending: Task<Void, Never>?
+    private var panel: NSPanel?
+    private var monitor: Any?
+
+    func anchor(_ title: String, scheme: ColorScheme) -> some View {
+        Anchor(tooltip: self, title: title, scheme: scheme)
+    }
+
+    func hide() {
+        pending?.cancel()
+        pending = nil
+        target = nil
+        panel?.orderOut(nil)
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+    }
+
+    private func moved(over view: TargetView, at point: NSPoint) {
+        if target === view, point == self.point || panel?.isVisible == true { return }
+        hide()
+        guard view.window?.isKeyWindow == true, NSEvent.pressedMouseButtons == 0 else { return }
+        target = view
+        self.point = point
+        let started = ProcessInfo.processInfo.systemUptime
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .milliseconds(350))
+        monitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.keyDown, .scrollWheel, .leftMouseDown, .rightMouseDown, .otherMouseDown]
+        ) { [weak self] event in
+            self?.hide()
+            return event
+        }
+        pending = Task { [weak self, weak view] in
+            try? await clock.sleep(until: deadline, tolerance: .zero)
+            guard !Task.isCancelled, let self, let view else { return }
+            guard let window = view.window, window.isKeyWindow, !view.isHiddenOrHasHiddenAncestor,
+                  view.bounds.contains(view.convert(window.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)) else {
+                self.hide()
+                return
+            }
+            self.show(view.title, scheme: view.scheme, started: started)
+        }
+    }
+
+    private func left(_ view: TargetView) {
+        if target === view { hide() }
+    }
+
+    private func show(_ title: String, scheme: ColorScheme, started: TimeInterval) {
+        pending = nil
+        let panel = self.panel ?? makeBrowserHoverPanel()
+        self.panel = panel
+        let palette = BrowserPalette(scheme)
+        let label = NSTextField(labelWithString: title)
+        label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        label.textColor = NSColor(palette.ink)
+        label.sizeToFit()
+        label.frame.origin = NSPoint(x: 7, y: 4)
+        let size = NSSize(width: label.frame.width + 14, height: label.frame.height + 8)
+        let box = NSView(frame: NSRect(origin: .zero, size: size))
+        box.wantsLayer = true
+        box.layer?.backgroundColor = NSColor(palette.floating).cgColor
+        box.layer?.borderColor = NSColor(palette.controlLine).cgColor
+        box.layer?.borderWidth = 1
+        box.layer?.cornerRadius = 4
+        box.addSubview(label)
+        panel.contentView = box
+
+        var origin = NSPoint(x: point.x + 10, y: point.y - 19 - size.height)
+        if let screen = target?.window?.screen {
+            let visible = screen.visibleFrame
+            origin.x = max(visible.minX, min(origin.x, visible.maxX - size.width))
+            if origin.y < visible.minY { origin.y = point.y + 10 }
+        }
+        panel.setFrame(NSRect(origin: origin, size: size), display: true)
+        panel.orderFront(nil)
+        RichFilesDiagnostics.record(.toolbarTooltip, id: UUID(), outcome: .complete, started: started,
+                                    total: 1, confirmed: 1)
+    }
+
+    private struct Anchor: NSViewRepresentable {
+        let tooltip: ToolbarTooltip
+        let title: String
+        let scheme: ColorScheme
+
+        func makeNSView(context: Context) -> TargetView { TargetView() }
+
+        func updateNSView(_ view: TargetView, context: Context) {
+            view.tooltip = tooltip
+            view.title = title
+            view.scheme = scheme
+        }
+    }
+
+    private final class TargetView: NSView {
+        weak var tooltip: ToolbarTooltip?
+        var title = ""
+        var scheme = ColorScheme.light
+        private var tracking: NSTrackingArea?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            if let tracking { removeTrackingArea(tracking) }
+            let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved,
+                                                            .activeInKeyWindow, .inVisibleRect], owner: self)
+            addTrackingArea(area)
+            tracking = area
+        }
+
+        override func mouseEntered(with event: NSEvent) { mouseMoved(with: event) }
+
+        override func mouseMoved(with event: NSEvent) {
+            if !isHiddenOrHasHiddenAncestor { tooltip?.moved(over: self, at: NSEvent.mouseLocation) }
+        }
+
+        override func mouseExited(with event: NSEvent) { tooltip?.left(self) }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            tooltip?.left(self)
+        }
     }
 }
 

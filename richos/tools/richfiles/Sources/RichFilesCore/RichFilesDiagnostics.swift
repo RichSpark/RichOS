@@ -5,7 +5,7 @@ public enum RichFilesDiagnostics {
     public enum Operation: String, Codable, Sendable {
         case suiteRestartRunning, richFilesSuiteRestart, richGlanceSuiteRestart, captureHelperSuiteRestart, gesturesSuiteRestart
         case listing, listingVisible, copy, move, transferSelection, recovery, gitHistory, gitComparison, windowPlacement, transferStall
-        case cleanupScan, cleanupDuplicates, cleanupTrash, cleanupDelete, openWithDiscovery
+        case cleanupScan, cleanupDuplicates, cleanupTrash, cleanupDelete, openWithDiscovery, toolbarTooltip
         case windowGestureAvailability, windowGestureMaximize, windowGestureRestore
         case windowGestureDockMinimize, windowGestureDockRestore, desktopDeleteShortcut, desktopFolderOpen
         case windowGestureTile, windowGestureTileRestore

@@ -1090,7 +1090,7 @@ final class BrowserModel: ObservableObject {
 
 struct ViewPreferences: Codable {
     private enum Column: String, Codable {
-        case name, fileExtension, type, size, modified
+        case name, fileExtension, type, size, modified, created
 
         init(_ column: FileSort.Column) {
             switch column {
@@ -1099,6 +1099,7 @@ struct ViewPreferences: Codable {
             case .type: self = .type
             case .size: self = .size
             case .modified: self = .modified
+            case .created: self = .created
             }
         }
 
@@ -1109,6 +1110,7 @@ struct ViewPreferences: Codable {
             case .type: return .type
             case .size: return .size
             case .modified: return .modified
+            case .created: return .created
             }
         }
     }
