@@ -117,6 +117,14 @@ struct BrowserTransferRequest: Sendable {
     let clipboardGeneration: Int?
     /// A retry should still apply to the same destination folder.
     let destination: BrowserTransferDestination?
+    var revealIn: UUID? = nil
+}
+
+struct BrowserTransferArrival {
+    let visit: UUID
+    let id: UUID
+    let started: TimeInterval
+    let items: [FileReference]
 }
 
 struct BrowserQueuedTransfer: Identifiable, Sendable {
@@ -148,7 +156,7 @@ extension BrowserTransferRequest {
             return BrowserTransferSource.captured(selected)
         }
         return Self(sources: captured, folder: target.url, move: move, conflict: conflict,
-                    clipboardGeneration: clipboardGeneration, destination: target)
+                    clipboardGeneration: clipboardGeneration, destination: target, revealIn: revealIn)
     }
 }
 
@@ -235,6 +243,7 @@ enum BrowserCompletedMove: Codable, Sendable {
 struct BrowserTransferResult: Sendable {
     var progress: BrowserTransfer
     var moves: [BrowserCompletedMove] = []
+    var copies: [FileReference] = []
     /// Copies made into the folder their source is in, named `name - Copy.ext`.
     var duplicates: [FileReference] = []
     var retry: [BrowserTransferSource] = []
@@ -398,6 +407,7 @@ enum BrowserTransferJob {
                         isCancelled: { Task.isCancelled }, onNestedProgress: showNestedBytes,
                         onActivity: reportActivity, onProgress: showBytes
                     )
+                    result.copies.append(receipt.copied)
                     if duplicate { result.duplicates.append(receipt.copied) }
                     if let staging = receipt.remainingStagingFolder {
                         result.progress.issues.append(BrowserTransferIssue(

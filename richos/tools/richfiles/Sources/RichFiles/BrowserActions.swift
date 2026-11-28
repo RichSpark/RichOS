@@ -20,12 +20,6 @@ struct BrowserTrashItem: Identifiable, Codable, Sendable {
     var canRestore: Bool { reference != nil }
 }
 
-struct BrowserDuplicates: Equatable, Sendable {
-    let id = UUID()
-    let folder: URL
-    let items: [FileReference]
-}
-
 @MainActor
 final class BrowserActions: ObservableObject {
     private static let recoveryLog = Logger(subsystem: "app.richos.richfiles", category: "transfer")
@@ -46,8 +40,8 @@ final class BrowserActions: ObservableObject {
     @Published private(set) var undoName: String?
     @Published private(set) var redoName: String?
     @Published private(set) var mutationRevision = UUID()
-    /// The copies the last paste made into the folder their sources are in, for the list to select.
-    @Published private(set) var lastDuplicates: BrowserDuplicates?
+    // Deliver each completion to its pane, including back-to-back queued transfers.
+    let mutations = PassthroughSubject<BrowserTransferArrival?, Never>()
     /// What the last Undo or Redo moved on disk, from where to where, in the order it moved
     /// them, so a view that keeps state by path (the sidebar's open folders) can follow, as
     /// the forward rename already does. Empty after any other change.
@@ -210,14 +204,16 @@ final class BrowserActions: ObservableObject {
 
     var canScheduleTransfer: Bool { !replacingFile && (!busy || transfer?.running == true) }
 
-    func paste(into folder: URL, conflict: BrowserConflictPolicy = .skip, destination: BrowserTransferDestination? = nil) {
+    func paste(into folder: URL, conflict: BrowserConflictPolicy = .skip,
+               destination: BrowserTransferDestination? = nil, revealIn: UUID? = nil) {
         guard canScheduleTransfer else { return }
         refreshClipboard()
         if let clipboard {
             submitTransfer(BrowserTransferRequest(
                 sources: clipboard.sources.map(BrowserTransferSource.captured),
                 folder: folder, move: clipboard.cut, conflict: conflict,
-                clipboardGeneration: clipboard.cut ? clipboard.generation : nil, destination: destination
+                clipboardGeneration: clipboard.cut ? clipboard.generation : nil,
+                destination: destination, revealIn: revealIn
             ))
             return
         }
@@ -235,18 +231,18 @@ final class BrowserActions: ObservableObject {
         }
         submitTransfer(BrowserTransferRequest(
             sources: urls.map(BrowserTransferSource.clipboard), folder: folder,
-            move: false, conflict: conflict, clipboardGeneration: nil, destination: destination
+            move: false, conflict: conflict, clipboardGeneration: nil, destination: destination, revealIn: revealIn
         ))
     }
 
     func transfer(
         _ sources: [FileReference], into folder: URL, move: Bool,
-        conflict: BrowserConflictPolicy = .skip, destination: BrowserTransferDestination? = nil
+        conflict: BrowserConflictPolicy = .skip, destination: BrowserTransferDestination? = nil, revealIn: UUID? = nil
     ) {
         submitTransfer(BrowserTransferRequest(
             sources: unique(sources).map(BrowserTransferSource.captured),
             folder: folder, move: move, conflict: conflict,
-            clipboardGeneration: nil, destination: destination
+            clipboardGeneration: nil, destination: destination, revealIn: revealIn
         ))
     }
 
@@ -346,7 +342,7 @@ final class BrowserActions: ObservableObject {
         startTransfer(BrowserTransferRequest(
             sources: request.sources, folder: request.folder, move: request.move,
             conflict: conflict ?? request.conflict,
-            clipboardGeneration: request.clipboardGeneration, destination: request.destination
+            clipboardGeneration: request.clipboardGeneration, destination: request.destination, revealIn: request.revealIn
         ))
     }
 
@@ -439,7 +435,7 @@ final class BrowserActions: ObservableObject {
             let remaining = request.sources.filter { $0.url.path != source.path }
             retryRequest = remaining.isEmpty ? nil : BrowserTransferRequest(
                 sources: remaining, folder: request.folder, move: request.move, conflict: request.conflict,
-                clipboardGeneration: generation, destination: request.destination
+                clipboardGeneration: generation, destination: request.destination, revealIn: request.revealIn
             )
             canRetryTransfer = retryRequest != nil
         }
@@ -517,7 +513,7 @@ final class BrowserActions: ObservableObject {
         if !result.retry.isEmpty, let destination = result.destination {
             retryRequest = BrowserTransferRequest(
                 sources: result.retry, folder: request.folder, move: request.move, conflict: request.conflict,
-                clipboardGeneration: generation, destination: destination
+                clipboardGeneration: generation, destination: destination, revealIn: request.revealIn
             )
             canRetryTransfer = true
         }
@@ -535,16 +531,18 @@ final class BrowserActions: ObservableObject {
         if duplicates.count == 1, succeeded == 1, request.sources.count == 1, lead.isEmpty {
             message = "Copied as “\(duplicates[0].url.lastPathComponent)”."
         }
+        let items = request.move ? changed.map(\.moved) : result.copies
+        let arrival = request.revealIn.flatMap { visit in
+            items.isEmpty ? nil : BrowserTransferArrival(visit: visit, id: result.progress.id,
+                started: ProcessInfo.processInfo.systemUptime, items: items)
+        }
         let saved = finishMutation(MutationResult(
             message: message,
             issues: errors,
             changed: request.move ? !changed.isEmpty : succeeded > 0,
             undo: duplicates.isEmpty ? history.undo : duplicates.reversed().map(HistoryStep.trash),
             trashChanges: history.trash
-        ), title: duplicates.isEmpty ? "Move" : "Duplicate")
-        if !duplicates.isEmpty {
-            lastDuplicates = BrowserDuplicates(folder: request.folder, items: duplicates)
-        }
+        ), title: duplicates.isEmpty ? "Move" : "Duplicate", arrival: arrival)
         if saved, let journal = result.journal { clearSettledTransfer { try journal.discard() } }
         queuePaused = !queuedTransfers.isEmpty && (result.progress.cancelled || !result.progress.issues.isEmpty)
         startNextQueuedTransfer()
@@ -878,7 +876,7 @@ final class BrowserActions: ObservableObject {
     }
 
     @discardableResult
-    private func finishMutation(_ mutation: MutationResult, title: String) -> Bool {
+    private func finishMutation(_ mutation: MutationResult, title: String, arrival: BrowserTransferArrival? = nil) -> Bool {
         applyTrashChanges(mutation.trashChanges)
         if let untrashed = mutation.untrashed { self.untrashed = untrashed }
         if mutation.changed {
@@ -911,7 +909,7 @@ final class BrowserActions: ObservableObject {
         issues = mutation.issues
         status = mutation.message
         if let issue = mutation.issues.first { status += " " + issue }
-        return notifyMutation()
+        return notifyMutation(arrival: arrival)
     }
 
     private func replay(undo: Bool) {
@@ -948,10 +946,11 @@ final class BrowserActions: ObservableObject {
     }
 
     @discardableResult
-    private func notifyMutation(moves: [BrowserMovedPath] = []) -> Bool {
+    private func notifyMutation(moves: [BrowserMovedPath] = [], arrival: BrowserTransferArrival? = nil) -> Bool {
         let saved = persistRecovery()
         mutationMoves = moves
         mutationRevision = UUID()
+        mutations.send(arrival)
         didMutate?()
         return saved
     }

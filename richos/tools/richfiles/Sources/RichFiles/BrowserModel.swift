@@ -78,17 +78,24 @@ enum BrowserViewMode: String, Codable, CaseIterable, Identifiable {
 final class BrowserSelection: ObservableObject {
     @Published var urls: Set<URL> = []
     @Published var cursor: URL?
-    @Published var scrollToItem: URL?
+    struct ScrollRequest: Equatable {
+        let item: URL
+        let id = UUID()
+    }
+
+    @Published private(set) var scrollRequest: ScrollRequest?
     var rangeAnchor: URL?
     var references: [URL: FileReference] = [:]
 
-    /// Items that just appeared (a pasted duplicate) flash once when their row is drawn.
+    /// Items that just arrived flash once when their row is drawn.
     private(set) var flashed: (paths: Set<String>, at: TimeInterval) = ([], 0)
 
-    func moveCursor(to item: URL?, scrolling: Bool = false) {
+    func moveCursor(to item: URL?, scrolling: Bool = false, repeatScroll: Bool = false) {
         if cursor != item { cursor = item }
-        let scrollTarget = scrolling ? item : nil
-        if scrollToItem != scrollTarget { scrollToItem = scrollTarget }
+        let target = scrolling ? item : nil
+        if scrollRequest?.item != target || repeatScroll {
+            scrollRequest = target.map { ScrollRequest(item: $0) }
+        }
     }
 
     func flash(_ items: [URL]) {
@@ -108,7 +115,10 @@ final class BrowserModel: ObservableObject {
         set {
             guard selection.urls != newValue else { return }
             selection.urls = newValue
-            if !settingSelection { selectionToRestore.removeAll() }
+            if !settingSelection {
+                selectionToRestore.removeAll()
+                finishTransferSelection(.cancelled)
+            }
         }
     }
     var scrollAnchor: URL?
@@ -246,6 +256,8 @@ final class BrowserModel: ObservableObject {
     private var restoringView = false
     private var settingSelection = false
     private var selectionToRestore: [String: SelectionTarget] = [:]
+    private(set) var transferVisit = UUID()
+    private var pendingTransferSelection: BrowserTransferArrival?
     private var firstVisibleItem: URL?
     private var scanTask: Task<Void, Never>?
     private var scanID: UUID?
@@ -320,6 +332,15 @@ final class BrowserModel: ObservableObject {
 
     func refresh() {
         reloadPreservingSelection()
+    }
+
+    func refresh(revealing arrival: BrowserTransferArrival?) {
+        if let arrival, arrival.visit == transferVisit, !openingFolder {
+            finishTransferSelection(.cancelled)
+            resetTypeSelection()
+            pendingTransferSelection = arrival
+        }
+        refresh()
     }
 
     func selectCreatedItem(_ item: FileReference) {
@@ -550,6 +571,7 @@ final class BrowserModel: ObservableObject {
         scanTask?.cancel()
         scanID = nil
         busy = false
+        finishTransferSelection(.cancelled)
         status = "Search stopped. \(entries.count) results so far."
     }
 
@@ -798,6 +820,8 @@ final class BrowserModel: ObservableObject {
     }
 
     private func setSearch(_ state: SearchState) {
+        transferVisit = UUID()
+        finishTransferSelection(.cancelled)
         restoringVisit = true
         searchText = state.text
         searchContent = state.contentMode
@@ -829,6 +853,7 @@ final class BrowserModel: ObservableObject {
         setSelection([])
         isDisconnected = disconnectedMounts.contains { folder.path == $0 || folder.path.hasPrefix($0 + "/") }
         if isDisconnected {
+            finishTransferSelection(.unavailable)
             selectionToRestore.removeAll()
             busy = false
             status = "Reconnect the volume, then refresh this folder."
@@ -862,6 +887,7 @@ final class BrowserModel: ObservableObject {
                 self.selectionToRestore.removeAll()
                 self.resetTypeSelection()
                 self.finishVisibleRows(.unavailable)
+                self.finishTransferSelection(.unavailable)
             }
         }
     }
@@ -899,6 +925,7 @@ final class BrowserModel: ObservableObject {
         scanReport = report
         currentVolume = update.volume
         selectionToRestore.removeAll()
+        selectTransferArrivals()
         busy = false
         applyTypeSelection()
         let label = searchActive ? "results" : "items"
@@ -908,6 +935,34 @@ final class BrowserModel: ObservableObject {
             " · \($0.searchedFiles) files read · \($0.skippedItems) items or folders unsearched"
         } ?? ""
         status = "\(report.matched) \(label)\(coverage)\(unavailable)"
+    }
+
+    private func selectTransferArrivals() {
+        guard let arrival = pendingTransferSelection else { return }
+        let identities = Dictionary(arrival.items.map { ($0.url.path, $0.identity) },
+                                    uniquingKeysWith: { _, latest in latest })
+        let listed = Dictionary(uniqueKeysWithValues: entries.compactMap { entry in
+            identities[entry.url.path] == entry.identity ? (entry.url.path, entry.url) : nil
+        })
+        let items = arrival.items.compactMap { listed[$0.url.path] }
+        guard let target = items.last else {
+            finishTransferSelection(.unavailable)
+            return
+        }
+        setSelection(Set(items))
+        firstVisibleItem = nil
+        scrollAnchor = target
+        selection.rangeAnchor = target
+        selection.flash(items)
+        selection.moveCursor(to: target, scrolling: true, repeatScroll: true)
+        finishTransferSelection(items.count == arrival.items.count ? .complete : .issues, confirmed: items.count)
+    }
+
+    private func finishTransferSelection(_ outcome: RichFilesDiagnostics.Outcome, confirmed: Int = 0) {
+        guard let arrival = pendingTransferSelection else { return }
+        pendingTransferSelection = nil
+        RichFilesDiagnostics.record(.transferSelection, id: arrival.id, outcome: outcome,
+                                    started: arrival.started, total: arrival.items.count, confirmed: confirmed)
     }
 
     struct ListingUpdate: Sendable {
