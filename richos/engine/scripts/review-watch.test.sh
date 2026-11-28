@@ -3149,7 +3149,7 @@ class World(rw.AppWorld):
     def registry_items(self, now, seen):
         return [], []
 
-    def codex_items(self, now, state):
+    def codex_items(self, now, state, reviewed=()):
         return [item], []
 
 
