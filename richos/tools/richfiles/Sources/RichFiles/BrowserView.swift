@@ -101,7 +101,7 @@ struct BrowserView: View {
                     if editingAddress && !suggestions.isEmpty {
                         addressSuggestions.focusedValue(\.browserControl, true)
                     }
-                    observeSelection { _ in commandBar }.focusedValue(\.browserControl, true)
+                    commandBar.focusedValue(\.browserControl, true)
                     rule
                 }
                 .font(BrowserTypography.reading(16 * textSize.scale))
@@ -545,9 +545,16 @@ struct BrowserView: View {
     }
 
     private var commandBar: some View {
-        ViewThatFits(in: .horizontal) {
-            commandBar(labeled: true)
-            commandBar(labeled: false)
+        HStack(spacing: 2) {
+            observeSelection { _ in
+                ViewThatFits(in: .horizontal) {
+                    commandBar(labeled: true)
+                    commandBar(labeled: false)
+                }
+            }
+            // Keep one menu control attached when selection updates or changes which toolbar fits.
+            BrowserSortMenu(model: model, tint: NSColor(palette.signal))
+                .frame(width: 34, height: 24)
         }
         .padding(.horizontal, 10).padding(.bottom, 6)
     }
@@ -617,8 +624,6 @@ struct BrowserView: View {
                 if labeled || !workspace.isSplit {
                     barButton("File Shelf", "tray") { _ = perform(.fileShelf) }
                 }
-                BrowserSortMenu(model: model, tint: NSColor(palette.signal))
-                    .frame(width: 34, height: 24)
             }
             .menuStyle(.borderlessButton)
             .fixedSize(horizontal: true, vertical: false)
