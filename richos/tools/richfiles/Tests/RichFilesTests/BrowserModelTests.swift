@@ -61,7 +61,7 @@ final class BrowserModelTests: XCTestCase {
         let expected = try FileReference(url: match).identity
         let selected = try model.selected.map { try FileReference(url: $0).identity }
         XCTAssertEqual(selected, [expected])
-        XCTAssertEqual(try FileReference(url: XCTUnwrap(model.selection.scrollToItem)).identity, expected)
+        XCTAssertEqual(try FileReference(url: XCTUnwrap(model.selection.scrollRequest?.item)).identity, expected)
     }
 
     @MainActor
@@ -87,7 +87,7 @@ final class BrowserModelTests: XCTestCase {
 
         model.apply(.init(entries: ordered, report: report))
         XCTAssertEqual(model.selected, [ordered[0].id])
-        XCTAssertEqual(model.selection.scrollToItem, ordered[0].id)
+        XCTAssertEqual(model.selection.scrollRequest?.item, ordered[0].id)
     }
 
     func testCustomShortcutsKeepSystemKeysAndOtherActionsAvailable() throws {
