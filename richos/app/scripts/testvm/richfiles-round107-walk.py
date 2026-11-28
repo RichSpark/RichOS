@@ -29,6 +29,13 @@ Change the File Extension? alert, drawn by macOS, is measured as a finding in no
 
 --menu-position uses a single long filename to check the menu anchor and the
 window and display edges in the signed guest.
+
+--menu-corners right-clicks at all four corners of the window and of the display, on a file, a
+folder and empty space (three fixture folders: only files, only folders, nothing), and judges
+each menu as File Explorer on Windows places it: where there is room it opens at the pointer
+(it may cross the window's edge); at the display's edge it stays wholly on the display with the
+pointer at its edge (added with the nightly 123 walk; judged by corner_verdict, tested in
+test/richfiles-menu-corners.test.py).
 """
 import argparse
 import json
@@ -76,6 +83,50 @@ TREE = [
 ]
 
 CONTROL, COMMAND = "control down", "command down"
+CORNERS = ("top-left", "top-right", "bottom-left", "bottom-right")
+
+
+def corner_verdict(point, menu, screen, window=None):
+    """Is a right-click menu where File Explorer on Windows puts it? point (x, y) of the click,
+    menu and window {x, y, w, h}, screen (width, height) of the whole display. Returns
+    (ok, facts). The menu must be wholly on the display and the pointer at it: at its top-left
+    corner where the display leaves room, otherwise at its edge after it moved to fit. With a
+    window given (a click away from the display's edges) it must open at the pointer itself;
+    crossing the window's edge is allowed and reported."""
+    px, py = point
+    x, y, w, h = menu["x"], menu["y"], menu["w"], menu["h"]
+    width, height = screen
+    on_display = x >= -1 and y >= -1 and x + w <= width + 1 and y + h <= height + 1
+    # The native border and the first item's inset sit between the pointer and the menu's frame.
+    anchored = abs(x - px) <= 12 and abs(y - py) <= 24
+    touching = x - 12 <= px <= x + w + 12 and y - 24 <= py <= y + h + 24
+    facts = {"pointer": [px, py], "menu": [x, y, w, h], "on_display": on_display,
+             "anchored_top_left": anchored, "pointer_at_menu": touching,
+             "opened_left": x + w <= px + 12, "opened_up": y + h <= py + 24}
+    if window is not None:
+        facts["past_window_edge"] = (x < window["x"] or y < window["y"] or x + w > window["x"] + window["w"]
+                                     or y + h > window["y"] + window["h"])
+        return on_display and anchored, facts
+    room_right, room_down = px + w <= width, py + h <= height
+    # Where the display leaves room on a side, the menu must not have moved away from it; where
+    # it does not, the menu's far edge sits at the pointer (flipped) or at the display's edge
+    # (slid to fit), never anywhere else around the pointer.
+    natural = (not room_right or abs(x - px) <= 12) and (not room_down or abs(y - py) <= 24)
+    fitted = ((room_right or abs(x + w - px) <= 12 or width - (x + w) <= 12)
+              and (room_down or abs(y + h - py) <= 24 or height - (y + h) <= 12))
+    return on_display and touching and natural and fitted, facts
+
+
+def menu_target(items):
+    """Which kind of item a RichFiles right-click menu belongs to, read from its items: a
+    folder's offers Open in New Tab, a file's Open With, empty space's begins with New Folder."""
+    if "Open in New Tab" in items:
+        return "folder"
+    if "Open With" in items:
+        return "file"
+    if items[:1] == ["New Folder"]:
+        return "empty"
+    return None
 
 
 def run(argv, timeout=60):
@@ -341,6 +392,132 @@ class Walk:
         self.menu_at(f"{theme}-display-bottom", point, "New Folder",
                      lambda m: abs(m["x"] - point[0]) <= 12 and m["y"] < point[1] - 24
                      and m["y"] + m["h"] <= screen_bottom + 1)
+
+    def menu_corners(self, theme):
+        base = "/Users/admin/Menu Corners"
+        kinds = {"file": base + "/Only files", "folder": base + "/Only folders", "empty": base + "/Nothing"}
+        code, detail = self.guest(
+            f"rm -rf {shlex.quote(base)} && mkdir -p " + " ".join(shlex.quote(f) for f in kinds.values())
+            + f" && cd {shlex.quote(kinds['file'])} && for i in $(seq -w 1 60); do printf 'x' > \"Corner file $i.txt\"; done"
+            + f" && cd {shlex.quote(kinds['folder'])} && for i in $(seq -w 1 60); do mkdir \"Corner folder $i\"; done"
+            + f" && defaults write {BUNDLE} richfiles.theme -string {shlex.quote(theme)}")
+        if code:
+            raise RuntimeError(detail)
+        code, display = self.guest("osascript -l JavaScript -e " + shlex.quote(
+            'ObjC.import("AppKit"); var f = $.NSScreen.mainScreen.frame;'
+            'JSON.stringify([f.size.width, f.size.height])'))
+        if code:
+            raise RuntimeError(display)
+        screen = tuple(json.loads(display))
+        # The Dock spans most of the guest display's bottom edge: hidden, so a click near the
+        # display's bottom corners reaches the window, as on a Mac whose Dock hides or sits aside.
+        self.guest("defaults write com.apple.dock autohide -bool true && killall Dock")
+        time.sleep(3)
+        target = 'tell application "System Events" to tell process "RichFiles" to '
+
+        def place(x, y, w, h):
+            # A window RichFiles has just opened can still be put back where it last was: the
+            # frame is read back and set again until it holds. Only the browser window is moved:
+            # RichFiles can also hold a small system-dialog window, which "window 1" may name.
+            window = '(first window whose subrole is "AXStandardWindow")'
+            for _ in range(5):
+                code, detail = self.guest("osascript -e " + shlex.quote(target + f"set size of {window} to {{{w}, {h}}}")
+                                          + " -e " + shlex.quote(target + f"set position of {window} to {{{x}, {y}}}"))
+                if code:
+                    raise RuntimeError(detail)
+                time.sleep(0.8)
+                windows = [n for n in self.nodes("--role", "AXWindow") if n.get("sub") == "AXStandardWindow"]
+                if windows and abs(windows[0]["x"] - x) <= 2 and abs(windows[0]["y"] - y) <= 2 \
+                        and abs(windows[0]["w"] - w) <= 2 and abs(windows[0]["h"] - h) <= 2:
+                    return windows[0]
+            raise RuntimeError(f"RichFiles' window did not hold the frame {x},{y} {w}x{h}: {windows[:1]}")
+
+        def show(kind):
+            self.quit()
+            code, detail = self.guest("open -a /Applications/RichFiles.app " + shlex.quote(kinds[kind]))
+            if code:
+                raise RuntimeError(detail)
+            expect = {"file": "Corner file 01.txt", "folder": "Corner folder 01", "empty": None}[kind]
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                if self.nodes("--role", "AXWindow") and (expect is None or self.node(expect)):
+                    break
+                time.sleep(0.5)
+            else:
+                raise RuntimeError(f"RichFiles did not open {kinds[kind]}")
+            # Details: one full-width row per item, so a corner of the list is on a file or a
+            # folder; List wraps into columns and its last column can leave a corner empty.
+            for title, match in [("File view", []), ("Details", ["--role", "AXMenuItem"])]:
+                run([HERE / "ax.sh", self.vm, "click", "--app", APP, "--title", title, *match, "--first", "--json"])
+            time.sleep(0.5)
+
+        # Where the list's first and last fully shown rows and its left edge sit in a window of a
+        # given size, measured on the files folder; the same offsets serve the other two folders.
+        def offsets(w, h):
+            window = place(200, 60, w, h)
+            rows = [n for n in self.nodes("--title", "Corner file", "--contains")
+                    if n["y"] >= window["y"] and n["y"] + n["h"] <= window["y"] + window["h"] - 40]
+            if len(rows) < 4:
+                raise RuntimeError(f"too few list rows in view to find the corners: {len(rows)}")
+            top, bottom = min(rows, key=lambda n: n["y"]), max(rows, key=lambda n: n["y"])
+            return {"left": round(top["x"] + 30 - window["x"]), "right": w - 40,
+                    "top": round(top["y"] + top["h"] / 2 - window["y"]),
+                    "bottom": round(bottom["y"] + bottom["h"] / 2 - window["y"])}
+
+        def at(window, off, corner):
+            v, hz = corner.split("-")
+            return (round(window["x"] + off[hz]), round(window["y"] + off[v]))
+
+        def menu_after_right_click(point):
+            code, detail = self.right(*point)
+            time.sleep(0.8)
+            menus = [m for m in self.nodes("--role", "AXMenu") if m["h"] > 60]
+            menu = max(menus, key=lambda m: m["h"]) if menus else None
+            items = []
+            if menu:
+                items = [n.get("title", "") for n in sorted(self.nodes("--role", "AXMenuItem"), key=lambda n: n["y"])
+                         if menu["x"] <= n["x"] < menu["x"] + menu["w"] and menu["y"] <= n["y"] < menu["y"] + menu["h"]
+                         and n.get("title")]
+            return code, detail, menu, items
+
+        def judge(label, point, window_rule):
+            code, detail, menu, items = menu_after_right_click(point)
+            try:
+                self.shot(label)
+                if menu is None:
+                    self.record(label, False, f"no menu after the right-click at {point}"
+                                + (f", input error: {detail}" if code else ""))
+                    return
+                ok, facts = corner_verdict(point, menu, screen, window_rule)
+                facts["items"] = items[:6]
+                self.record(label, code == 0 and ok, json.dumps(facts))
+                # Placement is judged above; whether the click landed on the kind of item meant
+                # (a file, a folder, empty space) is its own check, so a miss is never read as one.
+                hit = menu_target(items)
+                self.record(label + " (target)", hit == label.rsplit("-", 1)[1], f"menu of: {hit}")
+            finally:
+                self.key(53)
+                time.sleep(0.4)
+
+        show("file")
+        middle = offsets(920, 480)
+        edge = offsets(920, 560)
+        self.record(f"{theme}-corners: display and list measured", True,
+                    json.dumps({"screen": screen, "window_offsets": middle, "display_offsets": edge}))
+        for kind in ("file", "folder", "empty"):
+            show(kind)
+            # The window's four corners, away from the display's edges.
+            window = place(round((screen[0] - 920) / 2), 60, 920, 480)
+            for corner in CORNERS:
+                judge(f"{theme}-corners-window-{corner}-{kind}", at(window, middle, corner), window)
+            # The display's four corners: the window's matching corner pushed into each.
+            for corner in CORNERS:
+                v, hz = corner.split("-")
+                x = 0 if hz == "left" else screen[0] - 920
+                y = 25 if v == "top" else screen[1] - 560
+                window = place(x, y, 920, 560)
+                judge(f"{theme}-corners-display-{corner}-{kind}", at(window, edge, corner), None)
+        self.quit()
 
     # -- the fifteen behaviors ----------------------------------------------------------------
     def walk(self, theme):
@@ -1003,6 +1180,8 @@ def main():
     mode.add_argument("--fixes", action="store_true", help="walk only the handover review's fixes")
     mode.add_argument("--sheets", action="store_true", help="open every sheet with a default button and measure it")
     mode.add_argument("--menu-position", action="store_true", help="check context menu placement")
+    mode.add_argument("--menu-corners", action="store_true",
+                      help="right-click at the four corners of the window and of the display on a file, a folder and empty space")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     walk = Walk(args.vm, args.out)
@@ -1012,6 +1191,8 @@ def main():
             try:
                 if args.menu_position:
                     walk.menu_position(theme)
+                elif args.menu_corners:
+                    walk.menu_corners(theme)
                 else:
                     (walk.fixes if args.fixes else walk.sheets if args.sheets else walk.walk)(theme)
             except Exception as error:  # record and go on to the next theme

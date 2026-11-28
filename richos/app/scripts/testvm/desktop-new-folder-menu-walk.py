@@ -157,12 +157,13 @@ class Walk:
                   and row['trashed'] == [row['moved_as'][name]])
         return {'pass': passed, 'trash_diff': row}
 
-    def keyboard(self, source_tool, layouts):
+    def keyboard(self, source_tool, layouts, results, out):
+        """Each layout's result goes into results as soon as it is known, so the report keeps it
+        when a later layout or the Dvorak control cannot finish (nightly 123 walk)."""
         tool = self.remote + '/guest-input-source'
         self.tool('guest.sh', '--push', str(source_tool), tool)
         self.g('chmod', '755', tool)
         hid = ['python3', self.remote + '/hid-key.py']
-        results = {}
         for layout in layouts:
             source = 'com.apple.keylayout.' + layout
             self.g(tool, source)
@@ -174,9 +175,13 @@ class Walk:
             self.g(*hid, str(LAYOUTS[layout]), '--cmd', '--shift')
             folder = self.delete_new_folder(f'{layout}-n', before)
             row = {'input_source': source, 'new_folder': folder}
-            if layout == 'Dvorak':
-                row['physical_qwerty_n'] = self.dvorak_control(hid)
             results[layout] = row
+            if layout == 'Dvorak':
+                try:
+                    row['physical_qwerty_n'] = self.dvorak_control(hid)
+                except (RuntimeError, StopIteration) as error:
+                    row['physical_qwerty_n'] = {'pass': False, 'error': (str(error) or type(error).__name__)[:300]}
+                    self.tool('shot.sh', str(out / 'dvorak-control.png'))
             print(layout, row, flush=True)
         return results
 
@@ -222,8 +227,8 @@ def main():
                 walk.tool('shot.sh', str(args.out / 'folder-remains.png'))
                 return 1
         if args.input_source_tool:
-            keyboard = walk.keyboard(args.input_source_tool, args.layout or LAYOUTS)
-            report['keyboard'] = keyboard
+            keyboard = report['keyboard'] = {}
+            walk.keyboard(args.input_source_tool, args.layout or LAYOUTS, keyboard, args.out)
             if any(not result['pass'] for row in keyboard.values() for key, result in row.items()
                    if key != 'input_source'):
                 walk.tool('shot.sh', str(args.out / 'keyboard-failure.png'))
