@@ -38,7 +38,8 @@ pointer at its edge (added with the nightly 123 walk; judged by corner_verdict, 
 test/richfiles-menu-corners.test.py).
 
 --transfers copies and pastes a file into a wide List pane, then drags an item
-from the other RichFiles pane. It checks receipt, selection, viewport and refresh.
+from the other RichFiles pane. It checks receipt, selection, viewport, destination
+activation and refresh.
 """
 import argparse
 import json
@@ -884,6 +885,15 @@ class Walk:
             x, y = self.center(node)
             return right["x"] <= x < right["x"] + right["w"] and right["y"] <= y < right["y"] + right["h"]
 
+        def active_heading(receiving):
+            # The window title also follows folder changes. Read the pane's own active marker.
+            for match in ("--title", "--value"):
+                for node in self.nodes(match, "Active pane"):
+                    x, _ = self.center(node)
+                    if (x >= right["x"]) == receiving:
+                        return node
+            return None
+
         def receive(name):
             return next((node for node in self.nodes("--title", name, "--role", "AXButton")
                          if in_right(node) and node["selected"] is True), None)
@@ -917,10 +927,21 @@ class Walk:
                     paste_name in self.ls(source) and paste_name in self.ls(destination), json.dumps(pasted))
         self.shot(f"{theme}-transfer-02-paste")
 
+        def selection_fill(shot, row):
+            picture, scale = self.image(shot)
+            right_edge = row["x"] + row["w"]
+            mid_y = row["y"] + row["h"] / 2
+            # Sample the interior beyond the filename and inside the selection outline.
+            box = (right_edge - 28, mid_y - 3, right_edge - 12, mid_y + 3)
+            return self.median_color(picture, [edge * scale for edge in box])
+
+        paste_fill = selection_fill(f"{theme}-transfer-02-paste", pasted)
         self.record(f"{theme}: drag target starts beyond the visible List columns",
                     not in_right(item(head)) and in_right(pasted))
         moving = wait_for("drag source is missing", lambda: item(drag_name))
         start_x, start_y = self.center(moving)
+        self.click(start_x, start_y)
+        source_heading = wait_for("the source pane is not active before drag", lambda: active_heading(False))
         end_x = round(right["x"] + right["w"] * 0.75)
         end_y = round(right["y"] + right["h"] * 0.5)
         code, detail = self.pointer(f"{start_x},{start_y}", f"{end_x},{end_y}", "--rest", "0.5")
@@ -931,12 +952,17 @@ class Walk:
                     drag_name not in self.ls(source) and drag_name in self.ls(destination) and in_right(item(head)),
                     json.dumps(moved))
         self.shot(f"{theme}-transfer-03-drag")
+        destination_heading = wait_for("the drop did not activate the receiving pane", lambda: active_heading(True))
+        self.record(f"{theme}: drag activates the receiving pane", True,
+                    json.dumps({"before": source_heading, "after": destination_heading}))
+        drag_fill = selection_fill(f"{theme}-transfer-03-drag", moved)
+        self.record(f"{theme}: dropped file has the same full selection fill as the pasted file",
+                    drag_fill == paste_fill, f"drag={drag_fill}, paste={paste_fill}")
+
         def samples():
             code, raw = self.guest(f"tail -n 80 {timing}")
             return [json.loads(line) for line in raw.splitlines() if line.startswith("{")] if code == 0 else []
 
-        # A click in the pane heading activates it without selecting a file.
-        self.click(end_x, round(right["y"] - 10))
         refresh = wait_for("Refresh is missing", lambda: self.node("Refresh", "--role", "AXButton"))
         previous = {row["id"] for row in samples() if row["operation"] == "listing"}
         self.click(*self.center(refresh))

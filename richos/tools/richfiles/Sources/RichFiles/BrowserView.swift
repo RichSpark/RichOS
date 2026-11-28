@@ -1934,6 +1934,7 @@ struct BrowserView: View {
         dropOperation = nil
         let fileProviders = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
         guard let destination = currentDropDestination, !fileProviders.isEmpty else { return false }
+        workspace.select(side)
         let option = NSEvent.modifierFlags.contains(.option)
         let local = BrowserDragSurface.pasteboardToken
         let visit = model.transferVisit
